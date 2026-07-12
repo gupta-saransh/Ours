@@ -1,5 +1,6 @@
 import { one } from '../_lib/db';
 import { hashPassword, signToken, USER_COLUMNS, type SessionUser } from '../_lib/auth';
+import { createCoupleForUser } from '../_lib/invite';
 import { route, requireString, HttpError } from '../_lib/respond';
 
 export default route(['POST'], async (req, res) => {
@@ -7,7 +8,7 @@ export default route(['POST'], async (req, res) => {
   const password = requireString(req.body?.password, 'Password', 200);
   const displayName = requireString(req.body?.displayName, 'Name', 80);
 
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'That email doesn’t look right');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'That email does not look right');
   if (password.length < 8) throw new HttpError(400, 'Password needs at least 8 characters');
 
   const existing = await one('SELECT id FROM users WHERE email = $1', [email]);
@@ -17,5 +18,8 @@ export default route(['POST'], async (req, res) => {
     `INSERT INTO users (email, password_hash, display_name) VALUES ($1, $2, $3) RETURNING ${USER_COLUMNS}`,
     [email, hashPassword(password), displayName]
   );
+  // Everyone gets a space of their own right away; pairing is optional.
+  const couple = await createCoupleForUser(user!.id);
+  user!.couple_id = couple.id;
   res.status(201).json({ token: signToken(user!.id), user });
 });

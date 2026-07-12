@@ -9,10 +9,15 @@ import coupleCreate from './_routes/couple-create';
 import coupleJoin from './_routes/couple-join';
 import coupleGet from './_routes/couple-get';
 import memories from './_routes/memories';
+import memoryItem from './_routes/memory-item';
 import notes from './_routes/notes';
 import noteItem from './_routes/note-item';
 import milestones from './_routes/milestones';
 import milestoneItem from './_routes/milestone-item';
+import notifications from './_routes/notifications';
+import bucket from './_routes/bucket';
+import bucketItem from './_routes/bucket-item';
+import home from './_routes/home';
 import nudge from './_routes/nudge';
 import ablyToken from './_routes/ably-token';
 
@@ -38,10 +43,15 @@ const routes: Partial<Record<string, Handler>> = {
   'couple/join': coupleJoin,
   couple: coupleGet,
   memories,
+  'memories/:id': memoryItem,
   notes,
   'notes/:id': noteItem,
   milestones,
   'milestones/:id': milestoneItem,
+  notifications,
+  bucket,
+  'bucket/:id': bucketItem,
+  home,
   nudge,
   'ably-token': ablyToken,
 };

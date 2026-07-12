@@ -35,7 +35,7 @@ export default function SignUp() {
       >
         <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           <Text style={styles.title}>Start your side{'\n'}of the story</Text>
-          <Text style={styles.sub}>You’ll invite your person right after.</Text>
+          <Text style={styles.sub}>Start alone or together. You can invite your person any time.</Text>
 
           <Field label="Your name" value={name} onChangeText={setName} placeholder="Anisha" autoCapitalize="words" />
           <Field

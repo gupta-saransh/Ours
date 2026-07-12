@@ -4,10 +4,10 @@ import { useAuth } from '@/lib/auth';
 import { colors } from '@/theme';
 
 export default function AuthLayout() {
-  const { status, user } = useAuth();
+  const { status } = useAuth();
   if (status === 'loading') return null;
   if (status === 'signedIn') {
-    return <Redirect href={user?.couple_id ? '/' : '/pair'} />;
+    return <Redirect href="/" />;
   }
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.cream } }} />

@@ -1,53 +1,61 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  FlatList,
-  Modal,
   Pressable,
+  RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { Image } from 'expo-image';
-import * as ImagePicker from 'expo-image-picker';
-import * as ImageManipulator from 'expo-image-manipulator';
+import * as Clipboard from 'expo-clipboard';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
-import { Button, Card, EmptyState, FormError } from '@/components/ui';
+import { Card } from '@/components/ui';
 import { colors, font, radius, space, type } from '@/theme';
-import { formatDay } from '@/lib/format';
+import { countdownTo, daysSince, formatDay, nextOccurrence } from '@/lib/format';
 
-interface Memory {
-  id: string;
-  author_id: string;
-  author_name: string;
-  photo_data: string | null;
-  note: string;
-  created_at: string;
+interface HomeData {
+  couple: { id: string; invite_code: string; created_at: string } | null;
+  partner: { id: string; display_name: string } | null;
+  daysBasis: string | null;
+  milestones: { id: string; title: string; date: string; kind: string }[];
+  resurfaced: { id: string; thumb_data: string | null; note: string; memory_date: string; tag: string } | null;
+  bucket: { id: string; title: string; done: boolean }[];
+  pinnedNote: { id: string; body: string; author_name: string } | null;
 }
 
-export default function Memories() {
+export default function Home() {
   const { user } = useAuth();
-  const [memories, setMemories] = useState<Memory[] | null>(null);
-  const [composerOpen, setComposerOpen] = useState(false);
+  const router = useRouter();
+  const [data, setData] = useState<HomeData | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [newItem, setNewItem] = useState('');
+  const [addingItem, setAddingItem] = useState(false);
 
   const load = useCallback(async () => {
-    const data = await api<{ memories: Memory[] }>('/api/memories');
-    setMemories(data.memories);
+    const home = await api<HomeData>('/api/home');
+    setData(home);
   }, []);
 
   useEffect(() => {
-    load().catch(() => setMemories([]));
+    load().catch(() => {});
   }, [load]);
 
-  // Partner added a memory on their device → pull the fresh list (photo isn't sent over the wire).
-  useCoupleEvent('memory.created', (data) => {
-    if (data?.author_id !== user?.id) load().catch(() => {});
-  });
+  useCoupleEvent('partner.joined', () => load().catch(() => {}));
 
-  if (memories === null) {
+  const refresh = async () => {
+    setRefreshing(true);
+    await load().catch(() => {});
+    setRefreshing(false);
+  };
+
+  if (!data) {
     return (
       <View style={styles.loading}>
         <ActivityIndicator color={colors.rose} />
@@ -55,208 +63,248 @@ export default function Memories() {
     );
   }
 
-  return (
-    <View style={styles.screen}>
-      <FlatList
-        data={memories}
-        keyExtractor={(m) => m.id}
-        contentContainerStyle={styles.list}
-        ListEmptyComponent={
-          <EmptyState
-            title="Your story starts here"
-            line="Add the first memory — a photo, a moment, a line you don’t want to forget."
-          />
-        }
-        renderItem={({ item }) => (
-          <Card style={styles.memory}>
-            {item.photo_data ? (
-              <Image source={{ uri: item.photo_data }} style={styles.photo} contentFit="cover" transition={200} />
-            ) : null}
-            <Text style={styles.note}>{item.note}</Text>
-            <Text style={styles.meta}>
-              {item.author_id === user?.id ? 'You' : item.author_name} · {formatDay(item.created_at)}
-            </Text>
-          </Card>
-        )}
-      />
-      <Pressable style={({ pressed }) => [styles.fab, pressed && { backgroundColor: colors.rosePressed }]} onPress={() => setComposerOpen(true)}>
-        <Text style={styles.fabText}>＋ Add a memory</Text>
-      </Pressable>
-      <MemoryComposer
-        open={composerOpen}
-        onClose={() => setComposerOpen(false)}
-        onCreated={(m) => {
-          setMemories((prev) => [m, ...(prev ?? [])]);
-          setComposerOpen(false);
-        }}
-      />
-    </View>
-  );
-}
+  const basis = data.daysBasis ?? data.couple?.created_at ?? new Date().toISOString();
+  const days = daysSince(basis);
+  const firstName = user?.display_name?.split(' ')[0] ?? '';
+  const now = new Date();
+  const upcoming = [...data.milestones]
+    .map((m) => ({ ...m, next: nextOccurrence(m.date, m.kind, now) }))
+    .filter((m) => m.next.getTime() >= new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime())
+    .sort((a, b) => a.next.getTime() - b.next.getTime())
+    .slice(0, 2);
 
-function MemoryComposer({
-  open,
-  onClose,
-  onCreated,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onCreated: (m: Memory) => void;
-}) {
-  const [note, setNote] = useState('');
-  const [photo, setPhoto] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const copyCode = async () => {
+    if (!data.couple) return;
+    await Clipboard.setStringAsync(data.couple.invite_code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
-  const pickPhoto = async () => {
-    setError(null);
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.9,
-    });
-    if (result.canceled || !result.assets?.[0]) return;
+  const addBucketItem = async () => {
+    const title = newItem.trim();
+    if (!title || addingItem) return;
+    setAddingItem(true);
     try {
-      // Compress client-side so uploads stay small and fast.
-      const resized = await ImageManipulator.manipulateAsync(
-        result.assets[0].uri,
-        [{ resize: { width: 1200 } }],
-        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG, base64: true }
-      );
-      setPhoto(`data:image/jpeg;base64,${resized.base64}`);
+      const res = await api<{ item: HomeData['bucket'][0] }>('/api/bucket', { method: 'POST', body: { title } });
+      setNewItem('');
+      setData((d) => (d ? { ...d, bucket: [res.item, ...d.bucket].slice(0, 5) } : d));
     } catch {
-      setError('Couldn’t read that photo — try another one.');
+      // keep the draft
+    } finally {
+      setAddingItem(false);
     }
   };
 
-  const save = async () => {
-    setError(null);
-    setBusy(true);
-    try {
-      const data = await api<{ memory: Memory }>('/api/memories', {
-        method: 'POST',
-        body: { note, photoData: photo ?? undefined },
-      });
-      setNote('');
-      setPhoto(null);
-      onCreated(data.memory);
-    } catch (err: any) {
-      setError(err?.message ?? 'Something went wrong');
-    } finally {
-      setBusy(false);
-    }
+  const toggleBucketItem = async (id: string) => {
+    setData((d) => (d ? { ...d, bucket: d.bucket.filter((b) => b.id !== id) } : d));
+    await api(`/api/bucket/${id}`, { method: 'PATCH', body: { done: true } }).catch(() => load().catch(() => {}));
   };
 
   return (
-    <Modal visible={open} animationType="slide" transparent onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
-      <View style={styles.sheet}>
-        <Text style={styles.sheetTitle}>A moment worth keeping</Text>
-        <Pressable onPress={pickPhoto} style={styles.photoPick}>
-          {photo ? (
-            <Image source={{ uri: photo }} style={styles.photoPreview} contentFit="cover" />
-          ) : (
-            <Text style={styles.photoPickText}>✧ Add a photo</Text>
-          )}
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={styles.body}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.rose} />}
+    >
+      <Text style={styles.greeting}>Hi {firstName} ♥</Text>
+      <Text style={styles.daysNumber}>{days.toLocaleString()}</Text>
+      <Text style={styles.daysLabel}>
+        {days === 1 ? 'day' : 'days'} {data.daysBasis ? 'of you two' : 'since your space began'}
+        {' · since '}
+        {formatDay(basis)}
+      </Text>
+
+      {!data.partner && data.couple && (
+        <Card style={[styles.card, styles.inviteCard]}>
+          <Text style={styles.cardKicker}>Just you here so far</Text>
+          <Text style={styles.inviteLine}>
+            Ours is better with your person in it. Share your code and everything you have added comes with you.
+          </Text>
+          <Pressable onPress={copyCode} style={styles.codeChip}>
+            <Text style={styles.codeText}>{data.couple.invite_code}</Text>
+            <Text style={styles.codeHint}>{copied ? 'Copied ✓' : 'Tap to copy'}</Text>
+          </Pressable>
+          <Pressable onPress={() => router.push('/pair')} hitSlop={6}>
+            <Text style={styles.linkAction}>I have their code instead</Text>
+          </Pressable>
+        </Card>
+      )}
+
+      {data.resurfaced && (
+        <Pressable onPress={() => router.push('/memories')}>
+          <Card style={styles.card}>
+            <Text style={styles.cardKicker}>✦ {data.resurfaced.tag}</Text>
+            <View style={styles.resurfacedRow}>
+              {data.resurfaced.thumb_data && (
+                <Image source={{ uri: data.resurfaced.thumb_data }} style={styles.resurfacedPhoto} contentFit="cover" />
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.resurfacedNote} numberOfLines={3}>
+                  {data.resurfaced.note}
+                </Text>
+                <Text style={styles.metaLine}>{formatDay(data.resurfaced.memory_date)}</Text>
+              </View>
+            </View>
+          </Card>
         </Pressable>
-        <TextInput
-          value={note}
-          onChangeText={setNote}
-          placeholder="What happened? How did it feel?"
-          placeholderTextColor={colors.inkSoft}
-          multiline
-          style={styles.noteInput}
-        />
-        <FormError message={error} />
-        <Button title="Keep this memory" onPress={save} loading={busy} disabled={note.trim().length === 0} />
-        <Button title="Not now" variant="ghost" onPress={onClose} style={{ marginTop: space(2) }} />
-      </View>
-    </Modal>
+      )}
+
+      {upcoming.length > 0 && (
+        <Card style={styles.card}>
+          <Text style={styles.cardKicker}>Coming up</Text>
+          {upcoming.map((m) => {
+            const c = countdownTo(m.next, now);
+            return (
+              <Pressable key={m.id} onPress={() => router.push('/milestones')} style={styles.upcomingRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.upcomingTitle}>{m.title}</Text>
+                  <Text style={styles.metaLine}>
+                    {m.next.getDate()} {m.next.toLocaleString('en', { month: 'long' })}
+                  </Text>
+                </View>
+                <Text style={styles.upcomingDays}>
+                  {c.days === 0 ? 'today ♥' : `${c.days} ${c.days === 1 ? 'day' : 'days'}`}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </Card>
+      )}
+
+      <Card style={styles.card}>
+        <Text style={styles.cardKicker}>Our list</Text>
+        {data.bucket.length === 0 && (
+          <Text style={styles.emptyLine}>Things you two want to do. Add the first one.</Text>
+        )}
+        {data.bucket.map((item) => (
+          <Pressable key={item.id} onPress={() => toggleBucketItem(item.id)} style={styles.bucketRow}>
+            <View style={styles.checkbox} />
+            <Text style={styles.bucketTitle}>{item.title}</Text>
+          </Pressable>
+        ))}
+        <View style={styles.bucketComposer}>
+          <TextInput
+            value={newItem}
+            onChangeText={setNewItem}
+            placeholder="Someday, together we will..."
+            placeholderTextColor={colors.inkSoft}
+            style={styles.bucketInput}
+            onSubmitEditing={addBucketItem}
+          />
+          <Pressable
+            onPress={addBucketItem}
+            disabled={!newItem.trim()}
+            style={({ pressed }) => [styles.bucketAdd, !newItem.trim() && { opacity: 0.4 }, pressed && { backgroundColor: colors.rosePressed }]}
+          >
+            <Text style={{ color: colors.onRose, fontSize: 18 }}>＋</Text>
+          </Pressable>
+        </View>
+      </Card>
+
+      {data.pinnedNote && (
+        <Pressable onPress={() => router.push('/notes')}>
+          <Card style={[styles.card, styles.pinnedCard]}>
+            <Text style={styles.cardKicker}>✦ Pinned on your wall</Text>
+            <Text style={styles.pinnedBody} numberOfLines={3}>
+              {data.pinnedNote.body}
+            </Text>
+            <Text style={styles.metaLine}>{data.pinnedNote.author_name}</Text>
+          </Card>
+        </Pressable>
+      )}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.cream },
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream },
-  list: {
-    padding: space(5),
-    paddingBottom: space(28),
-    width: '100%',
-    maxWidth: 560,
-    alignSelf: 'center',
-  },
-  memory: { marginBottom: space(4), padding: space(3) },
-  photo: {
-    width: '100%',
-    aspectRatio: 4 / 3,
-    borderRadius: radius.sm,
-    backgroundColor: colors.blushSoft,
-  },
-  note: {
-    fontFamily: font.serif,
-    fontSize: type.heading,
-    lineHeight: 28,
-    color: colors.ink,
-    paddingHorizontal: space(1),
-    paddingTop: space(3),
-  },
-  meta: {
-    fontSize: type.small,
-    color: colors.inkSoft,
-    paddingHorizontal: space(1),
-    paddingTop: space(2),
-    paddingBottom: space(1),
-  },
-  fab: {
-    position: 'absolute',
-    bottom: space(6),
-    alignSelf: 'center',
-    backgroundColor: colors.rose,
-    borderRadius: radius.full,
-    paddingVertical: space(3.5),
-    paddingHorizontal: space(6),
-  },
-  fabText: { color: '#FFF9F2', fontSize: type.body, fontWeight: '600' },
-  backdrop: { flex: 1, backgroundColor: 'rgba(59, 46, 42, 0.35)' },
-  sheet: {
-    backgroundColor: colors.cream,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
+  body: {
     padding: space(6),
-    paddingBottom: space(10),
+    paddingBottom: space(16),
     width: '100%',
-    maxWidth: 560,
+    maxWidth: 640,
     alignSelf: 'center',
   },
-  sheetTitle: {
+  greeting: { fontSize: type.body, color: colors.rose, marginBottom: space(4) },
+  daysNumber: {
     fontFamily: font.display,
-    fontSize: type.title,
+    fontSize: 72,
+    lineHeight: 76,
     color: colors.ink,
-    marginBottom: space(4),
+    letterSpacing: -2,
   },
-  photoPick: {
+  daysLabel: {
+    fontFamily: font.serifItalic,
+    fontSize: type.heading,
+    color: colors.inkSoft,
+    marginBottom: space(7),
+  },
+  card: { marginBottom: space(4) },
+  inviteCard: { backgroundColor: colors.blushSoft, borderColor: colors.blush },
+  cardKicker: {
+    fontSize: type.tiny,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: colors.sage,
+    fontWeight: '700',
+    marginBottom: space(3),
+  },
+  inviteLine: { fontSize: type.body, color: colors.ink, lineHeight: 23, marginBottom: space(4) },
+  codeChip: {
+    backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.hairline,
-    borderStyle: 'dashed',
-    borderRadius: radius.md,
-    minHeight: 120,
+    borderRadius: radius.sm,
     alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: space(4),
-    overflow: 'hidden',
+    paddingVertical: space(3.5),
+    marginBottom: space(3),
+  },
+  codeText: { fontFamily: font.display, fontSize: 26, letterSpacing: 8, color: colors.ink },
+  codeHint: { fontSize: type.tiny, color: colors.inkSoft, marginTop: 2 },
+  linkAction: { fontSize: type.small, color: colors.rose, fontWeight: '600', textAlign: 'center' },
+  resurfacedRow: { flexDirection: 'row', gap: space(4), alignItems: 'center' },
+  resurfacedPhoto: { width: 84, height: 84, borderRadius: radius.sm, backgroundColor: colors.blushSoft },
+  resurfacedNote: { fontFamily: font.serif, fontSize: type.heading, lineHeight: 26, color: colors.ink },
+  metaLine: { fontSize: type.small, color: colors.inkSoft, marginTop: space(1.5) },
+  upcomingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: space(2.5),
+  },
+  upcomingTitle: { fontFamily: font.displayMedium, fontSize: type.heading, color: colors.ink },
+  upcomingDays: { fontFamily: font.display, fontSize: type.heading, color: colors.rose },
+  emptyLine: { fontSize: type.small, color: colors.inkSoft, marginBottom: space(2) },
+  bucketRow: { flexDirection: 'row', alignItems: 'center', gap: space(3), paddingVertical: space(2) },
+  checkbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: colors.blush,
     backgroundColor: colors.surface,
   },
-  photoPickText: { color: colors.inkSoft, fontSize: type.body },
-  photoPreview: { width: '100%', aspectRatio: 4 / 3 },
-  noteInput: {
+  bucketTitle: { fontSize: type.body, color: colors.ink, flex: 1 },
+  bucketComposer: { flexDirection: 'row', alignItems: 'center', gap: space(2), marginTop: space(3) },
+  bucketInput: {
+    flex: 1,
     borderWidth: 1,
     borderColor: colors.hairline,
     borderRadius: radius.sm,
     backgroundColor: colors.surface,
-    padding: space(3.5),
-    minHeight: 96,
+    paddingHorizontal: space(3),
+    paddingVertical: space(2.5),
     fontSize: type.body,
     color: colors.ink,
-    textAlignVertical: 'top',
-    marginBottom: space(4),
   },
+  bucketAdd: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.rose,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pinnedCard: { backgroundColor: colors.blushSoft, borderColor: colors.blush },
+  pinnedBody: { fontFamily: font.serif, fontSize: type.heading, lineHeight: 27, color: colors.ink },
 });

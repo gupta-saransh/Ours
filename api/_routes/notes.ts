@@ -1,6 +1,7 @@
 import { one, q } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
 import { publish } from '../_lib/ably';
+import { notify } from '../_lib/notify';
 import { route, requireString } from '../_lib/respond';
 
 const NOTE_COLUMNS = `n.id, n.author_id, n.body, n.pinned, n.created_at,
@@ -28,5 +29,6 @@ export default route(['GET', 'POST'], async (req, res) => {
   );
   const note = { ...created, author_name: user.display_name };
   await publish(user.couple_id, 'note.created', note);
+  await notify(user.couple_id, user.id, 'note', `${user.display_name} left you a note`);
   res.status(201).json({ note });
 });

@@ -57,9 +57,17 @@ export async function requireUser(req: VercelRequest): Promise<SessionUser> {
   return user;
 }
 
+/**
+ * Pairing is optional: everyone gets a space. Accounts created before spaces
+ * were automatic get one lazily here, so no request ever fails for lack of one.
+ */
 export async function requirePairedUser(req: VercelRequest): Promise<SessionUser & { couple_id: string }> {
   const user = await requireUser(req);
-  if (!user.couple_id) throw new HttpError(403, 'You need to pair with your partner first');
+  if (!user.couple_id) {
+    const { createCoupleForUser } = await import('./invite');
+    const couple = await createCoupleForUser(user.id);
+    user.couple_id = couple.id;
+  }
   return user as SessionUser & { couple_id: string };
 }
 

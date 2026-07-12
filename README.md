@@ -4,13 +4,14 @@ A private, just-for-two relationship app. One Expo codebase for iOS, Android, an
 
 ## What's inside
 
-- **Real auth** — email + password (scrypt hashing), JWT sessions, persisted in SecureStore (device) / localStorage (web)
-- **Partner pairing** — start a space, share a 6-letter invite code, exactly two people per space
-- **Memory log** — photo + note timeline, photos compressed client-side and persisted in the database
-- **Love note wall** — separate from memories; pin ✦, remove, and watch your partner's notes arrive live
-- **Milestones** — anniversaries and birthdays recur yearly, custom dates count down (or up) to the second
-- **"Thinking of you" nudge** — lands live on your partner's open app via Ably
-- **Settings** — profile, notification toggle, log out, delete account
+- **Landing page** explaining the app, then real auth: email + password (scrypt hashing), JWT sessions
+- **Optional pairing**: every account starts with its own space; share a 6-letter code whenever you're ready, and joining migrates everything you added
+- **Home dashboard**: days-together count, a resurfaced memory (one year or one month ago today), upcoming milestones, and a shared bucket list
+- **Memory calendar + timeline**: tap any day to keep a photo and note for it; days with memories show a heart; the timeline below scrolls your photos, with heart reactions
+- **Love note wall** with pinning, emoji, and live delivery via Ably
+- **Milestones** with second-level countdowns; anniversaries and birthdays recur yearly
+- **Notifications**: every nudge, memory, note and milestone is stored and surfaces under the bell, live
+- **"Thinking of you" nudge**, settings, notification toggle, delete account
 
 ## Setup
 

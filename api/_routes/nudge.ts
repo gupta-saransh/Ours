@@ -1,6 +1,7 @@
 import { one } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
 import { publish } from '../_lib/ably';
+import { notify } from '../_lib/notify';
 import { sendPush } from '../_lib/push';
 import { route } from '../_lib/respond';
 
@@ -8,6 +9,7 @@ import { route } from '../_lib/respond';
 export default route(['POST'], async (req, res) => {
   const user = await requirePairedUser(req);
   await publish(user.couple_id, 'nudge', { fromId: user.id, fromName: user.display_name });
+  await notify(user.couple_id, user.id, 'nudge', `${user.display_name} was thinking of you`);
 
   // Real hook for closed-app delivery; see api/_lib/push.ts for why it's a no-op today.
   const partner = await one<{ id: string }>(

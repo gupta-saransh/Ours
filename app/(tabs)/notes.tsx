@@ -121,7 +121,7 @@ export default function LoveNotes() {
         ListEmptyComponent={
           <EmptyState
             title="No notes yet"
-            line={`Leave the first one — it’ll be waiting${partner ? ` for ${partner.display_name}` : ''} the next time they open the app.`}
+            line={`Leave the first one. It will be waiting${partner ? ` for ${partner.display_name}` : ''} the next time they open the app.`}
           />
         }
         renderItem={({ item }) => {
@@ -149,6 +149,13 @@ export default function LoveNotes() {
           );
         }}
       />
+      <View style={styles.emojiRow}>
+        {['❤️', '🥰', '😘', '✨', '🌙', '☕', '🌻', '🫶'].map((e) => (
+          <Pressable key={e} onPress={() => setDraft((d) => d + e)} hitSlop={4} style={styles.emojiChip}>
+            <Text style={styles.emoji}>{e}</Text>
+          </Pressable>
+        ))}
+      </View>
       <View style={styles.composer}>
         <TextInput
           value={draft}
@@ -208,12 +215,29 @@ const styles = StyleSheet.create({
   meta: { fontSize: type.small, color: colors.inkSoft, flexShrink: 1 },
   noteActions: { flexDirection: 'row', alignItems: 'center' },
   action: { fontSize: type.small, color: colors.rose, fontWeight: '600' },
+  emojiRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: space(2),
+    paddingTop: space(2.5),
+    borderTopWidth: 1,
+    borderTopColor: colors.hairline,
+    backgroundColor: colors.cream,
+    width: '100%',
+    maxWidth: 560,
+    alignSelf: 'center',
+  },
+  emojiChip: {
+    paddingHorizontal: space(1.5),
+    paddingVertical: space(1),
+    borderRadius: radius.sm,
+  },
+  emoji: { fontSize: 20 },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     padding: space(4),
-    borderTopWidth: 1,
-    borderTopColor: colors.hairline,
+    paddingTop: space(2.5),
     backgroundColor: colors.cream,
     width: '100%',
     maxWidth: 560,
@@ -240,5 +264,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sendText: { color: '#FFF9F2', fontSize: 20 },
+  sendText: { color: colors.onRose, fontSize: 20 },
 });

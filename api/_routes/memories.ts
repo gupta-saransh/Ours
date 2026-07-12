@@ -1,41 +1,65 @@
 import { one, q } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
 import { publish } from '../_lib/ably';
+import { notify } from '../_lib/notify';
 import { route, requireString, HttpError } from '../_lib/respond';
 
-const MEMORY_COLUMNS = `m.id, m.author_id, m.photo_data, m.note, m.created_at,
-  u.display_name AS author_name`;
+/**
+ * Performance contract: the list NEVER carries full-resolution photos, only
+ * small thumbnails (~15 KB). The full photo is fetched on demand from
+ * GET /api/memories/:id when a card is opened.
+ */
+const LIST_COLUMNS = `m.id, m.author_id, m.thumb_data, m.note,
+  COALESCE(m.memory_date, m.created_at::DATE)::STRING AS memory_date, m.created_at,
+  u.display_name AS author_name,
+  (SELECT count(*)::int FROM memory_hearts h WHERE h.memory_id = m.id) AS hearts,
+  EXISTS(SELECT 1 FROM memory_hearts h WHERE h.memory_id = m.id AND h.user_id = $2) AS hearted_by_me,
+  (m.photo_data IS NOT NULL) AS has_photo`;
+
+function validImage(value: unknown, maxLen: number): string {
+  if (typeof value !== 'string' || !value.startsWith('data:image/')) {
+    throw new HttpError(400, 'Photo must be an image');
+  }
+  if (value.length > maxLen) throw new HttpError(413, 'Photo is too large');
+  return value;
+}
 
 export default route(['GET', 'POST'], async (req, res) => {
   const user = await requirePairedUser(req);
 
   if (req.method === 'GET') {
     const memories = await q(
-      `SELECT ${MEMORY_COLUMNS} FROM memories m
+      `SELECT ${LIST_COLUMNS} FROM memories m
        JOIN users u ON u.id = m.author_id
-       WHERE m.couple_id = $1 ORDER BY m.created_at DESC LIMIT 200`,
-      [user.couple_id]
+       WHERE m.couple_id = $1
+       ORDER BY COALESCE(m.memory_date, m.created_at::DATE) DESC, m.created_at DESC
+       LIMIT 400`,
+      [user.couple_id, user.id]
     );
     res.status(200).json({ memories });
     return;
   }
 
   const note = requireString(req.body?.note, 'Note', 4000);
-  let photoData: string | null = null;
-  if (req.body?.photoData) {
-    if (typeof req.body.photoData !== 'string' || !req.body.photoData.startsWith('data:image/')) {
-      throw new HttpError(400, 'Photo must be an image');
+  const photoData = req.body?.photoData ? validImage(req.body.photoData, 3_500_000) : null;
+  const thumbData = req.body?.thumbData ? validImage(req.body.thumbData, 200_000) : null;
+  let memoryDate: string | null = null;
+  if (req.body?.memoryDate) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.body.memoryDate)) {
+      throw new HttpError(400, 'memoryDate must be YYYY-MM-DD');
     }
-    if (req.body.photoData.length > 3_500_000) throw new HttpError(413, 'Photo is too large');
-    photoData = req.body.photoData;
+    memoryDate = req.body.memoryDate;
   }
 
   const created = await one(
-    `INSERT INTO memories (couple_id, author_id, photo_data, note)
-     VALUES ($1, $2, $3, $4) RETURNING id, author_id, photo_data, note, created_at`,
-    [user.couple_id, user.id, photoData, note]
+    `INSERT INTO memories (couple_id, author_id, photo_data, thumb_data, note, memory_date)
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6::DATE, now()::DATE))
+     RETURNING id, author_id, thumb_data, note, memory_date::STRING AS memory_date, created_at,
+       (photo_data IS NOT NULL) AS has_photo`,
+    [user.couple_id, user.id, photoData, thumbData, note, memoryDate]
   );
-  const memory = { ...created, author_name: user.display_name };
-  await publish(user.couple_id, 'memory.created', { ...memory, photo_data: undefined, has_photo: !!photoData });
+  const memory = { ...created, author_name: user.display_name, hearts: 0, hearted_by_me: false };
+  await publish(user.couple_id, 'memory.created', { id: memory.id, author_id: user.id });
+  await notify(user.couple_id, user.id, 'memory', `${user.display_name} added a memory`);
   res.status(201).json({ memory });
 });

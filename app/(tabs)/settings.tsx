@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useAuth } from '@/lib/auth';
 import { Button, Card, FormError } from '@/components/ui';
 import { colors, font, space, type } from '@/theme';
 
 export default function Settings() {
   const { user, couple, partner, updateProfile, signOut, deleteAccount } = useAuth();
+  const router = useRouter();
   const [name, setName] = useState(user?.display_name ?? '');
   const [savingName, setSavingName] = useState(false);
   const [nameSaved, setNameSaved] = useState(false);
@@ -73,11 +75,16 @@ export default function Settings() {
       <Card style={styles.card}>
         <View style={styles.row}>
           <Text style={styles.value}>Partner</Text>
-          <Text style={styles.rowRight}>{partner ? partner.display_name : 'Not joined yet'}</Text>
+          <Text style={styles.rowRight}>{partner ? partner.display_name : 'Just you so far'}</Text>
         </View>
+        {!partner && (
+          <View style={[styles.row, styles.rowBorder]}>
+            <Button title="Link with your partner" variant="secondary" onPress={() => router.push('/pair')} style={{ flex: 1, minHeight: 44 }} />
+          </View>
+        )}
         <View style={[styles.row, styles.rowBorder]}>
           <Text style={styles.value}>Invite code</Text>
-          <Text style={[styles.rowRight, styles.code]}>{couple?.invite_code ?? '—'}</Text>
+          <Text style={[styles.rowRight, styles.code]}>{couple?.invite_code ?? '...'}</Text>
         </View>
         <View style={[styles.row, styles.rowBorder]}>
           <Text style={styles.value}>Plan</Text>

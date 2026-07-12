@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Redirect } from 'expo-router';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Redirect, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 import { useAuth } from '@/lib/auth';
@@ -8,51 +8,33 @@ import { Button, Field, FormError } from '@/components/ui';
 import { colors, font, radius, space, type } from '@/theme';
 
 /**
- * The pairing gate: signed in, but not yet linked to a partner.
- * Either start a space (and read the code to your person) or join theirs.
+ * Linking is optional: the app works solo from day one. This page shares
+ * your invite code or joins your partner's space (your entries move with you).
  */
 export default function Pair() {
-  const { status, user, couple, partner, createSpace, joinSpace, refresh, signOut } = useAuth();
-  const [mode, setMode] = useState<'choose' | 'waiting' | 'join'>('choose');
+  const { status, user, couple, partner, joinSpace, refresh } = useAuth();
+  const router = useRouter();
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const waiting = mode === 'waiting' && !!couple;
-
-  // While showing the invite code, poll until the partner joins.
+  // Poll while unlinked so the moment they join, this page celebrates it.
   useEffect(() => {
-    if (!waiting) return;
+    if (partner) return;
     const timer = setInterval(() => refresh().catch(() => {}), 3000);
     return () => clearInterval(timer);
-  }, [waiting, refresh]);
+  }, [partner, refresh]);
 
   if (status === 'loading') return null;
   if (status === 'signedOut') return <Redirect href="/welcome" />;
-
-  // Paired (either just now via polling, or already) → into the app.
-  if (user?.couple_id && mode !== 'waiting') return <Redirect href="/" />;
-
-  const begin = async () => {
-    setError(null);
-    setBusy(true);
-    try {
-      setMode('waiting');
-      await createSpace();
-    } catch (err: any) {
-      setMode('choose');
-      setError(err?.message ?? 'Something went wrong');
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const join = async () => {
     setError(null);
     setBusy(true);
     try {
       await joinSpace(code);
+      router.replace('/');
     } catch (err: any) {
       setError(err?.message ?? 'Something went wrong');
       setBusy(false);
@@ -68,32 +50,34 @@ export default function Pair() {
 
   return (
     <SafeAreaView style={styles.screen}>
-      <View style={styles.body}>
-        {waiting ? (
+      <ScrollView contentContainerStyle={styles.body}>
+        {partner ? (
           <>
-            <Text style={styles.title}>Your space is ready</Text>
+            <Text style={styles.title}>You two are linked ♥</Text>
             <Text style={styles.sub}>
-              Share this code with your person.{'\n'}The moment they join, you’re in together.
+              {user?.display_name} and {partner.display_name}, one private space.
+            </Text>
+            <Button title="Back to your space" onPress={() => router.replace('/')} />
+          </>
+        ) : (
+          <>
+            <Text style={styles.title}>Bring your person in</Text>
+            <Text style={styles.sub}>
+              Share this code with them. When they join, everything you both add lives in one space.
             </Text>
             <Pressable onPress={copy} style={styles.codeBox}>
-              <Text style={styles.code}>{couple!.invite_code}</Text>
+              <Text style={styles.code}>{couple?.invite_code ?? '······'}</Text>
               <Text style={styles.codeHint}>{copied ? 'Copied ✓' : 'Tap to copy'}</Text>
             </Pressable>
-            {partner ? (
-              <>
-                <Text style={styles.waiting}>{partner.display_name} is here ♥</Text>
-                <Button title="Step inside together" onPress={() => setMode('choose')} style={{ marginTop: space(6) }} />
-              </>
-            ) : (
-              <Text style={styles.waiting}>Waiting for your person…</Text>
-            )}
-          </>
-        ) : mode === 'join' ? (
-          <>
-            <Text style={styles.title}>Join your person</Text>
-            <Text style={styles.sub}>Enter the six-letter code they shared with you.</Text>
+
+            <View style={styles.dividerRow}>
+              <View style={styles.divider} />
+              <Text style={styles.dividerText}>or join theirs</Text>
+              <View style={styles.divider} />
+            </View>
+
             <Field
-              label="Invite code"
+              label="Their invite code"
               value={code}
               onChangeText={(t) => setCode(t.toUpperCase())}
               placeholder="e.g. KMWQ38"
@@ -101,25 +85,15 @@ export default function Pair() {
               maxLength={8}
               style={styles.codeInput}
             />
-            <FormError message={error} />
-            <Button title="Join our space" onPress={join} loading={busy} disabled={code.trim().length < 6} />
-            <Button title="Back" variant="ghost" onPress={() => { setMode('choose'); setError(null); }} style={{ marginTop: space(2) }} />
-          </>
-        ) : (
-          <>
-            <Text style={styles.hello}>Hi {user?.display_name} ♥</Text>
-            <Text style={styles.title}>Two of you,{'\n'}one space</Text>
-            <Text style={styles.sub}>
-              Ours is private to you and your partner.{'\n'}Link up to open it.
+            <Text style={styles.joinHint}>
+              Joining moves your memories, notes and milestones into their space. Nothing is lost.
             </Text>
             <FormError message={error} />
-            <Button title="Begin our space" onPress={begin} loading={busy} />
-            <View style={{ height: space(3) }} />
-            <Button title="I have an invite code" variant="secondary" onPress={() => setMode('join')} />
-            <Button title="Sign out" variant="ghost" onPress={signOut} style={{ marginTop: space(8) }} />
+            <Button title="Join their space" onPress={join} loading={busy} disabled={code.trim().length < 6} />
+            <Button title="Maybe later" variant="ghost" onPress={() => router.replace('/')} style={{ marginTop: space(2) }} />
           </>
         )}
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -127,17 +101,12 @@ export default function Pair() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.cream },
   body: {
-    flex: 1,
+    flexGrow: 1,
     justifyContent: 'center',
     padding: space(7),
     width: '100%',
     maxWidth: 460,
     alignSelf: 'center',
-  },
-  hello: {
-    fontSize: type.body,
-    color: colors.rose,
-    marginBottom: space(3),
   },
   title: {
     fontFamily: font.display,
@@ -150,7 +119,7 @@ const styles = StyleSheet.create({
     fontSize: type.body,
     lineHeight: 24,
     color: colors.inkSoft,
-    marginBottom: space(8),
+    marginBottom: space(7),
   },
   codeBox: {
     borderWidth: 1,
@@ -159,7 +128,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     alignItems: 'center',
     paddingVertical: space(7),
-    marginBottom: space(6),
   },
   code: {
     fontFamily: font.display,
@@ -167,20 +135,15 @@ const styles = StyleSheet.create({
     letterSpacing: 10,
     color: colors.ink,
   },
-  codeHint: {
-    marginTop: space(2),
-    fontSize: type.small,
-    color: colors.inkSoft,
+  codeHint: { marginTop: space(2), fontSize: type.small, color: colors.inkSoft },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space(3),
+    marginVertical: space(7),
   },
-  codeInput: {
-    letterSpacing: 6,
-    fontSize: type.heading,
-    textAlign: 'center',
-  },
-  waiting: {
-    textAlign: 'center',
-    color: colors.inkSoft,
-    fontFamily: font.serifItalic,
-    fontSize: type.body,
-  },
+  divider: { flex: 1, height: 1, backgroundColor: colors.hairline },
+  dividerText: { fontSize: type.small, color: colors.inkSoft },
+  codeInput: { letterSpacing: 6, fontSize: type.heading, textAlign: 'center' },
+  joinHint: { fontSize: type.small, color: colors.inkSoft, lineHeight: 19, marginBottom: space(4) },
 });

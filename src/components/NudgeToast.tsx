@@ -60,7 +60,7 @@ const styles = StyleSheet.create({
     zIndex: 50,
   },
   text: {
-    color: '#FFF6EE',
+    color: colors.onRose,
     fontFamily: font.displayMedium,
     fontSize: type.body,
     textAlign: 'center',

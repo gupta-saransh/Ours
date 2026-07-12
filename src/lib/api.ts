@@ -34,7 +34,7 @@ export async function api<T = any>(
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     });
   } catch {
-    throw new ApiError(0, 'Can’t reach the server — check your connection.');
+    throw new ApiError(0, 'Cannot reach the server. Check your connection.');
   }
   let data: any = null;
   try {

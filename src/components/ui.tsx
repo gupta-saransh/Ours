@@ -37,7 +37,7 @@ export function Button({
         variant === 'primary' && { backgroundColor: pressed ? colors.rosePressed : colors.rose },
         variant === 'secondary' && [styles.buttonSecondary, pressed && { backgroundColor: colors.blushSoft }],
         variant === 'ghost' && { backgroundColor: pressed ? colors.blushSoft : 'transparent' },
-        variant === 'danger' && [styles.buttonSecondary, pressed && { backgroundColor: '#F6E4E1' }],
+        variant === 'danger' && [styles.buttonSecondary, pressed && { backgroundColor: colors.blushSoft }],
         inactive && { opacity: 0.55 },
         style,
       ]}
@@ -48,7 +48,7 @@ export function Button({
         <Text
           style={[
             styles.buttonText,
-            variant === 'primary' && { color: '#FFF9F2' },
+            variant === 'primary' && { color: colors.onRose },
             (variant === 'secondary' || variant === 'ghost') && { color: colors.ink },
             variant === 'danger' && { color: colors.danger },
           ]}

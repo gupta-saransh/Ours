@@ -1,5 +1,6 @@
 import { one, q } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
+import { notify } from '../_lib/notify';
 import { route, requireString, HttpError } from '../_lib/respond';
 
 const KINDS = ['anniversary', 'birthday', 'custom'] as const;
@@ -29,5 +30,6 @@ export default route(['GET', 'POST'], async (req, res) => {
      VALUES ($1, $2, $3, $4, $5) RETURNING id, author_id, title, date, kind, created_at`,
     [user.couple_id, user.id, title, date, kind]
   );
+  await notify(user.couple_id, user.id, 'milestone', `${user.display_name} added a milestone: ${title}`);
   res.status(201).json({ milestone });
 });

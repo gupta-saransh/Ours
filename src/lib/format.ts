@@ -34,6 +34,13 @@ export function nextOccurrence(date: string, kind: string, now = new Date()): Da
   return next;
 }
 
+/** Whole days from a date (YYYY-MM-DD or ISO) to today, never negative. */
+export function daysSince(date: string, now = new Date()): number {
+  const start = milestoneDate(date.slice(0, 10));
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.max(0, Math.round((today.getTime() - start.getTime()) / 86_400_000));
+}
+
 export interface Countdown {
   past: boolean;
   days: number;

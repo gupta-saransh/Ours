@@ -203,7 +203,7 @@ function MilestoneComposer({
           placeholder={kind === 'anniversary' ? 'The day we met' : kind === 'birthday' ? 'Their birthday' : 'Trip to the coast'}
         />
         <Field
-          label={kind === 'custom' ? 'Date (YYYY-MM-DD)' : 'Original date (YYYY-MM-DD) — repeats every year'}
+          label={kind === 'custom' ? 'Date (YYYY-MM-DD)' : 'Original date (YYYY-MM-DD), repeats every year'}
           value={date}
           onChangeText={setDate}
           placeholder="2024-06-14"
@@ -264,7 +264,7 @@ const styles = StyleSheet.create({
     paddingVertical: space(3.5),
     paddingHorizontal: space(6),
   },
-  fabText: { color: '#FFF9F2', fontSize: type.body, fontWeight: '600' },
+  fabText: { color: colors.onRose, fontSize: type.body, fontWeight: '600' },
   backdrop: { flex: 1, backgroundColor: 'rgba(59, 46, 42, 0.35)' },
   sheet: {
     backgroundColor: colors.cream,
