@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Ours",
+    "slug": "ours",
+    "version": "1.0.0",
+    "scheme": "ours",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "backgroundColor": "#FAF6F0",
+    "splash": {
+      "backgroundColor": "#FAF6F0",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTablet": false
+    },
+    "android": {
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Ours uses your photo library so you can add pictures to your shared memories."
+        }
+      ],
+      "expo-asset"
+    ]
+  }
+}
