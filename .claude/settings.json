@@ -3,7 +3,11 @@
     "allow": [
       "Bash(npm install *)",
       "Bash(npx expo *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(cd \"d:/Coding/NewProjects/RelationshipHQ\" && rm \"api/[...path].ts\" && ls api)"
+    ],
+    "additionalDirectories": [
+      "d:\\Coding\\NewProjects\\RelationshipHQ\\api"
     ]
   }
 }

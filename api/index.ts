@@ -20,12 +20,13 @@ type Handler = (req: VercelRequest, res: VercelResponse) => Promise<void>;
 
 /**
  * The entire API is ONE serverless function (Vercel Hobby caps deployments at
- * 12). Handlers live in api/_routes/ — underscore-prefixed folders are never
- * deployed as functions — and this router dispatches to them.
+ * 12 functions). vercel.json rewrites /api/* here; the original path arrives
+ * untouched on req.url. Handlers live in api/_routes/ — underscore-prefixed
+ * folders are never deployed as functions.
  *
- * Adding an endpoint = new module in api/_routes/ + one entry here.
- * `:id` as the second segment binds to req.query.id, matching Vercel's own
- * [id].ts convention, so handlers are written exactly as before.
+ * Adding an endpoint = new module in api/_routes/ + one entry in this table.
+ * ':id' as the second segment binds to req.query.id, matching Vercel's own
+ * [id].ts convention, so handlers are written exactly as standalone ones.
  */
 const routes: Partial<Record<string, Handler>> = {
   'auth/signup': authSignup,
@@ -45,12 +46,23 @@ const routes: Partial<Record<string, Handler>> = {
   'ably-token': ablyToken,
 };
 
+function pathSegments(req: VercelRequest): string[] {
+  // Rewrites preserve the original URL; fall back to the ?path= query param
+  // that the rewrite appends, in case a platform version changes behavior.
+  const pathname = (req.url ?? '').split('?')[0];
+  let rel = pathname.replace(/^\/api\/?/, '');
+  if (!rel) {
+    const raw = req.query.path;
+    rel = Array.isArray(raw) ? raw.join('/') : (raw ?? '');
+  }
+  return rel.split('/').filter(Boolean);
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const raw = req.query.path;
-  const segments = (Array.isArray(raw) ? raw : raw ? [raw] : []).filter(Boolean);
+  const segments = pathSegments(req);
   const path = segments.join('/');
 
-  let match: Handler | undefined = routes[path];
+  let match = routes[path];
   if (!match && segments.length === 2) {
     match = routes[`${segments[0]}/:id`];
     if (match) req.query.id = segments[1];
@@ -58,7 +70,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (!match) {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.status(404).json({ error: 'Not found' });
+    res.status(404).json({ error: `No API route for "${path}"` });
     return;
   }
   await match(req, res);

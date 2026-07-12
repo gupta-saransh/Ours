@@ -63,11 +63,15 @@ src/
   lib/storage.ts        token: SecureStore native / localStorage web
   lib/format.ts         formatDay, formatTime, nextOccurrence, countdownTo
 api/
-  [...path].ts          THE ONLY deployed serverless function — a router.
-                        Vercel Hobby caps deployments at 12 functions, so the
-                        whole API is one catch-all. New endpoint = new module
+  index.ts              THE ONLY deployed serverless function — a router.
+                        Vercel Hobby caps deployments at 12 functions, so
+                        vercel.json rewrites /api/* to this one function and
+                        it dispatches on req.url. New endpoint = new module
                         in _routes/ + one entry in this file's routes table.
                         ':id' second segments bind to req.query.id.
+                        (A [...path].ts catch-all was tried first and 404'd in
+                        production with this static-build setup — keep the
+                        index.ts + rewrite pattern.)
   _lib/db.ts            pg Pool (max 2, serverless), q() / one() helpers
   _lib/auth.ts          scrypt + JWT, requireUser / requirePairedUser
   _lib/ably.ts          publish(coupleId, event, data) — never throws into the request
@@ -116,7 +120,7 @@ Warm, restrained, intimate — **never childish, never generic AI-app**. No purp
 
 ## Gotchas learned during the build
 
-- **Never add a non-underscore file directly under `api/`** — each one becomes another serverless function and Vercel Hobby allows 12 per deployment. `api/[...path].ts` must stay the only one; put handlers in `api/_routes/` and register them in its routes table.
+- **Never add a non-underscore file directly under `api/`** — each one becomes another serverless function and Vercel Hobby allows 12 per deployment. `api/index.ts` must stay the only one; put handlers in `api/_routes/` and register them in its routes table. The `/api/:path*` rewrite in `vercel.json` is what routes requests to it — don't remove it.
 - **`jsonwebtoken` not `jose`** — jose is ESM-only and this package is CJS (adding `"type": "module"` risks breaking Metro/Expo tooling).
 - **`expo-asset` must stay installed** — expo-font's web loader imports it; web export fails without it.
 - **Component `style` props are `StyleProp<ViewStyle>`**, not `ViewStyle` — callers pass style arrays.
