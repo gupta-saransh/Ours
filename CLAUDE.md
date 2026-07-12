@@ -27,7 +27,7 @@ npx vercel dev         # API on :3000 (local)
 npx expo start         # app; press w for web
 ```
 
-Environment: `.env` from `.env.example` (`DATABASE_URL`, `ABLY_API_KEY`, `JWT_SECRET`, `EXPO_PUBLIC_API_URL`; the last one stays EMPTY on Vercel). Deployed via GitHub import into Vercel; env vars live in Vercel project settings.
+Environment: `.env` from `.env.example` (`DATABASE_URL`, `ABLY_API_KEY`, `JWT_SECRET`, `EXPO_PUBLIC_API_URL` (stays EMPTY on Vercel), and `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT` for Web Push, generated once via `npx tsx scripts/generate-vapid.ts`). Deployed via GitHub import into Vercel; env vars live in Vercel project settings.
 
 ## Product structure
 
@@ -63,9 +63,9 @@ Environment: `.env` from `.env.example` (`DATABASE_URL`, `ABLY_API_KEY`, `JWT_SE
 
 ## API surface (all via api/index.ts router; add endpoint = module in _routes/ + one table entry)
 
-auth/signup (creates solo space) · auth/login · auth/me · auth/profile · auth/account · couple (GET) · couple/create · couple/join (migrates content) · memories (GET list/POST) · memories/:id (GET full photo / PATCH heart / DELETE own) · notes (GET/POST) · notes/:id (PATCH pin / DELETE own) · milestones (GET/POST) · milestones/:id (DELETE) · notifications (GET list+unseen / POST mark seen) · bucket (GET/POST) · bucket/:id (PATCH done / DELETE) · home (GET aggregate) · nudge (POST) · ably-token (GET)
+auth/signup (creates solo space) · auth/login · auth/me · auth/profile · auth/account · couple (GET) · couple/create · couple/join (migrates content) · memories (GET list/POST) · memories/:id (GET full photo / PATCH heart / DELETE any couple memory) · notes (GET/POST) · notes/:id (PATCH pin / DELETE own) · milestones (GET/POST) · milestones/:id (DELETE) · notifications (GET list+unseen / POST mark seen) · bucket (GET/POST) · bucket/:id (PATCH done / DELETE) · home (GET aggregate) · push/subscribe (POST, store Web Push subscription in push_token) · push/vapid-public-key (GET, no auth) · nudge (POST) · ably-token (GET)
 
-`_lib/`: db (pg pool), auth (scrypt/JWT, `requirePairedUser` lazily creates a space for legacy accounts), ably, notify (insert notification + publish), invite (code + space creation), push (real hook, delivery needs APNs/FCM), respond (route wrapper: CORS/methods/errors).
+`_lib/`: db (pg pool), auth (scrypt/JWT, `requirePairedUser` lazily creates a space for legacy accounts), ably, notify (insert notification + publish + best-effort Web Push to the partner), notification-routes (kind -> deep-link path), invite (code + space creation), push (real Web Push via `web-push` + VAPID; native APNs/FCM still needs store creds), respond (route wrapper: CORS/methods/errors).
 
 ## Data model
 
@@ -80,7 +80,7 @@ auth/signup (creates solo space) · auth/login · auth/me · auth/profile · aut
 1. Every couple-scoped query filters by the authenticated user's `couple_id`; privacy lives in the API.
 2. JWT carries only `sub`; `requireUser` re-reads the user row per request so couple_id is never stale.
 3. Ably tokens are subscribe-only, scoped to the user's own couple channel (`/api/ably-token`); the API key never leaves the server.
-4. Spaces cap at 2 members; joining a full space is rejected; own-content-only deletes.
+4. Spaces cap at 2 members; joining a full space is rejected. Deletes are own-content-only EXCEPT memories, which either partner may delete (couple_id still enforced; intentional, confirmed by the user).
 
 ## Design system (non-negotiable)
 
@@ -94,12 +94,13 @@ Direction: **aged love letters**. Parchment `#F4ECDD` ground, espresso ink `#332
 
 ## Honest limitations (do not fake)
 
-- Push to closed apps needs APNs/FCM credentials; the real hook is `api/_lib/push.ts` + `users.push_token`. In-app realtime via Ably is real.
+- Web Push (browser / installed PWA) is REAL: VAPID keys + `web-push` in `api/_lib/push.ts`, subscription JSON stored in `users.push_token`, delivered on every `notify()`. Needs the three `VAPID_*` env vars set on Vercel. Closed-app push to a real NATIVE iOS/Android binary still needs APNs/FCM store credentials; those are not provisioned. In-app realtime via Ably is real.
 - Billing: Settings shows a free state; no payment flow by design.
 
 ## Gotchas
 
 - **Never add a non-underscore file directly under `api/`**; Vercel Hobby caps deployments at 12 functions. `api/index.ts` must remain the only one; the `/api/:path*` rewrite in `vercel.json` routes to it (a `[...path].ts` catch-all was tried and 404'd in production; keep the rewrite pattern). Rewrite order matters: the api rewrite must precede the SPA fallback.
+- **PWA / iOS standalone**: web output is `"static"` (app.json) so Expo Router honors `app/+html.tsx`, where the manifest link + `apple-mobile-web-app-*` meta tags live. Static assets in `public/` (manifest.json, sw.js, favicon.png, icons/) copy to `dist/` root verbatim and are served before the SPA rewrite (proven: `_expo/` JS loads fine). Icons are real PNGs generated dependency-free by `scripts/generate-icons.ts` (no sharp/canvas). `vercel.json` `headers` set the manifest content-type + sw.js no-cache. The service worker is registered client-side from `src/lib/push-web.ts` (web only, no auto-prompt); permission is requested only from the Settings toggle.
 - `jsonwebtoken` not `jose` (jose is ESM-only; this package is CJS).
 - `expo-asset` must stay installed (expo-font's web loader needs it).
 - Component `style` props are `StyleProp<ViewStyle>`, not `ViewStyle`.

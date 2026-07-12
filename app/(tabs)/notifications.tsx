@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { Bell, CalendarHeart, Gift, Heart, Hourglass, Image as ImageIcon, ListChecks, MessageCircle, Sparkles, StickyNote } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useCoupleEvent } from '@/lib/realtime';
 import { useNotifications, type Notification } from '@/lib/notifications';
 import { useAuth } from '@/lib/auth';
-import { Card, Empty, ErrorState, Screen, Skeleton } from '@/components/kit';
+import { PressableCard, Empty, ErrorState, Screen, Skeleton } from '@/components/kit';
 import { colors, sp, text } from '@/theme';
 import { formatDay, formatTime } from '@/lib/format';
 
@@ -22,8 +23,23 @@ const KIND_ICON: Record<string, React.ComponentType<{ size?: number; color?: str
   wishlist: Gift,
 };
 
+// Where each notification deep-links on tap (mirrors api/_lib/notification-routes.ts).
+const KIND_ROUTE: Record<string, string> = {
+  nudge: '/',
+  memory: '/memories',
+  note: '/notes',
+  milestone: '/milestones',
+  partner: '/',
+  bucket: '/',
+  prompt: '/prompts',
+  capsule: '/memories',
+  date: '/dates',
+  wishlist: '/wishlist',
+};
+
 export default function Notifications() {
   const { user } = useAuth();
+  const router = useRouter();
   const { markSeen } = useNotifications();
   const [items, setItems] = useState<Notification[] | null>(null);
   const [failed, setFailed] = useState(false);
@@ -86,8 +102,9 @@ export default function Notifications() {
         renderItem={({ item }) => {
           const fresh = new Date(item.created_at) > new Date(seenAt);
           const Icon = KIND_ICON[item.kind] ?? Bell;
+          const target = KIND_ROUTE[item.kind] ?? '/';
           return (
-            <Card style={[styles.row, fresh && styles.rowFresh]}>
+            <PressableCard onPress={() => router.push(target as any)} style={[styles.row, fresh && styles.rowFresh]}>
               <Icon size={18} color={fresh ? colors.surfaceSealed : colors.inkFaint} strokeWidth={1.75} />
               <View style={{ flex: 1 }}>
                 <Text style={text.body}>{item.text}</Text>
@@ -96,7 +113,7 @@ export default function Notifications() {
                 </Text>
               </View>
               {fresh && <View style={styles.freshDot} />}
-            </Card>
+            </PressableCard>
           );
         }}
       />

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Platform, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/lib/auth';
+import { disableWebPush, enableWebPush } from '@/lib/push-web';
 import {
   Card,
   FormError,
@@ -41,6 +42,15 @@ export default function Settings() {
     setError(null);
     try {
       await updateProfile({ notificationsEnabled: value });
+      // On web, enabling also asks the browser to allow push and subscribes.
+      // Native keeps its own expo-notifications flow (unchanged).
+      if (Platform.OS === 'web') {
+        if (value) {
+          await enableWebPush();
+        } else {
+          await disableWebPush();
+        }
+      }
     } catch (err: any) {
       setError(err?.message ?? 'Something went wrong');
     }
@@ -113,7 +123,7 @@ export default function Settings() {
               <View style={{ flex: 1, paddingRight: sp.base }}>
                 <Text style={text.body}>Nudges and new notes</Text>
                 <Text style={text.caption}>
-                  Live while the app is open. Push to a closed app arrives once store credentials are set up.
+                  Get them even when Ours is closed. On iPhone, add Ours to your home screen first, then turn this on.
                 </Text>
               </View>
               <Switch

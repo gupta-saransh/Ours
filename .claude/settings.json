@@ -4,7 +4,9 @@
       "Bash(npm install *)",
       "Bash(npx expo *)",
       "Bash(npx tsc *)",
-      "Bash(cd \"d:/Coding/NewProjects/RelationshipHQ\" && rm \"api/[...path].ts\" && ls api)"
+      "Bash(cd \"d:/Coding/NewProjects/RelationshipHQ\" && rm \"api/[...path].ts\" && ls api)",
+      "Bash(npx tsx *)",
+      "Bash(rm -rf dist)"
     ],
     "additionalDirectories": [
       "d:\\Coding\\NewProjects\\RelationshipHQ\\api"

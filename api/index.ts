@@ -24,6 +24,8 @@ import dateItem from './_routes/date-item';
 import wishlist from './_routes/wishlist';
 import wishlistItem from './_routes/wishlist-item';
 import reflection from './_routes/reflection';
+import pushSubscribe from './_routes/push-subscribe';
+import pushVapid from './_routes/push-vapid';
 import nudge from './_routes/nudge';
 import ablyToken from './_routes/ably-token';
 
@@ -66,6 +68,8 @@ const routes: Partial<Record<string, Handler>> = {
   'wishlist/:id': wishlistItem,
   reflection,
   'reflection/history': reflection,
+  'push/subscribe': pushSubscribe,
+  'push/vapid-public-key': pushVapid,
   nudge,
   'ably-token': ablyToken,
 };

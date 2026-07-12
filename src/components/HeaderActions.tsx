@@ -1,35 +1,40 @@
-import React, { useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Bell, Settings } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useNotifications } from '@/lib/notifications';
+import { useToast } from '@/lib/toast';
 import { successHaptic } from '@/lib/haptics';
 import { AppPressable, IconButton } from '@/components/kit';
 import { colors, radius, sp, text } from '@/theme';
 
 /** ♥ button, sends a live "thinking of you" to your partner. */
 export function NudgeButton() {
-  const [state, setState] = useState<'idle' | 'sending' | 'sent'>('idle');
-  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [sending, setSending] = useState(false);
+  const toast = useToast();
 
   const send = async () => {
-    if (state !== 'idle') return;
-    setState('sending');
+    if (sending) return; // debounce repeat taps
+    setSending(true); // spinner shows on the next frame, before the network call
     try {
       await api('/api/nudge', { method: 'POST' });
       successHaptic();
-      setState('sent');
-      if (resetTimer.current) clearTimeout(resetTimer.current);
-      resetTimer.current = setTimeout(() => setState('idle'), 2500);
+      toast.show('Nudge sent.');
     } catch {
-      setState('idle');
+      toast.show('Could not send. Try again.');
+    } finally {
+      setSending(false);
     }
   };
 
   return (
     <AppPressable onPress={send} style={styles.nudge}>
-      <Text style={styles.nudgeText}>{state === 'sent' ? 'Sent ♥' : 'Nudge ♥'}</Text>
+      {sending ? (
+        <ActivityIndicator size={14} color={colors.surfaceSealed} />
+      ) : (
+        <Text style={styles.nudgeText}>Nudge ♥</Text>
+      )}
     </AppPressable>
   );
 }
@@ -73,6 +78,11 @@ const styles = StyleSheet.create({
     paddingVertical: sp.sm,
     paddingHorizontal: sp.md,
     backgroundColor: colors.surfaceRaised,
+    // Fixed footprint so swapping the label for the spinner does not resize it.
+    minWidth: 84,
+    minHeight: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   nudgeText: { ...text.caption, color: colors.surfaceSealed, fontWeight: '600' },
   dot: {

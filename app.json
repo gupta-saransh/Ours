@@ -20,7 +20,15 @@
     },
     "web": {
       "bundler": "metro",
-      "output": "single"
+      "output": "static",
+      "name": "Ours",
+      "shortName": "Ours",
+      "display": "standalone",
+      "startUrl": "/",
+      "scope": "/",
+      "orientation": "portrait",
+      "backgroundColor": "#F4ECDD",
+      "themeColor": "#F4ECDD"
     },
     "plugins": [
       "expo-router",

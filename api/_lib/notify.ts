@@ -1,5 +1,7 @@
-import { one } from './db';
+import { one, q } from './db';
 import { publish } from './ably';
+import { sendPush } from './push';
+import { routeForKind } from './notification-routes';
 
 export type NotificationKind =
   | 'nudge'
@@ -31,6 +33,17 @@ export async function notify(
       [coupleId, actorId, kind, text]
     );
     await publish(coupleId, 'notification', row);
+
+    // Best-effort background/closed-app push to the other partner(s). sendPush
+    // checks each recipient's own preference and never throws.
+    const others = await q<{ id: string }>(
+      'SELECT id FROM users WHERE couple_id = $1 AND id != $2',
+      [coupleId, actorId]
+    );
+    const url = routeForKind(kind);
+    for (const o of others) {
+      await sendPush(o.id, { title: 'Ours', body: text, url });
+    }
   } catch (err) {
     console.error('notify failed', err);
   }

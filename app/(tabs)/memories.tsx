@@ -15,10 +15,11 @@ import {
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { ChevronLeft, ChevronRight, Lock } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, Lock, Trash2 } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
+import { useToast } from '@/lib/toast';
 import { successHaptic, tapHaptic } from '@/lib/haptics';
 import {
   AppPressable,
@@ -26,6 +27,7 @@ import {
   Empty,
   ErrorState,
   FormError,
+  IconButton,
   PrimaryButton,
   Screen,
   SecondaryButton,
@@ -145,10 +147,15 @@ export default function Memories() {
     <MemoryCard memory={item} mine={item.author_id === user?.id} onOpen={() => openMemory(item)} onHeart={() => toggleHeart(item)} />
   );
 
+  const onDeleted = (id: string) => {
+    setMemories((prev) => (prev ? prev.filter((m) => m.id !== id) : prev));
+    setViewer(null);
+  };
+
   const overlays = (
     <>
       <MemoryComposer date={composerDate} onClose={() => setComposerDate(null)} onCreated={onCreated} />
-      <RevealViewer memory={viewer} myId={user?.id ?? ''} onClose={() => setViewer(null)} />
+      <RevealViewer memory={viewer} myId={user?.id ?? ''} onClose={() => setViewer(null)} onDeleted={onDeleted} />
     </>
   );
 
@@ -514,14 +521,30 @@ function MemoryComposer({
 
 /**
  * Full memory viewer. Also the capsule reveal: opening a ready capsule marks
- * it opened server-side (the GET does that) and tells the author.
+ * it opened server-side (the GET does that) and tells the author. Either partner
+ * can delete the memory here via a two-step inline confirm.
  */
-function RevealViewer({ memory, myId, onClose }: { memory: Memory | null; myId: string; onClose: () => void }) {
+function RevealViewer({
+  memory,
+  myId,
+  onClose,
+  onDeleted,
+}: {
+  memory: Memory | null;
+  myId: string;
+  onClose: () => void;
+  onDeleted: (id: string) => void;
+}) {
   const [photo, setPhoto] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const toast = useToast();
   const isReveal = !!memory && !!memory.sealed_until && !memory.sealed && memory.author_id !== myId;
 
   useEffect(() => {
     setPhoto(null);
+    setConfirming(false);
+    setDeleting(false);
     if (!memory) return;
     // Fetch even without a photo when it is a capsule: the GET records the open.
     if (memory.has_photo || isReveal) {
@@ -532,10 +555,51 @@ function RevealViewer({ memory, myId, onClose }: { memory: Memory | null; myId: 
   }, [memory?.id]);
 
   if (!memory) return null;
+
+  // Tapping outside the buttons cancels a pending confirm, else closes.
+  const onBackdrop = () => {
+    if (confirming) setConfirming(false);
+    else onClose();
+  };
+
+  const doDelete = async () => {
+    setDeleting(true);
+    try {
+      await api(`/api/memories/${memory.id}`, { method: 'DELETE' });
+      successHaptic();
+      onDeleted(memory.id); // optimistic; the server also publishes memory.deleted
+    } catch {
+      toast.show('Could not delete. Try again.');
+      setDeleting(false);
+      setConfirming(false);
+    }
+  };
+
   return (
     <Modal visible animationType="fade" transparent onRequestClose={onClose}>
-      <Pressable style={styles.viewerBackdrop} onPress={onClose}>
+      <Pressable style={styles.viewerBackdrop} onPress={onBackdrop}>
         <View style={styles.viewerBody}>
+          {/* Keep taps on the delete controls from bubbling to the backdrop
+              (which would close/cancel on web where clicks propagate). */}
+          <Pressable style={styles.viewerBar} onPress={(e) => e.stopPropagation()}>
+            {deleting ? (
+              <ActivityIndicator size="small" color={colors.onSealed} />
+            ) : confirming ? (
+              <View style={styles.confirmRow}>
+                <Text style={styles.confirmLabel}>Delete?</Text>
+                <SecondaryButton
+                  title="Yes, delete"
+                  destructive
+                  onPress={doDelete}
+                  style={styles.confirmButton}
+                />
+              </View>
+            ) : (
+              <IconButton onPress={() => setConfirming(true)}>
+                <Trash2 size={20} color={colors.onSealed} strokeWidth={1.75} />
+              </IconButton>
+            )}
+          </Pressable>
           {isReveal && <Text style={styles.viewerSeal}>✦ ✦</Text>}
           {memory.has_photo ? (
             photo ? (
@@ -697,6 +761,21 @@ const styles = StyleSheet.create({
     padding: sp.xl,
   },
   viewerBody: { width: '100%', maxWidth: 720, alignItems: 'center' },
+  viewerBar: {
+    width: '100%',
+    minHeight: 40,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    marginBottom: sp.sm,
+  },
+  confirmRow: { flexDirection: 'row', alignItems: 'center', gap: sp.md },
+  confirmLabel: { ...text.caption, color: colors.onSealed },
+  confirmButton: {
+    height: 40,
+    paddingHorizontal: sp.base,
+    borderColor: 'rgba(249, 239, 220, 0.5)',
+  },
   viewerSeal: {
     fontSize: 24,
     color: colors.accent,

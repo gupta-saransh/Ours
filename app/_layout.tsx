@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { View } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -11,6 +11,8 @@ import {
 } from '@expo-google-fonts/fraunces';
 import { AuthProvider } from '@/lib/auth';
 import { RealtimeProvider } from '@/lib/realtime';
+import { ToastProvider } from '@/lib/toast';
+import { registerServiceWorker } from '@/lib/push-web';
 import { colors } from '@/theme';
 
 export default function RootLayout() {
@@ -21,6 +23,11 @@ export default function RootLayout() {
     Fraunces_600SemiBold,
   });
 
+  // Register the Web Push service worker on web (no-op on native, no prompt).
+  useEffect(() => {
+    registerServiceWorker();
+  }, []);
+
   if (!fontsLoaded) {
     return <View style={{ flex: 1, backgroundColor: colors.cream }} />;
   }
@@ -28,13 +35,15 @@ export default function RootLayout() {
   return (
     <AuthProvider>
       <RealtimeProvider>
-        <StatusBar style="dark" backgroundColor={colors.cream} />
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: colors.cream },
-          }}
-        />
+        <ToastProvider>
+          <StatusBar style="dark" backgroundColor={colors.cream} />
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: colors.cream },
+            }}
+          />
+        </ToastProvider>
       </RealtimeProvider>
     </AuthProvider>
   );

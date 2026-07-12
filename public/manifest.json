@@ -1,0 +1,17 @@
+{
+  "name": "Ours",
+  "short_name": "Ours",
+  "description": "A private space for you and your person.",
+  "display": "standalone",
+  "display_override": ["standalone"],
+  "start_url": "/",
+  "scope": "/",
+  "background_color": "#F4ECDD",
+  "theme_color": "#F4ECDD",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

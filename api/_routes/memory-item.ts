@@ -48,16 +48,18 @@ export default route(['GET', 'PATCH', 'DELETE'], async (req, res) => {
     return;
   }
 
-  if (stillSealed && memory.author_id !== user.id) throw new HttpError(403, 'Still sealed');
-
   if (req.method === 'DELETE') {
-    if (memory.author_id !== user.id) throw new HttpError(403, 'You can only remove your own memories');
+    // Either partner may delete any memory in their shared space; couple_id is
+    // already enforced by the SELECT above (Anisha confirmed this is intended).
     await one('DELETE FROM memory_hearts WHERE memory_id = $1', [id]);
     await one('DELETE FROM memories WHERE id = $1', [id]);
     await publish(user.couple_id, 'memory.deleted', { id });
     res.status(200).json({ ok: true });
     return;
   }
+
+  // Hearting a partner's capsule stays blocked until it is unsealed.
+  if (stillSealed && memory.author_id !== user.id) throw new HttpError(403, 'Still sealed');
 
   const hearted = req.body?.hearted;
   if (typeof hearted !== 'boolean') throw new HttpError(400, 'hearted must be a boolean');
