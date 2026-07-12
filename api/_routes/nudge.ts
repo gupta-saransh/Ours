@@ -1,8 +1,8 @@
-import { one } from './_lib/db';
-import { requirePairedUser } from './_lib/auth';
-import { publish } from './_lib/ably';
-import { sendPush } from './_lib/push';
-import { route } from './_lib/respond';
+import { one } from '../_lib/db';
+import { requirePairedUser } from '../_lib/auth';
+import { publish } from '../_lib/ably';
+import { sendPush } from '../_lib/push';
+import { route } from '../_lib/respond';
 
 /** POST /api/nudge — "thinking of you", delivered live over Ably while the app is open. */
 export default route(['POST'], async (req, res) => {

@@ -1,6 +1,6 @@
-import { one, q } from './_lib/db';
-import { requirePairedUser } from './_lib/auth';
-import { route, requireString, HttpError } from './_lib/respond';
+import { one, q } from '../_lib/db';
+import { requirePairedUser } from '../_lib/auth';
+import { route, requireString, HttpError } from '../_lib/respond';
 
 const KINDS = ['anniversary', 'birthday', 'custom'] as const;
 

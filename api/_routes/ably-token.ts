@@ -1,6 +1,6 @@
-import { requirePairedUser } from './_lib/auth';
-import { getAbly, coupleChannel } from './_lib/ably';
-import { route } from './_lib/respond';
+import { requirePairedUser } from '../_lib/auth';
+import { getAbly, coupleChannel } from '../_lib/ably';
+import { route } from '../_lib/respond';
 
 /**
  * GET /api/ably-token — Ably token request scoped to this couple's channel only.

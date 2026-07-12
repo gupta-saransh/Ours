@@ -63,15 +63,21 @@ src/
   lib/storage.ts        token: SecureStore native / localStorage web
   lib/format.ts         formatDay, formatTime, nextOccurrence, countdownTo
 api/
+  [...path].ts          THE ONLY deployed serverless function — a router.
+                        Vercel Hobby caps deployments at 12 functions, so the
+                        whole API is one catch-all. New endpoint = new module
+                        in _routes/ + one entry in this file's routes table.
+                        ':id' second segments bind to req.query.id.
   _lib/db.ts            pg Pool (max 2, serverless), q() / one() helpers
   _lib/auth.ts          scrypt + JWT, requireUser / requirePairedUser
   _lib/ably.ts          publish(coupleId, event, data) — never throws into the request
   _lib/push.ts          REAL push hook, intentionally not delivering (see below)
   _lib/respond.ts       route() wrapper: CORS, method guard, HttpError → JSON
-  auth/{signup,login,me,account,profile}.ts
-  couple/{create,join,index}.ts
-  memories.ts · notes.ts · notes/[id].ts · milestones.ts · milestones/[id].ts
-  nudge.ts · ably-token.ts
+  _routes/              handler modules (underscore dirs are never deployed):
+                        auth-{signup,login,me,account,profile}.ts
+                        couple-{create,join,get}.ts
+                        memories.ts · notes.ts · note-item.ts
+                        milestones.ts · milestone-item.ts · nudge.ts · ably-token.ts
 db/schema.sql           CREATE TABLE IF NOT EXISTS — safe to re-run
 scripts/migrate.ts      runs schema.sql via tsx
 vercel.json             expo web export = static build; /((?!api/).*) → index.html
@@ -110,6 +116,7 @@ Warm, restrained, intimate — **never childish, never generic AI-app**. No purp
 
 ## Gotchas learned during the build
 
+- **Never add a non-underscore file directly under `api/`** — each one becomes another serverless function and Vercel Hobby allows 12 per deployment. `api/[...path].ts` must stay the only one; put handlers in `api/_routes/` and register them in its routes table.
 - **`jsonwebtoken` not `jose`** — jose is ESM-only and this package is CJS (adding `"type": "module"` risks breaking Metro/Expo tooling).
 - **`expo-asset` must stay installed** — expo-font's web loader imports it; web export fails without it.
 - **Component `style` props are `StyleProp<ViewStyle>`**, not `ViewStyle` — callers pass style arrays.

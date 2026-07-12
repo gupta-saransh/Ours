@@ -1,7 +1,7 @@
-import { one, q } from './_lib/db';
-import { requirePairedUser } from './_lib/auth';
-import { publish } from './_lib/ably';
-import { route, requireString } from './_lib/respond';
+import { one, q } from '../_lib/db';
+import { requirePairedUser } from '../_lib/auth';
+import { publish } from '../_lib/ably';
+import { route, requireString } from '../_lib/respond';
 
 const NOTE_COLUMNS = `n.id, n.author_id, n.body, n.pinned, n.created_at,
   u.display_name AS author_name`;

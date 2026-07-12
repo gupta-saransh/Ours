@@ -1,7 +1,7 @@
-import { one, q } from './_lib/db';
-import { requirePairedUser } from './_lib/auth';
-import { publish } from './_lib/ably';
-import { route, requireString, HttpError } from './_lib/respond';
+import { one, q } from '../_lib/db';
+import { requirePairedUser } from '../_lib/auth';
+import { publish } from '../_lib/ably';
+import { route, requireString, HttpError } from '../_lib/respond';
 
 const MEMORY_COLUMNS = `m.id, m.author_id, m.photo_data, m.note, m.created_at,
   u.display_name AS author_name`;

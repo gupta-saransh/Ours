@@ -50,5 +50,5 @@ Then run `npm run migrate` once locally (with the production `DATABASE_URL` in `
 
 - `app/` — Expo Router screens; `(auth)` group → `pair` gate → `(tabs)`
 - `src/lib` — API client, auth context, Ably realtime context
-- `api/` — Vercel functions; every couple-scoped query filters by the authenticated user's `couple_id`, so privacy is enforced server-side
+- `api/` — a **single** serverless function (`api/[...path].ts`) routes to handler modules in `api/_routes/`, staying well under Vercel Hobby's 12-function cap with room to grow; every couple-scoped query filters by the authenticated user's `couple_id`, so privacy is enforced server-side
 - Ably clients authenticate with tokens scoped to their own couple's channel only (`/api/ably-token`); the API key never leaves the server
