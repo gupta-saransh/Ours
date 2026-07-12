@@ -14,6 +14,7 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
 import { Card, EmptyState } from '@/components/ui';
+import { EmojiPicker } from '@/components/EmojiPicker';
 import { colors, font, radius, space, type } from '@/theme';
 import { formatDay, formatTime } from '@/lib/format';
 
@@ -38,6 +39,7 @@ export default function LoveNotes() {
   const [notes, setNotes] = useState<Note[] | null>(null);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [emojiOpen, setEmojiOpen] = useState(false);
 
   const load = useCallback(async () => {
     const data = await api<{ notes: Note[] }>('/api/notes');
@@ -149,14 +151,14 @@ export default function LoveNotes() {
           );
         }}
       />
-      <View style={styles.emojiRow}>
-        {['❤️', '🥰', '😘', '✨', '🌙', '☕', '🌻', '🫶'].map((e) => (
-          <Pressable key={e} onPress={() => setDraft((d) => d + e)} hitSlop={4} style={styles.emojiChip}>
-            <Text style={styles.emoji}>{e}</Text>
-          </Pressable>
-        ))}
-      </View>
       <View style={styles.composer}>
+        <Pressable
+          onPress={() => setEmojiOpen((o) => !o)}
+          style={({ pressed }) => [styles.emojiToggle, (pressed || emojiOpen) && { backgroundColor: colors.blushSoft }]}
+          hitSlop={4}
+        >
+          <Text style={{ fontSize: 22 }}>{emojiOpen ? '⌨' : '😊'}</Text>
+        </Pressable>
         <TextInput
           value={draft}
           onChangeText={setDraft}
@@ -177,6 +179,7 @@ export default function LoveNotes() {
           <Text style={styles.sendText}>♥</Text>
         </Pressable>
       </View>
+      {emojiOpen && <EmojiPicker onPick={(e) => setDraft((d) => d + e)} />}
     </KeyboardAvoidingView>
   );
 }
@@ -215,29 +218,24 @@ const styles = StyleSheet.create({
   meta: { fontSize: type.small, color: colors.inkSoft, flexShrink: 1 },
   noteActions: { flexDirection: 'row', alignItems: 'center' },
   action: { fontSize: type.small, color: colors.rose, fontWeight: '600' },
-  emojiRow: {
-    flexDirection: 'row',
+  emojiToggle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
     justifyContent: 'center',
-    gap: space(2),
-    paddingTop: space(2.5),
-    borderTopWidth: 1,
-    borderTopColor: colors.hairline,
-    backgroundColor: colors.cream,
-    width: '100%',
-    maxWidth: 560,
-    alignSelf: 'center',
+    marginRight: space(2),
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.surface,
   },
-  emojiChip: {
-    paddingHorizontal: space(1.5),
-    paddingVertical: space(1),
-    borderRadius: radius.sm,
-  },
-  emoji: { fontSize: 20 },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     padding: space(4),
     paddingTop: space(2.5),
+    borderTopWidth: 1,
+    borderTopColor: colors.hairline,
     backgroundColor: colors.cream,
     width: '100%',
     maxWidth: 560,

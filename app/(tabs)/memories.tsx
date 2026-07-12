@@ -3,10 +3,13 @@ import {
   ActivityIndicator,
   FlatList,
   Modal,
+  Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Image } from 'expo-image';
@@ -38,17 +41,21 @@ const dayKey = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)
 
 export default function Memories() {
   const { user } = useAuth();
+  const { width } = useWindowDimensions();
+  const wide = Platform.OS === 'web' && width >= 900;
   const [memories, setMemories] = useState<Memory[] | null>(null);
+  const [failed, setFailed] = useState(false);
   const [composerDate, setComposerDate] = useState<string | null>(null);
   const [viewer, setViewer] = useState<Memory | null>(null);
 
   const load = useCallback(async () => {
+    setFailed(false);
     const data = await api<{ memories: Memory[] }>('/api/memories');
     setMemories(data.memories);
   }, []);
 
   useEffect(() => {
-    load().catch(() => setMemories([]));
+    load().catch(() => setFailed(true));
   }, [load]);
 
   useCoupleEvent('memory.created', (data) => {
@@ -72,32 +79,80 @@ export default function Memories() {
 
   const toggleHeart = async (memory: Memory) => {
     const next = !memory.hearted_by_me;
-    setMemories((prev) =>
-      prev
-        ? prev.map((m) =>
-            m.id === memory.id
-              ? { ...m, hearted_by_me: next, hearts: m.hearts + (next ? 1 : -1) }
-              : m
-          )
-        : prev
-    );
+    const apply = (list: Memory[] | null, hearted: boolean, hearts: number) =>
+      list ? list.map((m) => (m.id === memory.id ? { ...m, hearted_by_me: hearted, hearts } : m)) : list;
+    setMemories((prev) => apply(prev, next, memory.hearts + (next ? 1 : -1)));
     await api(`/api/memories/${memory.id}`, { method: 'PATCH', body: { hearted: next } }).catch(() => {
-      setMemories((prev) =>
-        prev
-          ? prev.map((m) =>
-              m.id === memory.id
-                ? { ...m, hearted_by_me: memory.hearted_by_me, hearts: memory.hearts }
-                : m
-            )
-          : prev
-      );
+      setMemories((prev) => apply(prev, memory.hearted_by_me, memory.hearts));
     });
   };
 
+  const onCreated = (m: Memory) => {
+    setMemories((prev) => {
+      const next = [m, ...(prev ?? [])];
+      next.sort((a, b) => b.memory_date.localeCompare(a.memory_date) || b.created_at.localeCompare(a.created_at));
+      return next;
+    });
+    setComposerDate(null);
+  };
+
+  if (failed) {
+    return (
+      <View style={styles.loading}>
+        <Text style={styles.errorTitle}>Could not load your memories</Text>
+        <Text style={styles.errorLine}>Check your connection, then try again.</Text>
+        <Button title="Try again" variant="secondary" onPress={() => load().catch(() => setFailed(true))} style={{ marginTop: space(4), minWidth: 180 }} />
+      </View>
+    );
+  }
   if (memories === null) {
     return (
       <View style={styles.loading}>
         <ActivityIndicator color={colors.rose} />
+      </View>
+    );
+  }
+
+  const renderCard = ({ item }: { item: Memory }) => (
+    <MemoryCard
+      memory={item}
+      mine={item.author_id === user?.id}
+      onOpen={() => setViewer(item)}
+      onHeart={() => toggleHeart(item)}
+    />
+  );
+
+  const overlays = (
+    <>
+      <MemoryComposer date={composerDate} onClose={() => setComposerDate(null)} onCreated={onCreated} />
+      <PhotoViewer memory={viewer} onClose={() => setViewer(null)} />
+    </>
+  );
+
+  // Desktop: calendar on the left, scrollable timeline on the right.
+  if (wide) {
+    return (
+      <View style={styles.wideRow}>
+        <ScrollView style={styles.wideLeft} contentContainerStyle={{ padding: space(6) }}>
+          <Text style={styles.timelineTitle}>Memories</Text>
+          <MemoryCalendar datesWithMemories={datesWithMemories} onPickDate={setComposerDate} />
+        </ScrollView>
+        <View style={styles.wideRight}>
+          <FlatList
+            data={memories}
+            keyExtractor={(m) => m.id}
+            contentContainerStyle={styles.wideList}
+            ListHeaderComponent={<Text style={styles.timelineTitle}>Your story so far</Text>}
+            ListEmptyComponent={
+              <EmptyState
+                title="Your story starts here"
+                line="Tap any day on the calendar and keep a photo, a moment, a line worth remembering."
+              />
+            }
+            renderItem={renderCard}
+          />
+        </View>
+        {overlays}
       </View>
     );
   }
@@ -110,7 +165,7 @@ export default function Memories() {
         contentContainerStyle={styles.list}
         ListHeaderComponent={
           <>
-            <MemoryCalendar datesWithMemories={datesWithMemories} onPickDate={(d) => setComposerDate(d)} />
+            <MemoryCalendar datesWithMemories={datesWithMemories} onPickDate={setComposerDate} />
             <Text style={styles.timelineTitle}>Your story so far</Text>
             {memories.length === 0 && (
               <EmptyState
@@ -120,42 +175,70 @@ export default function Memories() {
             )}
           </>
         }
-        renderItem={({ item }) => (
-          <Card style={styles.memory}>
-            {item.thumb_data ? (
-              <Pressable onPress={() => setViewer(item)}>
-                <Image source={{ uri: item.thumb_data }} style={styles.photo} contentFit="cover" transition={150} />
-              </Pressable>
-            ) : null}
-            <Text style={styles.note}>{item.note}</Text>
-            <View style={styles.memoryFooter}>
-              <Text style={styles.meta}>
-                {item.author_id === user?.id ? 'You' : item.author_name} · {formatDay(item.memory_date)}
-              </Text>
-              <Pressable onPress={() => toggleHeart(item)} hitSlop={8} style={styles.heartButton}>
-                <Text style={[styles.heartGlyph, item.hearted_by_me && { color: colors.rose }]}>
-                  {item.hearted_by_me ? '♥' : '♡'}
-                </Text>
-                {item.hearts > 0 && <Text style={styles.heartCount}>{item.hearts}</Text>}
-              </Pressable>
-            </View>
-          </Card>
-        )}
+        renderItem={renderCard}
       />
-      <MemoryComposer
-        date={composerDate}
-        onClose={() => setComposerDate(null)}
-        onCreated={(m) => {
-          setMemories((prev) => {
-            const next = [m, ...(prev ?? [])];
-            next.sort((a, b) => b.memory_date.localeCompare(a.memory_date) || b.created_at.localeCompare(a.created_at));
-            return next;
-          });
-          setComposerDate(null);
-        }}
-      />
-      <PhotoViewer memory={viewer} onClose={() => setViewer(null)} />
+      {overlays}
     </View>
+  );
+}
+
+function MemoryCard({
+  memory,
+  mine,
+  onOpen,
+  onHeart,
+}: {
+  memory: Memory;
+  mine: boolean;
+  onOpen: () => void;
+  onHeart: () => void;
+}) {
+  return (
+    <Card style={styles.memory}>
+      <MemoryImage memory={memory} onPress={onOpen} />
+      <Text style={styles.note}>{memory.note}</Text>
+      <View style={styles.memoryFooter}>
+        <Text style={styles.meta}>
+          {mine ? 'You' : memory.author_name} · {formatDay(memory.memory_date)}
+        </Text>
+        <Pressable onPress={onHeart} hitSlop={8} style={styles.heartButton}>
+          <Text style={[styles.heartGlyph, memory.hearted_by_me && { color: colors.rose }]}>
+            {memory.hearted_by_me ? '♥' : '♡'}
+          </Text>
+          {memory.hearts > 0 && <Text style={styles.heartCount}>{memory.hearts}</Text>}
+        </Pressable>
+      </View>
+    </Card>
+  );
+}
+
+/**
+ * Shows the thumbnail. Memories saved before thumbnails existed have only the
+ * full photo, so those fetch it on demand instead of rendering blank.
+ */
+function MemoryImage({ memory, onPress }: { memory: Memory; onPress: () => void }) {
+  const [src, setSrc] = useState<string | null>(memory.thumb_data);
+
+  useEffect(() => {
+    setSrc(memory.thumb_data);
+    if (!memory.thumb_data && memory.has_photo) {
+      api<{ photo_data: string | null }>(`/api/memories/${memory.id}`)
+        .then((d) => d.photo_data && setSrc(d.photo_data))
+        .catch(() => {});
+    }
+  }, [memory.id, memory.thumb_data]);
+
+  if (!memory.has_photo && !memory.thumb_data) return null;
+  return (
+    <Pressable onPress={onPress}>
+      {src ? (
+        <Image source={{ uri: src }} style={styles.photo} contentFit="cover" transition={150} />
+      ) : (
+        <View style={[styles.photo, styles.photoLoading]}>
+          <ActivityIndicator color={colors.rose} />
+        </View>
+      )}
+    </Pressable>
   );
 }
 
@@ -255,9 +338,9 @@ function MemoryComposer({
 
   const pickPhoto = async () => {
     setError(null);
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.9 });
-    if (result.canceled || !result.assets?.[0]) return;
     try {
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.9 });
+      if (result.canceled || !result.assets?.[0]) return;
       const uri = result.assets[0].uri;
       // Two sizes: full for the viewer, small thumb for lists. Keeps every
       // list request tiny, which is most of what makes the app feel fast.
@@ -364,7 +447,20 @@ function PhotoViewer({ memory, onClose }: { memory: Memory | null; onClose: () =
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.cream },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream },
+  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream, padding: space(8) },
+  errorTitle: { fontFamily: font.display, fontSize: type.title, color: colors.ink, textAlign: 'center' },
+  errorLine: { fontSize: type.body, color: colors.inkSoft, marginTop: space(2), textAlign: 'center' },
+  wideRow: {
+    flex: 1,
+    flexDirection: 'row',
+    backgroundColor: colors.cream,
+    width: '100%',
+    maxWidth: 1080,
+    alignSelf: 'center',
+  },
+  wideLeft: { width: 420, flexGrow: 0 },
+  wideRight: { flex: 1 },
+  wideList: { padding: space(6), paddingBottom: space(16) },
   list: {
     padding: space(5),
     paddingBottom: space(16),
@@ -428,6 +524,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     backgroundColor: colors.blushSoft,
   },
+  photoLoading: { alignItems: 'center', justifyContent: 'center' },
   note: {
     fontFamily: font.serif,
     fontSize: type.heading,

@@ -35,8 +35,8 @@ Environment: `.env` from `.env.example` (`DATABASE_URL`, `ABLY_API_KEY`, `JWT_SE
 - **Auth** sign-up/sign-in. **Signup auto-creates a solo space** (couple row); pairing is optional.
 - **Pairing** `app/pair.tsx`: NOT a gate. Share your code or join theirs; joining migrates everything you authored into their space (see `api/_routes/couple-join.ts`).
 - **Home** `app/(tabs)/index.tsx`: days-together count (basis: earliest anniversary milestone, else couple created_at), invite banner when solo, resurfaced memory (1 year ago today > 1 month ago today > random older), next two milestones, bucket list (add/complete inline), latest pinned note. Powered by ONE aggregate call: `GET /api/home`.
-- **Memories** `app/(tabs)/memories.tsx`: two parts. (1) Month calendar; days that hold a memory render a ♥ instead of the number; tapping a (non-future) day opens the composer pinned to that date (`memory_date` column). (2) Photo timeline with heart reactions and a full-photo viewer.
-- **Notes** live wall + pin/unpin/remove + emoji quick-row in the composer.
+- **Memories** `app/(tabs)/memories.tsx`: two parts. (1) Month calendar; days that hold a memory render a ♥ instead of the number; tapping a (non-future) day opens the composer pinned to that date (`memory_date` column). (2) Photo timeline with heart reactions and a full-photo viewer. On web >= 900px they sit side by side (calendar left, timeline right). `MemoryImage` falls back to fetching the full photo for rows created before thumbnails existed (thumb_data null but has_photo true); do not remove that fallback.
+- **Notes** live wall + pin/unpin/remove + WhatsApp-style emoji palette (`src/components/EmojiPicker.tsx`, toggled from the composer).
 - **Milestones** yearly recurrence for anniversary/birthday, second-level countdowns.
 - **Notifications** `app/(tabs)/notifications.tsx` (hidden tab, reached via bell): every nudge/memory/note/milestone/bucket action by your partner, stored in the `notifications` table AND pushed live over Ably. Unread dot state lives in `src/lib/notifications.tsx`; `users.notifications_seen_at` tracks read state.
 - **Navigation**: web >= 900px wide gets a top navbar (`src/components/TopNav.tsx`), native/narrow gets bottom tabs + header actions (`src/components/HeaderActions.tsx` has NudgeButton + BellButton).
@@ -98,4 +98,4 @@ Direction: **aged love letters**. Parchment `#F4ECDD` ground, espresso ink `#332
 ## Hard constraints from the user
 
 - **Never touch git.** The user commits/pushes/deploys themselves.
-- After schema changes, remind the user to run `npm run migrate` against the production `DATABASE_URL`.
+- After schema changes, remind the user to run `npm run migrate` against the production `DATABASE_URL`. Symptoms of a missed migration: home stuck on its error state, uploads failing, 500s in Vercel function logs mentioning missing columns or relations. Data is never lost by this; the API just errors until the migration runs.

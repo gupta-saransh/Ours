@@ -15,7 +15,7 @@ import * as Clipboard from 'expo-clipboard';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
-import { Card } from '@/components/ui';
+import { Button, Card } from '@/components/ui';
 import { colors, font, radius, space, type } from '@/theme';
 import { countdownTo, daysSince, formatDay, nextOccurrence } from '@/lib/format';
 
@@ -33,18 +33,20 @@ export default function Home() {
   const { user } = useAuth();
   const router = useRouter();
   const [data, setData] = useState<HomeData | null>(null);
+  const [failed, setFailed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [newItem, setNewItem] = useState('');
   const [addingItem, setAddingItem] = useState(false);
 
   const load = useCallback(async () => {
+    setFailed(false);
     const home = await api<HomeData>('/api/home');
     setData(home);
   }, []);
 
   useEffect(() => {
-    load().catch(() => {});
+    load().catch(() => setFailed(true));
   }, [load]);
 
   useCoupleEvent('partner.joined', () => load().catch(() => {}));
@@ -56,6 +58,23 @@ export default function Home() {
   };
 
   if (!data) {
+    if (failed) {
+      return (
+        <View style={styles.loading}>
+          <Text style={styles.errorTitle}>Could not load your space</Text>
+          <Text style={styles.errorLine}>
+            Check your connection. If this keeps happening after a deploy, the database schema may need
+            migrating (npm run migrate).
+          </Text>
+          <Button
+            title="Try again"
+            variant="secondary"
+            onPress={() => load().catch(() => setFailed(true))}
+            style={{ marginTop: space(4), minWidth: 180 }}
+          />
+        </View>
+      );
+    }
     return (
       <View style={styles.loading}>
         <ActivityIndicator color={colors.rose} />
@@ -218,7 +237,16 @@ export default function Home() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.cream },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream },
+  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream, padding: space(8) },
+  errorTitle: { fontFamily: font.display, fontSize: type.title, color: colors.ink, textAlign: 'center' },
+  errorLine: {
+    fontSize: type.body,
+    color: colors.inkSoft,
+    marginTop: space(2),
+    textAlign: 'center',
+    lineHeight: 23,
+    maxWidth: 420,
+  },
   body: {
     padding: space(6),
     paddingBottom: space(16),
