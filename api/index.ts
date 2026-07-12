@@ -18,6 +18,12 @@ import notifications from './_routes/notifications';
 import bucket from './_routes/bucket';
 import bucketItem from './_routes/bucket-item';
 import home from './_routes/home';
+import prompts from './_routes/prompts';
+import dates from './_routes/dates';
+import dateItem from './_routes/date-item';
+import wishlist from './_routes/wishlist';
+import wishlistItem from './_routes/wishlist-item';
+import reflection from './_routes/reflection';
 import nudge from './_routes/nudge';
 import ablyToken from './_routes/ably-token';
 
@@ -52,6 +58,14 @@ const routes: Partial<Record<string, Handler>> = {
   bucket,
   'bucket/:id': bucketItem,
   home,
+  'prompt/today': prompts,
+  'prompt/history': prompts,
+  dates,
+  'dates/:id': dateItem,
+  wishlist,
+  'wishlist/:id': wishlistItem,
+  reflection,
+  'reflection/history': reflection,
   nudge,
   'ably-token': ablyToken,
 };

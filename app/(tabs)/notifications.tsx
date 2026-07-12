@@ -1,26 +1,32 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, StyleSheet, Text, View } from 'react-native';
+import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { Bell, CalendarHeart, Gift, Heart, Hourglass, Image as ImageIcon, ListChecks, MessageCircle, Sparkles, StickyNote } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useCoupleEvent } from '@/lib/realtime';
 import { useNotifications, type Notification } from '@/lib/notifications';
 import { useAuth } from '@/lib/auth';
-import { Card, EmptyState } from '@/components/ui';
-import { colors, font, space, type } from '@/theme';
+import { Card, Empty, ErrorState, Screen, Skeleton } from '@/components/kit';
+import { colors, sp, text } from '@/theme';
 import { formatDay, formatTime } from '@/lib/format';
 
-const KIND_GLYPH: Record<Notification['kind'], string> = {
-  nudge: '♥',
-  memory: '✧',
-  note: '✎',
-  milestone: '◷',
-  partner: '✦',
-  bucket: '☑',
+const KIND_ICON: Record<string, React.ComponentType<{ size?: number; color?: string; strokeWidth?: number }>> = {
+  nudge: Heart,
+  memory: ImageIcon,
+  note: StickyNote,
+  milestone: Hourglass,
+  partner: Sparkles,
+  bucket: ListChecks,
+  prompt: MessageCircle,
+  capsule: Hourglass,
+  date: CalendarHeart,
+  wishlist: Gift,
 };
 
 export default function Notifications() {
   const { user } = useAuth();
   const { markSeen } = useNotifications();
   const [items, setItems] = useState<Notification[] | null>(null);
+  const [failed, setFailed] = useState(false);
   const [seenAt, setSeenAt] = useState<string>(new Date().toISOString());
 
   useEffect(() => {
@@ -28,9 +34,10 @@ export default function Notifications() {
       .then((data) => {
         setItems(data.notifications);
         setSeenAt(data.seenAt);
-        markSeen().catch(() => {});
+        // Give the unread dots a beat before clearing them.
+        setTimeout(() => markSeen().catch(() => {}), 500);
       })
-      .catch(() => setItems([]));
+      .catch(() => setFailed(true));
   }, [markSeen]);
 
   useCoupleEvent('notification', (n: Notification) => {
@@ -38,34 +45,53 @@ export default function Notifications() {
     setItems((prev) => (prev ? [n, ...prev.filter((x) => x.id !== n.id)] : prev));
   });
 
-  if (items === null) {
+  if (failed && !items) {
     return (
-      <View style={styles.loading}>
-        <ActivityIndicator color={colors.rose} />
-      </View>
+      <Screen>
+        <ErrorState
+          onRetry={() => {
+            setFailed(false);
+            api<{ notifications: Notification[]; seenAt: string }>('/api/notifications')
+              .then((d) => {
+                setItems(d.notifications);
+                setSeenAt(d.seenAt);
+              })
+              .catch(() => setFailed(true));
+          }}
+        />
+      </Screen>
+    );
+  }
+  if (!items) {
+    return (
+      <Screen>
+        <View style={styles.list}>
+          <Skeleton height={64} style={{ marginBottom: sp.md }} />
+          <Skeleton height={64} style={{ marginBottom: sp.md }} />
+          <Skeleton height={64} />
+        </View>
+      </Screen>
     );
   }
 
   return (
-    <View style={styles.screen}>
+    <Screen>
       <FlatList
         data={items}
         keyExtractor={(n) => n.id}
         contentContainerStyle={styles.list}
         ListEmptyComponent={
-          <EmptyState
-            title="All quiet for now"
-            line="Nudges, memories, notes and milestones from your person will gather here."
-          />
+          <Empty line="All quiet for now. What your person does will gather here." />
         }
         renderItem={({ item }) => {
           const fresh = new Date(item.created_at) > new Date(seenAt);
+          const Icon = KIND_ICON[item.kind] ?? Bell;
           return (
             <Card style={[styles.row, fresh && styles.rowFresh]}>
-              <Text style={styles.glyph}>{KIND_GLYPH[item.kind] ?? '✧'}</Text>
+              <Icon size={18} color={fresh ? colors.surfaceSealed : colors.inkFaint} strokeWidth={1.75} />
               <View style={{ flex: 1 }}>
-                <Text style={styles.text}>{item.text}</Text>
-                <Text style={styles.meta}>
+                <Text style={text.body}>{item.text}</Text>
+                <Text style={text.caption}>
                   {formatDay(item.created_at)}, {formatTime(item.created_at)}
                 </Text>
               </View>
@@ -74,16 +100,14 @@ export default function Notifications() {
           );
         }}
       />
-    </View>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.cream },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream },
   list: {
-    padding: space(5),
-    paddingBottom: space(12),
+    padding: sp.lg,
+    paddingBottom: sp.huge,
     width: '100%',
     maxWidth: 620,
     alignSelf: 'center',
@@ -91,13 +115,10 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space(4),
-    marginBottom: space(3),
-    padding: space(3.5),
+    gap: sp.base,
+    marginBottom: sp.md,
+    padding: sp.base,
   },
   rowFresh: { backgroundColor: colors.blushSoft, borderColor: colors.blush },
-  glyph: { fontSize: 20, color: colors.rose, width: 26, textAlign: 'center' },
-  text: { fontSize: type.body, color: colors.ink, fontFamily: font.serif },
-  meta: { fontSize: type.tiny, color: colors.inkSoft, marginTop: 2 },
-  freshDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.rose },
+  freshDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.surfaceSealed },
 });

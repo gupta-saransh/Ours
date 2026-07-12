@@ -15,11 +15,25 @@ import {
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
+import { ChevronLeft, ChevronRight, Lock } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
-import { Button, Card, EmptyState, FormError } from '@/components/ui';
-import { colors, font, radius, space, type } from '@/theme';
+import { successHaptic, tapHaptic } from '@/lib/haptics';
+import {
+  AppPressable,
+  Card,
+  Empty,
+  ErrorState,
+  FormError,
+  PrimaryButton,
+  Screen,
+  SecondaryButton,
+  Skeleton,
+  TextField,
+} from '@/components/kit';
+import { Sheet } from '@/components/Sheet';
+import { colors, radius, sp, text } from '@/theme';
 import { formatDay } from '@/lib/format';
 
 interface Memory {
@@ -33,6 +47,9 @@ interface Memory {
   created_at: string;
   hearts: number;
   hearted_by_me: boolean;
+  sealed_until: string | null;
+  sealed: boolean;
+  opened: boolean;
 }
 
 const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
@@ -45,6 +62,7 @@ export default function Memories() {
   const wide = Platform.OS === 'web' && width >= 900;
   const [memories, setMemories] = useState<Memory[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const [view, setView] = useState<'calendar' | 'timeline'>('timeline');
   const [composerDate, setComposerDate] = useState<string | null>(null);
   const [viewer, setViewer] = useState<Memory | null>(null);
 
@@ -64,11 +82,10 @@ export default function Memories() {
   useCoupleEvent('memory.deleted', (data) => {
     setMemories((prev) => (prev ? prev.filter((m) => m.id !== data?.id) : prev));
   });
+  useCoupleEvent('capsule.opened', () => load().catch(() => {}));
   useCoupleEvent('memory.hearted', (data) => {
     if (data?.by === user?.id) return;
-    setMemories((prev) =>
-      prev ? prev.map((m) => (m.id === data?.id ? { ...m, hearts: data.hearts } : m)) : prev
-    );
+    setMemories((prev) => (prev ? prev.map((m) => (m.id === data?.id ? { ...m, hearts: data.hearts } : m)) : prev));
   });
 
   const datesWithMemories = useMemo(() => {
@@ -79,6 +96,7 @@ export default function Memories() {
 
   const toggleHeart = async (memory: Memory) => {
     const next = !memory.hearted_by_me;
+    if (next) successHaptic();
     const apply = (list: Memory[] | null, hearted: boolean, hearts: number) =>
       list ? list.map((m) => (m.id === memory.id ? { ...m, hearted_by_me: hearted, hearts } : m)) : list;
     setMemories((prev) => apply(prev, next, memory.hearts + (next ? 1 : -1)));
@@ -96,89 +114,107 @@ export default function Memories() {
     setComposerDate(null);
   };
 
-  if (failed) {
+  const openMemory = (m: Memory) => {
+    if (m.sealed && m.author_id !== user?.id) return; // still sealed for you
+    setViewer(m);
+    if (m.sealed_until && !m.sealed && !m.opened && m.author_id !== user?.id) {
+      setMemories((prev) => (prev ? prev.map((x) => (x.id === m.id ? { ...x, opened: true } : x)) : prev));
+    }
+  };
+
+  if (failed && !memories) {
     return (
-      <View style={styles.loading}>
-        <Text style={styles.errorTitle}>Could not load your memories</Text>
-        <Text style={styles.errorLine}>Check your connection, then try again.</Text>
-        <Button title="Try again" variant="secondary" onPress={() => load().catch(() => setFailed(true))} style={{ marginTop: space(4), minWidth: 180 }} />
-      </View>
+      <Screen>
+        <ErrorState onRetry={() => load().catch(() => setFailed(true))} />
+      </Screen>
     );
   }
-  if (memories === null) {
+  if (!memories) {
     return (
-      <View style={styles.loading}>
-        <ActivityIndicator color={colors.rose} />
-      </View>
+      <Screen>
+        <View style={styles.list}>
+          <Skeleton height={320} style={{ marginBottom: sp.lg }} />
+          <Skeleton height={220} style={{ marginBottom: sp.lg }} />
+          <Skeleton height={220} />
+        </View>
+      </Screen>
     );
   }
 
   const renderCard = ({ item }: { item: Memory }) => (
-    <MemoryCard
-      memory={item}
-      mine={item.author_id === user?.id}
-      onOpen={() => setViewer(item)}
-      onHeart={() => toggleHeart(item)}
-    />
+    <MemoryCard memory={item} mine={item.author_id === user?.id} onOpen={() => openMemory(item)} onHeart={() => toggleHeart(item)} />
   );
 
   const overlays = (
     <>
       <MemoryComposer date={composerDate} onClose={() => setComposerDate(null)} onCreated={onCreated} />
-      <PhotoViewer memory={viewer} onClose={() => setViewer(null)} />
+      <RevealViewer memory={viewer} myId={user?.id ?? ''} onClose={() => setViewer(null)} />
     </>
   );
 
-  // Desktop: calendar on the left, scrollable timeline on the right.
   if (wide) {
     return (
-      <View style={styles.wideRow}>
-        <ScrollView style={styles.wideLeft} contentContainerStyle={{ padding: space(6) }}>
-          <Text style={styles.timelineTitle}>Memories</Text>
-          <MemoryCalendar datesWithMemories={datesWithMemories} onPickDate={setComposerDate} />
-        </ScrollView>
-        <View style={styles.wideRight}>
-          <FlatList
-            data={memories}
-            keyExtractor={(m) => m.id}
-            contentContainerStyle={styles.wideList}
-            ListHeaderComponent={<Text style={styles.timelineTitle}>Your story so far</Text>}
-            ListEmptyComponent={
-              <EmptyState
-                title="Your story starts here"
-                line="Tap any day on the calendar and keep a photo, a moment, a line worth remembering."
-              />
-            }
-            renderItem={renderCard}
-          />
+      <Screen>
+        <View style={styles.wideRow}>
+          <ScrollView style={styles.wideLeft} contentContainerStyle={{ padding: sp.xl }}>
+            <Text style={[text.title, { marginBottom: sp.md }]}>Memories</Text>
+            <MemoryCalendar datesWithMemories={datesWithMemories} onPickDate={setComposerDate} />
+          </ScrollView>
+          <View style={styles.wideRight}>
+            <FlatList
+              data={memories}
+              keyExtractor={(m) => m.id}
+              contentContainerStyle={styles.wideList}
+              ListHeaderComponent={<Text style={[text.title, { marginBottom: sp.md }]}>Your story so far</Text>}
+              ListEmptyComponent={<Empty line="No memories from any day yet." />}
+              renderItem={renderCard}
+            />
+          </View>
+          {overlays}
         </View>
-        {overlays}
-      </View>
+      </Screen>
     );
   }
 
   return (
-    <View style={styles.screen}>
-      <FlatList
-        data={memories}
-        keyExtractor={(m) => m.id}
-        contentContainerStyle={styles.list}
-        ListHeaderComponent={
-          <>
-            <MemoryCalendar datesWithMemories={datesWithMemories} onPickDate={setComposerDate} />
-            <Text style={styles.timelineTitle}>Your story so far</Text>
-            {memories.length === 0 && (
-              <EmptyState
-                title="Your story starts here"
-                line="Tap any day on the calendar and keep a photo, a moment, a line worth remembering."
-              />
-            )}
-          </>
-        }
-        renderItem={renderCard}
-      />
+    <Screen>
+      <View style={styles.segmentWrap}>
+        {(['calendar', 'timeline'] as const).map((v) => (
+          <Pressable
+            key={v}
+            onPress={() => {
+              tapHaptic();
+              setView(v);
+            }}
+            style={[styles.segment, view === v && styles.segmentActive]}
+          >
+            <Text style={[text.caption, view === v && { color: colors.surfaceSealed, fontWeight: '600' }]}>
+              {v === 'calendar' ? 'Calendar' : 'Timeline'}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+      {view === 'calendar' ? (
+        <ScrollView contentContainerStyle={styles.list}>
+          <MemoryCalendar datesWithMemories={datesWithMemories} onPickDate={setComposerDate} />
+        </ScrollView>
+      ) : (
+        <FlatList
+          data={memories}
+          keyExtractor={(m) => m.id}
+          contentContainerStyle={styles.list}
+          ListEmptyComponent={
+            <Empty
+              line="No memories from any day yet."
+              actionTitle="Add one for today"
+              onAction={() => setComposerDate(new Date().toISOString().slice(0, 10))}
+            />
+          }
+          renderItem={renderCard}
+        />
+      )}
       {overlays}
-    </View>
+    </Screen>
   );
 }
 
@@ -193,19 +229,56 @@ function MemoryCard({
   onOpen: () => void;
   onHeart: () => void;
 }) {
+  // Sealed by your partner, date not reached: a wax-sealed card, not tappable.
+  if (memory.sealed && !mine) {
+    return (
+      <Card sealed style={styles.memory}>
+        <Text style={styles.sealMark}>✦</Text>
+        <Text style={[text.subtitle, { color: colors.onSealed, textAlign: 'center' }]}>
+          Sealed until {formatDay(memory.sealed_until!)}
+        </Text>
+        <Text style={[text.caption, { color: colors.onSealed, textAlign: 'center', marginTop: sp.xs }]}>
+          Written by {memory.author_name}, {formatDay(memory.created_at)}
+        </Text>
+      </Card>
+    );
+  }
+
+  // A capsule whose day has come and you have not opened it yet.
+  const readyToOpen = !!memory.sealed_until && !memory.sealed && !memory.opened && !mine;
+  if (readyToOpen) {
+    return (
+      <AppPressable onPress={onOpen}>
+        <Card sealed style={styles.memory}>
+          <Text style={styles.sealMark}>✦</Text>
+          <Text style={[text.subtitle, { color: colors.onSealed, textAlign: 'center' }]}>A time capsule is ready</Text>
+          <Text style={[text.caption, { color: colors.onSealed, textAlign: 'center', marginTop: sp.xs }]}>
+            Tap to open it.
+          </Text>
+        </Card>
+      </AppPressable>
+    );
+  }
+
   return (
     <Card style={styles.memory}>
+      {memory.sealed && mine && (
+        <View style={styles.sealedTag}>
+          <Lock size={12} color={colors.accent} strokeWidth={1.75} />
+          <Text style={[text.micro, { color: colors.accent }]}>Sealed until {formatDay(memory.sealed_until!)}</Text>
+        </View>
+      )}
       <MemoryImage memory={memory} onPress={onOpen} />
       <Text style={styles.note}>{memory.note}</Text>
       <View style={styles.memoryFooter}>
-        <Text style={styles.meta}>
+        <Text style={text.caption}>
           {mine ? 'You' : memory.author_name} · {formatDay(memory.memory_date)}
         </Text>
         <Pressable onPress={onHeart} hitSlop={8} style={styles.heartButton}>
-          <Text style={[styles.heartGlyph, memory.hearted_by_me && { color: colors.rose }]}>
+          <Text style={[styles.heartGlyph, memory.hearted_by_me && { color: colors.surfaceSealed }]}>
             {memory.hearted_by_me ? '♥' : '♡'}
           </Text>
-          {memory.hearts > 0 && <Text style={styles.heartCount}>{memory.hearts}</Text>}
+          {memory.hearts > 0 && <Text style={[text.caption, { fontWeight: '600' }]}>{memory.hearts}</Text>}
         </Pressable>
       </View>
     </Card>
@@ -221,12 +294,12 @@ function MemoryImage({ memory, onPress }: { memory: Memory; onPress: () => void 
 
   useEffect(() => {
     setSrc(memory.thumb_data);
-    if (!memory.thumb_data && memory.has_photo) {
+    if (!memory.thumb_data && memory.has_photo && !memory.sealed) {
       api<{ photo_data: string | null }>(`/api/memories/${memory.id}`)
         .then((d) => d.photo_data && setSrc(d.photo_data))
         .catch(() => {});
     }
-  }, [memory.id, memory.thumb_data]);
+  }, [memory.id, memory.thumb_data, memory.sealed, memory.has_photo]);
 
   if (!memory.has_photo && !memory.thumb_data) return null;
   return (
@@ -235,7 +308,7 @@ function MemoryImage({ memory, onPress }: { memory: Memory; onPress: () => void 
         <Image source={{ uri: src }} style={styles.photo} contentFit="cover" transition={150} />
       ) : (
         <View style={[styles.photo, styles.photoLoading]}>
-          <ActivityIndicator color={colors.rose} />
+          <ActivityIndicator size="small" color={colors.accent} />
         </View>
       )}
     </Pressable>
@@ -255,6 +328,7 @@ function MemoryCalendar({
   const [month, setMonth] = useState(today.getMonth());
 
   const shift = (delta: number) => {
+    tapHaptic();
     const d = new Date(year, month + delta, 1);
     setYear(d.getFullYear());
     setMonth(d.getMonth());
@@ -270,16 +344,16 @@ function MemoryCalendar({
   const monthName = new Date(year, month, 1).toLocaleString('en', { month: 'long' });
 
   return (
-    <Card style={styles.calendar}>
+    <Card>
       <View style={styles.calendarHeader}>
         <Pressable onPress={() => shift(-1)} hitSlop={10} style={styles.calendarArrow}>
-          <Text style={styles.calendarArrowText}>‹</Text>
+          <ChevronLeft size={18} color={colors.ink} strokeWidth={1.75} />
         </Pressable>
-        <Text style={styles.calendarMonth}>
+        <Text style={text.subtitle}>
           {monthName} {year}
         </Text>
         <Pressable onPress={() => shift(1)} hitSlop={10} style={styles.calendarArrow}>
-          <Text style={styles.calendarArrowText}>›</Text>
+          <ChevronRight size={18} color={colors.ink} strokeWidth={1.75} />
         </Pressable>
       </View>
       <View style={styles.weekRow}>
@@ -301,22 +375,20 @@ function MemoryCalendar({
               key={key}
               disabled={future}
               onPress={() => onPickDate(key)}
-              style={({ pressed }) => [
-                styles.cell,
-                isToday && styles.cellToday,
-                pressed && { backgroundColor: colors.blushSoft },
-              ]}
+              style={({ pressed }) => [styles.cell, isToday && styles.cellToday, pressed && { backgroundColor: colors.blushSoft }]}
             >
               {has ? (
                 <Text style={styles.cellHeart}>♥</Text>
               ) : (
-                <Text style={[styles.cellDay, future && { opacity: 0.3 }]}>{day}</Text>
+                <Text style={[text.caption, { color: colors.ink }, future && { opacity: 0.3 }]}>{day}</Text>
               )}
             </Pressable>
           );
         })}
       </View>
-      <Text style={styles.calendarHint}>Tap a day to keep a memory of it. ♥ marks the days you already have.</Text>
+      <Text style={[text.caption, { textAlign: 'center', marginTop: sp.sm }]}>
+        Tap a day to keep a memory of it. ♥ marks the days you already have.
+      </Text>
     </Card>
   );
 }
@@ -333,6 +405,8 @@ function MemoryComposer({
   const [note, setNote] = useState('');
   const [photo, setPhoto] = useState<string | null>(null);
   const [thumb, setThumb] = useState<string | null>(null);
+  const [sealOpen, setSealOpen] = useState(false);
+  const [sealDate, setSealDate] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -365,15 +439,28 @@ function MemoryComposer({
 
   const save = async () => {
     setError(null);
+    if (sealOpen && sealDate.trim() && !/^\d{4}-\d{2}-\d{2}$/.test(sealDate.trim())) {
+      setError('Seal date should look like 2027-02-14 (YYYY-MM-DD)');
+      return;
+    }
     setBusy(true);
     try {
       const data = await api<{ memory: Memory }>('/api/memories', {
         method: 'POST',
-        body: { note, photoData: photo ?? undefined, thumbData: thumb ?? undefined, memoryDate: date ?? undefined },
+        body: {
+          note,
+          photoData: photo ?? undefined,
+          thumbData: thumb ?? undefined,
+          memoryDate: date ?? undefined,
+          sealedUntil: sealOpen && sealDate.trim() ? sealDate.trim() : undefined,
+        },
       });
+      successHaptic();
       setNote('');
       setPhoto(null);
       setThumb(null);
+      setSealDate('');
+      setSealOpen(false);
       onCreated(data.memory);
     } catch (err: any) {
       setError(err?.message ?? 'Something went wrong');
@@ -383,44 +470,65 @@ function MemoryComposer({
   };
 
   return (
-    <Modal visible={!!date} animationType="slide" transparent onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
-      <View style={styles.sheet}>
-        <Text style={styles.sheetTitle}>A moment worth keeping</Text>
-        {date && <Text style={styles.sheetDate}>{formatDay(date)}</Text>}
-        <Pressable onPress={pickPhoto} style={styles.photoPick}>
-          {thumb ? (
-            <Image source={{ uri: thumb }} style={styles.photoPreview} contentFit="cover" />
-          ) : (
-            <Text style={styles.photoPickText}>✧ Add a photo</Text>
-          )}
-        </Pressable>
-        <TextInput
-          value={note}
-          onChangeText={setNote}
-          placeholder="What happened? How did it feel?"
-          placeholderTextColor={colors.inkSoft}
-          multiline
-          style={styles.noteInput}
+    <Sheet visible={!!date} onClose={onClose} title="A moment worth keeping">
+      {date && <Text style={[text.caption, { color: colors.accent, marginBottom: sp.base }]}>{formatDay(date)}</Text>}
+      <Pressable onPress={pickPhoto} style={styles.photoPick}>
+        {thumb ? (
+          <Image source={{ uri: thumb }} style={styles.photoPreview} contentFit="cover" />
+        ) : (
+          <Text style={[text.body, { color: colors.inkMuted }]}>✧ Add a photo</Text>
+        )}
+      </Pressable>
+      <TextInput
+        value={note}
+        onChangeText={setNote}
+        placeholder="What happened? How did it feel?"
+        placeholderTextColor={colors.inkFaint}
+        multiline
+        style={styles.noteInput}
+      />
+      <Pressable onPress={() => setSealOpen((o) => !o)} style={styles.sealToggle} hitSlop={6}>
+        <Lock size={14} color={sealOpen ? colors.accent : colors.inkFaint} strokeWidth={1.75} />
+        <Text style={[text.caption, sealOpen && { color: colors.accent }]}>Seal until a future date</Text>
+      </Pressable>
+      {sealOpen && (
+        <TextField
+          label="Reveal date (YYYY-MM-DD)"
+          value={sealDate}
+          onChangeText={setSealDate}
+          placeholder="2027-02-14"
+          autoCapitalize="none"
         />
-        <FormError message={error} />
-        <Button title="Keep this memory" onPress={save} loading={busy} disabled={note.trim().length === 0} />
-        <Button title="Not now" variant="ghost" onPress={onClose} style={{ marginTop: space(2) }} />
-      </View>
-    </Modal>
+      )}
+      <FormError message={error} />
+      <PrimaryButton
+        title={sealOpen && sealDate.trim() ? 'Seal this memory' : 'Keep this memory'}
+        onPress={save}
+        loading={busy}
+        disabled={note.trim().length === 0}
+      />
+      <SecondaryButton title="Not now" onPress={onClose} style={{ marginTop: sp.md }} />
+    </Sheet>
   );
 }
 
-/** Full-resolution photo, fetched only when a memory is opened. */
-function PhotoViewer({ memory, onClose }: { memory: Memory | null; onClose: () => void }) {
+/**
+ * Full memory viewer. Also the capsule reveal: opening a ready capsule marks
+ * it opened server-side (the GET does that) and tells the author.
+ */
+function RevealViewer({ memory, myId, onClose }: { memory: Memory | null; myId: string; onClose: () => void }) {
   const [photo, setPhoto] = useState<string | null>(null);
+  const isReveal = !!memory && !!memory.sealed_until && !memory.sealed && memory.author_id !== myId;
 
   useEffect(() => {
     setPhoto(null);
-    if (!memory?.has_photo) return;
-    api<{ photo_data: string | null }>(`/api/memories/${memory.id}`)
-      .then((d) => setPhoto(d.photo_data))
-      .catch(() => {});
+    if (!memory) return;
+    // Fetch even without a photo when it is a capsule: the GET records the open.
+    if (memory.has_photo || isReveal) {
+      api<{ photo_data: string | null }>(`/api/memories/${memory.id}`)
+        .then((d) => setPhoto(d.photo_data))
+        .catch(() => {});
+    }
   }, [memory?.id]);
 
   if (!memory) return null;
@@ -428,16 +536,20 @@ function PhotoViewer({ memory, onClose }: { memory: Memory | null; onClose: () =
     <Modal visible animationType="fade" transparent onRequestClose={onClose}>
       <Pressable style={styles.viewerBackdrop} onPress={onClose}>
         <View style={styles.viewerBody}>
-          {photo ? (
-            <Image source={{ uri: photo }} style={styles.viewerPhoto} contentFit="contain" transition={150} />
-          ) : memory.thumb_data ? (
-            <Image source={{ uri: memory.thumb_data }} style={styles.viewerPhoto} contentFit="contain" />
-          ) : (
-            <ActivityIndicator color={colors.onRose} />
-          )}
+          {isReveal && <Text style={styles.viewerSeal}>✦ ✦</Text>}
+          {memory.has_photo ? (
+            photo ? (
+              <Image source={{ uri: photo }} style={styles.viewerPhoto} contentFit="contain" transition={150} />
+            ) : memory.thumb_data ? (
+              <Image source={{ uri: memory.thumb_data }} style={styles.viewerPhoto} contentFit="contain" />
+            ) : (
+              <ActivityIndicator size="small" color={colors.onSealed} />
+            )
+          ) : null}
           <Text style={styles.viewerNote}>{memory.note}</Text>
           <Text style={styles.viewerMeta}>
             {memory.author_name} · {formatDay(memory.memory_date)}
+            {memory.sealed_until ? ` · sealed ${formatDay(memory.created_at)}` : ''}
           </Text>
         </View>
       </Pressable>
@@ -446,34 +558,46 @@ function PhotoViewer({ memory, onClose }: { memory: Memory | null; onClose: () =
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.cream },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream, padding: space(8) },
-  errorTitle: { fontFamily: font.display, fontSize: type.title, color: colors.ink, textAlign: 'center' },
-  errorLine: { fontSize: type.body, color: colors.inkSoft, marginTop: space(2), textAlign: 'center' },
+  list: {
+    padding: sp.lg,
+    paddingBottom: sp.huge,
+    width: '100%',
+    maxWidth: 620,
+    alignSelf: 'center',
+  },
   wideRow: {
     flex: 1,
     flexDirection: 'row',
-    backgroundColor: colors.cream,
     width: '100%',
     maxWidth: 1080,
     alignSelf: 'center',
   },
   wideLeft: { width: 420, flexGrow: 0 },
   wideRight: { flex: 1 },
-  wideList: { padding: space(6), paddingBottom: space(16) },
-  list: {
-    padding: space(5),
-    paddingBottom: space(16),
+  wideList: { padding: sp.xl, paddingBottom: sp.huge },
+  segmentWrap: {
+    flexDirection: 'row',
+    gap: sp.sm,
+    paddingHorizontal: sp.lg,
+    paddingBottom: sp.md,
     width: '100%',
     maxWidth: 620,
     alignSelf: 'center',
   },
-  calendar: { marginBottom: space(6) },
+  segment: {
+    paddingVertical: sp.sm,
+    paddingHorizontal: sp.base,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.surfaceRaised,
+  },
+  segmentActive: { borderColor: colors.surfaceSealed },
   calendarHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: space(3),
+    marginBottom: sp.md,
   },
   calendarArrow: {
     width: 34,
@@ -484,80 +608,57 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.hairline,
   },
-  calendarArrowText: { fontSize: 20, color: colors.ink, lineHeight: 22 },
-  calendarMonth: { fontFamily: font.display, fontSize: type.heading, color: colors.ink },
-  weekRow: { flexDirection: 'row', marginBottom: space(1) },
+  weekRow: { flexDirection: 'row', marginBottom: sp.xs },
   weekday: {
     flex: 1,
     textAlign: 'center',
-    fontSize: type.tiny,
-    color: colors.inkSoft,
-    fontWeight: '600',
+    ...text.micro,
+    color: colors.inkMuted,
   },
   grid: { flexDirection: 'row', flexWrap: 'wrap' },
   cell: {
     width: `${100 / 7}%`,
-    aspectRatio: 1.15,
+    aspectRatio: 1.1,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: radius.sm,
   },
-  cellToday: { borderWidth: 1, borderColor: colors.blush },
-  cellDay: { fontSize: type.small, color: colors.ink },
-  cellHeart: { fontSize: 17, color: colors.rose },
-  calendarHint: {
-    marginTop: space(2),
-    fontSize: type.tiny,
-    color: colors.inkSoft,
+  cellToday: { borderWidth: 1, borderColor: colors.accent },
+  cellHeart: { fontSize: 15, color: colors.surfaceSealed },
+  memory: { marginBottom: sp.lg },
+  sealMark: {
+    fontSize: 22,
+    color: colors.accent,
     textAlign: 'center',
+    marginBottom: sp.sm,
   },
-  timelineTitle: {
-    fontFamily: font.display,
-    fontSize: type.title,
-    color: colors.ink,
-    marginBottom: space(4),
+  sealedTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.xs,
+    marginBottom: sp.sm,
   },
-  memory: { marginBottom: space(4), padding: space(3) },
   photo: {
     width: '100%',
-    aspectRatio: 4 / 3,
+    aspectRatio: 16 / 10,
     borderRadius: radius.sm,
     backgroundColor: colors.blushSoft,
   },
   photoLoading: { alignItems: 'center', justifyContent: 'center' },
   note: {
-    fontFamily: font.serif,
-    fontSize: type.heading,
-    lineHeight: 28,
-    color: colors.ink,
-    paddingHorizontal: space(1),
-    paddingTop: space(3),
+    ...text.bodySerif,
+    fontSize: 17,
+    lineHeight: 26,
+    paddingTop: sp.md,
   },
   memoryFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: space(1),
-    paddingTop: space(2),
-    paddingBottom: space(1),
+    paddingTop: sp.sm,
   },
-  meta: { fontSize: type.small, color: colors.inkSoft, flexShrink: 1 },
-  heartButton: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  heartGlyph: { fontSize: 19, color: colors.inkSoft },
-  heartCount: { fontSize: type.small, color: colors.inkSoft, fontWeight: '600' },
-  backdrop: { flex: 1, backgroundColor: 'rgba(51, 36, 28, 0.4)' },
-  sheet: {
-    backgroundColor: colors.cream,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    padding: space(6),
-    paddingBottom: space(10),
-    width: '100%',
-    maxWidth: 560,
-    alignSelf: 'center',
-  },
-  sheetTitle: { fontFamily: font.display, fontSize: type.title, color: colors.ink },
-  sheetDate: { fontSize: type.small, color: colors.rose, marginTop: 2, marginBottom: space(4), fontWeight: '600' },
+  heartButton: { flexDirection: 'row', alignItems: 'center', gap: sp.xs },
+  heartGlyph: { fontSize: 19, color: colors.inkMuted },
   photoPick: {
     borderWidth: 1,
     borderColor: colors.hairline,
@@ -566,40 +667,54 @@ const styles = StyleSheet.create({
     minHeight: 120,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: space(4),
+    marginBottom: sp.base,
     overflow: 'hidden',
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceRaised,
   },
-  photoPickText: { color: colors.inkSoft, fontSize: type.body },
-  photoPreview: { width: '100%', aspectRatio: 4 / 3 },
+  photoPreview: { width: '100%', aspectRatio: 16 / 10 },
   noteInput: {
     borderWidth: 1,
     borderColor: colors.hairline,
     borderRadius: radius.sm,
-    backgroundColor: colors.surface,
-    padding: space(3.5),
+    backgroundColor: colors.surfaceRaised,
+    padding: sp.md,
     minHeight: 96,
-    fontSize: type.body,
-    color: colors.ink,
+    ...text.body,
     textAlignVertical: 'top',
-    marginBottom: space(4),
+    marginBottom: sp.md,
+  },
+  sealToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.sm,
+    marginBottom: sp.base,
   },
   viewerBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(28, 18, 12, 0.92)',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: space(6),
+    padding: sp.xl,
   },
   viewerBody: { width: '100%', maxWidth: 720, alignItems: 'center' },
+  viewerSeal: {
+    fontSize: 24,
+    color: colors.accent,
+    marginBottom: sp.lg,
+    letterSpacing: 12,
+  },
   viewerPhoto: { width: '100%', aspectRatio: 4 / 3, borderRadius: radius.md },
   viewerNote: {
-    fontFamily: font.serif,
-    fontSize: type.heading,
-    lineHeight: 27,
-    color: colors.onRose,
+    ...text.bodySerif,
+    fontSize: 18,
+    lineHeight: 28,
+    color: colors.onSealed,
     textAlign: 'center',
-    marginTop: space(5),
+    marginTop: sp.lg,
   },
-  viewerMeta: { fontSize: type.small, color: 'rgba(249, 239, 220, 0.65)', marginTop: space(2) },
+  viewerMeta: {
+    ...text.caption,
+    color: 'rgba(249, 239, 220, 0.65)',
+    marginTop: sp.sm,
+  },
 });

@@ -1,9 +1,17 @@
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/lib/auth';
-import { Button, Card, FormError } from '@/components/ui';
-import { colors, font, space, type } from '@/theme';
+import {
+  Card,
+  FormError,
+  PrimaryButton,
+  Screen,
+  SecondaryButton,
+  Section,
+  TextField,
+} from '@/components/kit';
+import { colors, sp, text } from '@/theme';
 
 export default function Settings() {
   const { user, couple, partner, updateProfile, signOut, deleteAccount } = useAuth();
@@ -50,135 +58,126 @@ export default function Settings() {
   };
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.body}>
-      <FormError message={error} />
+    <Screen>
+      <ScrollView contentContainerStyle={styles.body}>
+        <FormError message={error} />
 
-      <Text style={styles.section}>Profile</Text>
-      <Card style={styles.card}>
-        <Text style={styles.label}>Your name</Text>
-        <View style={styles.nameRow}>
-          <TextInput value={name} onChangeText={setName} style={styles.nameInput} placeholderTextColor={colors.inkSoft} />
-          <Button
-            title={nameSaved ? 'Saved ✓' : 'Save'}
-            variant="secondary"
-            onPress={saveName}
-            loading={savingName}
-            disabled={!name.trim() || name.trim() === user?.display_name}
-            style={styles.saveButton}
-          />
-        </View>
-        <Text style={[styles.label, { marginTop: space(4) }]}>Email</Text>
-        <Text style={styles.value}>{user?.email}</Text>
-      </Card>
+        <Section label="Profile">
+          <Card>
+            <View style={styles.nameRow}>
+              <View style={{ flex: 1 }}>
+                <TextField label="Your name" value={name} onChangeText={setName} />
+              </View>
+              <SecondaryButton
+                title={nameSaved ? 'Saved ✓' : 'Save'}
+                onPress={saveName}
+                loading={savingName}
+                disabled={!name.trim() || name.trim() === user?.display_name}
+                style={styles.saveButton}
+              />
+            </View>
+            <Text style={text.caption}>Email</Text>
+            <Text style={text.body}>{user?.email}</Text>
+          </Card>
+        </Section>
 
-      <Text style={styles.section}>Your space</Text>
-      <Card style={styles.card}>
-        <View style={styles.row}>
-          <Text style={styles.value}>Partner</Text>
-          <Text style={styles.rowRight}>{partner ? partner.display_name : 'Just you so far'}</Text>
-        </View>
-        {!partner && (
-          <View style={[styles.row, styles.rowBorder]}>
-            <Button title="Link with your partner" variant="secondary" onPress={() => router.push('/pair')} style={{ flex: 1, minHeight: 44 }} />
-          </View>
-        )}
-        <View style={[styles.row, styles.rowBorder]}>
-          <Text style={styles.value}>Invite code</Text>
-          <Text style={[styles.rowRight, styles.code]}>{couple?.invite_code ?? '...'}</Text>
-        </View>
-        <View style={[styles.row, styles.rowBorder]}>
-          <Text style={styles.value}>Plan</Text>
-          <Text style={styles.rowRight}>Free · everything included</Text>
-        </View>
-      </Card>
+        <Section label="Your space">
+          <Card>
+            <View style={styles.row}>
+              <Text style={text.body}>Partner</Text>
+              <Text style={[text.body, { color: colors.inkMuted }]}>
+                {partner ? partner.display_name : 'Just you so far'}
+              </Text>
+            </View>
+            <View style={[styles.row, styles.rowBorder]}>
+              <Text style={text.body}>Invite code</Text>
+              <Text style={styles.code}>{couple?.invite_code ?? '...'}</Text>
+            </View>
+            <View style={[styles.row, styles.rowBorder]}>
+              <Text style={text.body}>Plan</Text>
+              <Text style={[text.body, { color: colors.inkMuted }]}>Free · everything included</Text>
+            </View>
+            {!partner && (
+              <SecondaryButton
+                title="Link with your partner"
+                onPress={() => router.push('/pair')}
+                style={{ marginTop: sp.md }}
+              />
+            )}
+          </Card>
+        </Section>
 
-      <Text style={styles.section}>Notifications</Text>
-      <Card style={styles.card}>
-        <View style={styles.row}>
-          <View style={{ flex: 1, paddingRight: space(4) }}>
-            <Text style={styles.value}>Nudges & new notes</Text>
-            <Text style={styles.hint}>
-              Live while the app is open. Push to a closed app arrives once store credentials are set up.
-            </Text>
-          </View>
-          <Switch
-            value={user?.notifications_enabled ?? true}
-            onValueChange={toggleNotifications}
-            trackColor={{ true: colors.blush, false: colors.hairline }}
-            thumbColor={user?.notifications_enabled ? colors.rose : '#FFFFFF'}
-          />
-        </View>
-      </Card>
+        <Section label="Notifications">
+          <Card>
+            <View style={styles.row}>
+              <View style={{ flex: 1, paddingRight: sp.base }}>
+                <Text style={text.body}>Nudges and new notes</Text>
+                <Text style={text.caption}>
+                  Live while the app is open. Push to a closed app arrives once store credentials are set up.
+                </Text>
+              </View>
+              <Switch
+                value={user?.notifications_enabled ?? true}
+                onValueChange={toggleNotifications}
+                trackColor={{ true: colors.blush, false: colors.hairline }}
+                thumbColor={user?.notifications_enabled ? colors.surfaceSealed : '#FFFFFF'}
+              />
+            </View>
+          </Card>
+        </Section>
 
-      <Text style={styles.section}>Account</Text>
-      <Button title="Log out" variant="secondary" onPress={signOut} />
-      <View style={{ height: space(3) }} />
-      {confirmingDelete ? (
-        <Card style={[styles.card, { borderColor: colors.danger }]}>
-          <Text style={styles.value}>Delete your account?</Text>
-          <Text style={styles.hint}>
-            This permanently removes your account and everything you added. It can’t be undone.
-          </Text>
-          <View style={{ height: space(4) }} />
-          <Button title="Yes, delete everything" variant="danger" onPress={removeAccount} loading={deleting} />
-          <Button title="Keep my account" variant="ghost" onPress={() => setConfirmingDelete(false)} style={{ marginTop: space(2) }} />
-        </Card>
-      ) : (
-        <Button title="Delete account" variant="danger" onPress={() => setConfirmingDelete(true)} />
-      )}
+        <Section label="Account">
+          <SecondaryButton title="Log out" onPress={signOut} />
+          <View style={{ height: sp.md }} />
+          {confirmingDelete ? (
+            <Card style={{ borderColor: colors.danger }}>
+              <Text style={text.subtitle}>Delete your account?</Text>
+              <Text style={[text.caption, { marginTop: sp.xs, marginBottom: sp.base }]}>
+                This permanently removes your account and everything you added. It cannot be undone.
+              </Text>
+              <PrimaryButton title="Yes, delete everything" onPress={removeAccount} loading={deleting} />
+              <SecondaryButton title="Keep my account" onPress={() => setConfirmingDelete(false)} style={{ marginTop: sp.md }} />
+            </Card>
+          ) : (
+            <SecondaryButton title="Delete account" destructive onPress={() => setConfirmingDelete(true)} />
+          )}
+        </Section>
 
-      <Text style={styles.footer}>Ours · made for exactly two people ♥</Text>
-    </ScrollView>
+        <Text style={styles.footer}>Ours · made for exactly two people ♥</Text>
+      </ScrollView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.cream },
   body: {
-    padding: space(5),
-    paddingBottom: space(16),
+    padding: sp.lg,
+    paddingBottom: sp.huge,
     width: '100%',
-    maxWidth: 560,
+    maxWidth: 620,
     alignSelf: 'center',
   },
-  section: {
-    fontFamily: font.displayMedium,
-    fontSize: type.heading,
-    color: colors.ink,
-    marginBottom: space(3),
-    marginTop: space(5),
-  },
-  card: { marginBottom: space(2) },
-  label: { fontSize: type.small, color: colors.inkSoft, marginBottom: space(1.5) },
-  value: { fontSize: type.body, color: colors.ink },
-  hint: { fontSize: type.small, color: colors.inkSoft, marginTop: space(1), lineHeight: 19 },
-  nameRow: { flexDirection: 'row', alignItems: 'center' },
-  nameInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: 10,
-    backgroundColor: colors.cream,
-    paddingHorizontal: space(3),
-    paddingVertical: space(2.5),
-    fontSize: type.body,
-    color: colors.ink,
-  },
-  saveButton: { marginLeft: space(3), minHeight: 44, paddingHorizontal: space(4) },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: sp.md },
+  saveButton: { height: 40, paddingHorizontal: sp.base, marginTop: sp.sm },
   row: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: space(2.5),
+    paddingVertical: sp.md,
+    gap: sp.md,
   },
   rowBorder: { borderTopWidth: 1, borderTopColor: colors.hairline },
-  rowRight: { fontSize: type.body, color: colors.inkSoft },
-  code: { letterSpacing: 3, fontWeight: '600', color: colors.rose },
+  code: {
+    ...text.body,
+    color: colors.surfaceSealed,
+    fontWeight: '600',
+    letterSpacing: 3,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+  },
   footer: {
+    ...text.caption,
     textAlign: 'center',
-    color: colors.inkSoft,
-    fontSize: type.small,
-    marginTop: space(10),
-    fontFamily: font.serifItalic,
+    marginTop: sp.xxl,
+    fontStyle: 'italic',
   },
 });

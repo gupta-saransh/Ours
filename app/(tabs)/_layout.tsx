@@ -1,16 +1,14 @@
 import React from 'react';
-import { Platform, Text, useWindowDimensions, View } from 'react-native';
+import { Platform, useWindowDimensions, View } from 'react-native';
 import { Redirect, Tabs } from 'expo-router';
+import { CalendarHeart, Gift, Home, Image as ImageIcon, StickyNote } from 'lucide-react-native';
 import { useAuth } from '@/lib/auth';
 import { NotificationsProvider } from '@/lib/notifications';
+import { tapHaptic } from '@/lib/haptics';
 import { HeaderActions } from '@/components/HeaderActions';
 import { TopNav } from '@/components/TopNav';
 import { NudgeToast } from '@/components/NudgeToast';
-import { colors, font, type } from '@/theme';
-
-function TabIcon({ glyph, focused }: { glyph: string; focused: boolean }) {
-  return <Text style={{ fontSize: 17, color: focused ? colors.rose : colors.inkSoft }}>{glyph}</Text>;
-}
+import { colors, font, text } from '@/theme';
 
 export default function TabsLayout() {
   const { status } = useAuth();
@@ -20,52 +18,48 @@ export default function TabsLayout() {
   if (status === 'loading') return null;
   if (status === 'signedOut') return <Redirect href="/welcome" />;
 
+  const icon =
+    (Glyph: typeof Home) =>
+    ({ focused }: { focused: boolean }) => (
+      <Glyph size={22} strokeWidth={1.75} color={focused ? colors.surfaceSealed : colors.inkMuted} />
+    );
+
   return (
     <NotificationsProvider>
-      <View style={{ flex: 1, backgroundColor: colors.cream }}>
+      <View style={{ flex: 1, backgroundColor: colors.surface }}>
         {wide && <TopNav />}
         <Tabs
+          screenListeners={{ tabPress: () => tapHaptic() }}
           screenOptions={{
             headerShown: !wide,
-            headerStyle: { backgroundColor: colors.cream },
+            headerStyle: { backgroundColor: colors.surface },
             headerShadowVisible: false,
-            headerTitleStyle: { fontFamily: font.display, fontSize: type.title, color: colors.ink },
+            headerTitleStyle: { fontFamily: font.displayMedium, fontSize: 24, color: colors.ink },
             headerTitleAlign: 'left',
             headerRight: () => <HeaderActions />,
             tabBarStyle: wide
               ? { display: 'none' }
               : {
-                  backgroundColor: colors.cream,
+                  backgroundColor: colors.surface,
                   borderTopColor: colors.hairline,
                   borderTopWidth: 1,
                 },
-            tabBarActiveTintColor: colors.rose,
-            tabBarInactiveTintColor: colors.inkSoft,
-            tabBarLabelStyle: { fontSize: type.tiny, fontWeight: '600' },
-            sceneStyle: { backgroundColor: colors.cream },
+            tabBarActiveTintColor: colors.surfaceSealed,
+            tabBarInactiveTintColor: colors.inkMuted,
+            tabBarLabelStyle: { ...text.micro, textTransform: 'none' },
+            sceneStyle: { backgroundColor: colors.surface },
           }}
         >
-          <Tabs.Screen
-            name="index"
-            options={{ title: 'Home', tabBarIcon: ({ focused }) => <TabIcon glyph="♥" focused={focused} /> }}
-          />
-          <Tabs.Screen
-            name="memories"
-            options={{ title: 'Memories', tabBarIcon: ({ focused }) => <TabIcon glyph="✧" focused={focused} /> }}
-          />
-          <Tabs.Screen
-            name="notes"
-            options={{ title: 'Notes', tabBarIcon: ({ focused }) => <TabIcon glyph="♡" focused={focused} /> }}
-          />
-          <Tabs.Screen
-            name="milestones"
-            options={{ title: 'Milestones', tabBarIcon: ({ focused }) => <TabIcon glyph="◷" focused={focused} /> }}
-          />
-          <Tabs.Screen
-            name="settings"
-            options={{ title: 'Settings', tabBarIcon: ({ focused }) => <TabIcon glyph="⚙" focused={focused} /> }}
-          />
+          <Tabs.Screen name="index" options={{ title: 'Home', headerShown: false, tabBarIcon: icon(Home) }} />
+          <Tabs.Screen name="memories" options={{ title: 'Memories', tabBarIcon: icon(ImageIcon) }} />
+          <Tabs.Screen name="notes" options={{ title: 'Notes', tabBarIcon: icon(StickyNote) }} />
+          <Tabs.Screen name="dates" options={{ title: 'Dates', tabBarIcon: icon(CalendarHeart) }} />
+          <Tabs.Screen name="wishlist" options={{ title: 'Wishlist', tabBarIcon: icon(Gift) }} />
+          <Tabs.Screen name="milestones" options={{ title: 'Milestones', href: null }} />
+          <Tabs.Screen name="settings" options={{ title: 'Settings', href: null }} />
           <Tabs.Screen name="notifications" options={{ title: 'Activity', href: null }} />
+          <Tabs.Screen name="prompts" options={{ title: 'Prompts', href: null }} />
+          <Tabs.Screen name="reflections" options={{ title: 'Reflections', href: null }} />
         </Tabs>
         <NudgeToast />
       </View>

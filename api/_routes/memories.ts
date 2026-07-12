@@ -9,7 +9,14 @@ import { route, requireString, HttpError } from '../_lib/respond';
  * small thumbnails (~15 KB). The full photo is fetched on demand from
  * GET /api/memories/:id when a card is opened.
  */
-const LIST_COLUMNS = `m.id, m.author_id, m.thumb_data, m.note,
+const LIST_COLUMNS = `m.id, m.author_id,
+  CASE WHEN m.sealed_until IS NOT NULL AND m.sealed_until > now()::DATE AND m.author_id != $2
+       THEN NULL ELSE m.thumb_data END AS thumb_data,
+  CASE WHEN m.sealed_until IS NOT NULL AND m.sealed_until > now()::DATE AND m.author_id != $2
+       THEN '' ELSE m.note END AS note,
+  m.sealed_until::STRING AS sealed_until,
+  (m.sealed_until IS NOT NULL AND m.sealed_until > now()::DATE) AS sealed,
+  (m.capsule_opened_at IS NOT NULL) AS opened,
   COALESCE(m.memory_date, m.created_at::DATE)::STRING AS memory_date, m.created_at,
   u.display_name AS author_name,
   (SELECT count(*)::int FROM memory_hearts h WHERE h.memory_id = m.id) AS hearts,
@@ -50,16 +57,36 @@ export default route(['GET', 'POST'], async (req, res) => {
     }
     memoryDate = req.body.memoryDate;
   }
+  let sealedUntil: string | null = null;
+  if (req.body?.sealedUntil) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.body.sealedUntil)) throw new HttpError(400, 'sealedUntil must be YYYY-MM-DD');
+    if (req.body.sealedUntil <= new Date().toISOString().slice(0, 10)) {
+      throw new HttpError(400, 'A capsule needs a date in the future');
+    }
+    sealedUntil = req.body.sealedUntil;
+  }
 
   const created = await one(
-    `INSERT INTO memories (couple_id, author_id, photo_data, thumb_data, note, memory_date)
-     VALUES ($1, $2, $3, $4, $5, COALESCE($6::DATE, now()::DATE))
+    `INSERT INTO memories (couple_id, author_id, photo_data, thumb_data, note, memory_date, sealed_until)
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6::DATE, now()::DATE), $7)
      RETURNING id, author_id, thumb_data, note, memory_date::STRING AS memory_date, created_at,
-       (photo_data IS NOT NULL) AS has_photo`,
-    [user.couple_id, user.id, photoData, thumbData, note, memoryDate]
+       sealed_until::STRING AS sealed_until, (photo_data IS NOT NULL) AS has_photo`,
+    [user.couple_id, user.id, photoData, thumbData, note, memoryDate, sealedUntil]
   );
-  const memory = { ...created, author_name: user.display_name, hearts: 0, hearted_by_me: false };
+  const memory = {
+    ...created,
+    author_name: user.display_name,
+    hearts: 0,
+    hearted_by_me: false,
+    sealed: !!sealedUntil,
+    opened: false,
+  };
   await publish(user.couple_id, 'memory.created', { id: memory.id, author_id: user.id });
-  await notify(user.couple_id, user.id, 'memory', `${user.display_name} added a memory`);
+  await notify(
+    user.couple_id,
+    user.id,
+    sealedUntil ? 'capsule' : 'memory',
+    sealedUntil ? `${user.display_name} sealed a time capsule` : `${user.display_name} added a memory`
+  );
   res.status(201).json({ memory });
 });

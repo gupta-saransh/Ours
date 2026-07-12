@@ -4,7 +4,7 @@ Context for anyone (human or model) picking up this codebase.
 
 ## What this is
 
-**Ours** is a private, just-for-two relationship app. One Expo codebase runs on iOS, Android, and web. Original brief in `Details.md`; it has since grown: a public landing page, a post-login home dashboard, a notification service, a calendar-based memory log, heart reactions, a shared bucket list, and optional pairing. **No stubs, no mock states.**
+**Ours** is a private, just-for-two relationship app. One Expo codebase runs on iOS, Android, and web. Original brief in `Details.md`; it has since grown: a public landing page, a post-login home dashboard, a notification service, a calendar-based memory log, heart reactions, a shared bucket list, optional pairing, and (phase 2) a daily prompt with mutual reveal, time capsules, a date planner, per-partner wishlists with secret gift plans, and Sunday weekly reflections. **No stubs, no mock states.**
 
 ## Stack
 
@@ -38,8 +38,21 @@ Environment: `.env` from `.env.example` (`DATABASE_URL`, `ABLY_API_KEY`, `JWT_SE
 - **Memories** `app/(tabs)/memories.tsx`: two parts. (1) Month calendar; days that hold a memory render a ♥ instead of the number; tapping a (non-future) day opens the composer pinned to that date (`memory_date` column). (2) Photo timeline with heart reactions and a full-photo viewer. On web >= 900px they sit side by side (calendar left, timeline right). `MemoryImage` falls back to fetching the full photo for rows created before thumbnails existed (thumb_data null but has_photo true); do not remove that fallback.
 - **Notes** live wall + pin/unpin/remove + WhatsApp-style emoji palette (`src/components/EmojiPicker.tsx`, toggled from the composer).
 - **Milestones** yearly recurrence for anniversary/birthday, second-level countdowns.
-- **Notifications** `app/(tabs)/notifications.tsx` (hidden tab, reached via bell): every nudge/memory/note/milestone/bucket action by your partner, stored in the `notifications` table AND pushed live over Ably. Unread dot state lives in `src/lib/notifications.tsx`; `users.notifications_seen_at` tracks read state.
-- **Navigation**: web >= 900px wide gets a top navbar (`src/components/TopNav.tsx`), native/narrow gets bottom tabs + header actions (`src/components/HeaderActions.tsx` has NudgeButton + BellButton).
+- **Daily prompt** (`api/_routes/prompts.ts`, home card + `app/(tabs)/prompts.tsx` history): one static-pool question per day, deterministic by date; answers are private until BOTH partners submit, then reveal. One submission per person per day.
+- **Time capsules**: notes and memories accept `sealedUntil`. Partner-authored sealed rows come back with content stripped server-side (never client-side). After the reveal date they show as "ready to open"; first open is recorded in `capsule_opened_at` and notifies the author. Memory opens happen via GET /api/memories/:id; note opens via PATCH /api/notes/:id { open: true }.
+- **Date planner** `app/(tabs)/dates.tsx`: propose title/location/date; the OTHER partner accepts, declines, or counters (all via PATCH /api/dates/:id { action }); accepting a dated proposal creates a custom milestone in the same transaction.
+- **Wishlist** `app/(tabs)/wishlist.tsx`: each partner owns a list, the other reads it. `secret` rows are gift plans added to the PARTNER's list, hidden from the owner forever (server-side filter, do not weaken). Partner toggles `gotten`; owner never sees who got it.
+- **Weekly reflection** (`api/_routes/reflection.ts`): Monday-to-Sunday UTC counts computed on read, home card on Sundays only, savable snapshots browsable at `app/(tabs)/reflections.tsx`.
+- **Notifications** `app/(tabs)/notifications.tsx` (hidden tab, reached via bell): every partner action (kinds: nudge, memory, note, milestone, partner, bucket, prompt, capsule, date, wishlist), stored in `notifications` AND pushed live over Ably. Unread dot in `src/lib/notifications.tsx`; `users.notifications_seen_at` tracks read state.
+- **Navigation**: 5 tabs (Home, Memories, Notes, Dates, Wishlist); Milestones, Settings, Notifications, Prompts, Reflections are hidden tabs (`href: null`) reached from home/bell/TopNav. Web >= 900px gets `src/components/TopNav.tsx`; native/narrow gets bottom tabs + `src/components/HeaderActions.tsx`. Home has no header; its hero row carries Nudge/Bell/Settings.
+
+## Design system implementation (phase 2 foundation)
+
+- `src/theme.ts` owns everything: `sp` spacing scale (4..56, only those values), `radius` (sm 6 photos/inputs, md 10 cards, lg 16 sheets, pill), `text` presets (display/title/subtitle/section/body/bodySerif/caption/micro; Fraunces = couple-authored content, system sans = chrome), `motion` (press 0.98/120ms, fade 180ms, sheet spring 220/26), semantic colors (`surface`, `surfaceRaised`, `surfaceSealed` oxblood, `onSealed`, `ink/inkMuted/inkFaint`, `hairline`, `accent` gold, `positive` olive). Legacy aliases (cream/rose/blush...) remain for stragglers; prefer semantic names.
+- `src/components/kit.tsx` is the component library: Screen, Section, Card (+ `sealed` variant), PressableCard, AppPressable (shared press scale), PrimaryButton/SecondaryButton/IconButton, TextField (bottom-hairline style, gold focus), Pill, ListRow, Empty (✦ + serif line), Skeleton (olive 8%, 400ms delay), ErrorState, FormError, FadeIn. `src/components/Sheet.tsx` = bottom sheet native / right panel on web >= 900. Old `src/components/ui.tsx` was deleted; do not recreate it.
+- Icons: `lucide-react-native` everywhere (works on web via react-native-svg), stroke 1.75. No emoji as chrome; ♥ ✦ stay as content marks.
+- Haptics via `src/lib/haptics.ts` (`tapHaptic` on tab/segment changes, `successHaptic` on submit/heart/accept/unseal), web no-op.
+- No shadows anywhere; depth = hairline border + surfaceRaised.
 
 ## Performance contract (why the app is fast; do not regress)
 

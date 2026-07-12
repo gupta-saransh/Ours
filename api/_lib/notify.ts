@@ -1,7 +1,17 @@
 import { one } from './db';
 import { publish } from './ably';
 
-export type NotificationKind = 'nudge' | 'memory' | 'note' | 'milestone' | 'partner' | 'bucket';
+export type NotificationKind =
+  | 'nudge'
+  | 'memory'
+  | 'note'
+  | 'milestone'
+  | 'partner'
+  | 'bucket'
+  | 'prompt'
+  | 'capsule'
+  | 'date'
+  | 'wishlist';
 
 /**
  * The notification service: every meaningful action lands in the

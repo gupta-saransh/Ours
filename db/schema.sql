@@ -80,3 +80,66 @@ CREATE TABLE IF NOT EXISTS bucket_items (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS bucket_by_couple ON bucket_items (couple_id, done, created_at DESC);
+
+-- v3: daily prompts, time capsules, date planner, wishlist, weekly reflections
+CREATE TABLE IF NOT EXISTS daily_prompts (
+  prompt_date DATE PRIMARY KEY,
+  text STRING NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS daily_prompt_answers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  couple_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  prompt_date DATE NOT NULL,
+  text STRING NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (couple_id, user_id, prompt_date)
+);
+CREATE INDEX IF NOT EXISTS prompt_answers_by_couple ON daily_prompt_answers (couple_id, prompt_date DESC);
+
+ALTER TABLE love_notes ADD COLUMN IF NOT EXISTS sealed_until DATE;
+ALTER TABLE love_notes ADD COLUMN IF NOT EXISTS capsule_opened_at TIMESTAMPTZ;
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS sealed_until DATE;
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS capsule_opened_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS date_proposals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  couple_id UUID NOT NULL,
+  proposer_id UUID NOT NULL,
+  title STRING NOT NULL,
+  location STRING,
+  proposed_for DATE,
+  status STRING NOT NULL DEFAULT 'open', -- open | accepted | declined | countered
+  counter_of UUID,
+  milestone_id UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS dates_by_couple ON date_proposals (couple_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS wishlist_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  couple_id UUID NOT NULL,
+  owner_id UUID NOT NULL,
+  added_by UUID NOT NULL,
+  title STRING NOT NULL,
+  url STRING,
+  notes STRING,
+  secret BOOL NOT NULL DEFAULT false,
+  gotten BOOL NOT NULL DEFAULT false,
+  gotten_by UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS wishlist_by_couple ON wishlist_items (couple_id, owner_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS weekly_reflections (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  couple_id UUID NOT NULL,
+  week_start DATE NOT NULL,
+  counts JSONB NOT NULL,
+  highlight_memory_id UUID,
+  saved_by UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (couple_id, week_start)
+);

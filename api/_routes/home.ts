@@ -1,6 +1,8 @@
 import { one, q } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
 import { route } from '../_lib/respond';
+import { promptStateFor } from './prompts';
+import { computeReflection } from './reflection';
 
 const RESURFACE_COLUMNS = `id, thumb_data, note,
   COALESCE(memory_date, created_at::DATE)::STRING AS memory_date`;
@@ -15,7 +17,9 @@ export default route(['GET'], async (req, res) => {
   const user = await requirePairedUser(req);
   const cid = user.couple_id;
 
-  const [couple, partner, anniversary, milestones, yearAgo, monthAgo, older, bucket, pinnedNote, seen] =
+  const isSunday = new Date().getUTCDay() === 0;
+
+  const [couple, partner, anniversary, milestones, yearAgo, monthAgo, older, bucket, pinnedNote, seen, prompt, upcomingDate, reflection] =
     await Promise.all([
       one('SELECT id, invite_code, created_at FROM couples WHERE id = $1', [cid]),
       one('SELECT id, display_name FROM users WHERE couple_id = $1 AND id != $2', [cid, user.id]),
@@ -51,6 +55,15 @@ export default route(['GET'], async (req, res) => {
         [cid]
       ),
       one<{ notifications_seen_at: string }>('SELECT notifications_seen_at FROM users WHERE id = $1', [user.id]),
+      promptStateFor(cid, user.id),
+      one(
+        `SELECT id, title, location, proposed_for::STRING AS proposed_for FROM date_proposals
+         WHERE couple_id = $1 AND status = 'accepted' AND proposed_for >= now()::DATE
+           AND proposed_for < now()::DATE + 30
+         ORDER BY proposed_for ASC LIMIT 1`,
+        [cid]
+      ),
+      isSunday ? computeReflection(cid) : Promise.resolve(null),
     ]);
 
   const unseenRow = await one<{ n: number }>(
@@ -76,5 +89,9 @@ export default route(['GET'], async (req, res) => {
     bucket,
     pinnedNote: pinnedNote ?? null,
     unseen: unseenRow?.n ?? 0,
+    prompt,
+    upcomingDate: upcomingDate ?? null,
+    isSunday,
+    reflection,
   });
 });

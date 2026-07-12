@@ -1,15 +1,15 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
-import { BellButton, NudgeButton } from './HeaderActions';
-import { colors, font, space, type } from '@/theme';
+import { BellButton, NudgeButton, SettingsButton } from './HeaderActions';
+import { colors, font, sp, text } from '@/theme';
 
 const LINKS = [
   { href: '/', label: 'Home' },
   { href: '/memories', label: 'Memories' },
   { href: '/notes', label: 'Notes' },
-  { href: '/milestones', label: 'Milestones' },
-  { href: '/settings', label: 'Settings' },
+  { href: '/dates', label: 'Dates' },
+  { href: '/wishlist', label: 'Wishlist' },
 ] as const;
 
 /** Top navigation bar, shown on wide (web) layouts instead of bottom tabs. */
@@ -29,13 +29,14 @@ export function TopNav() {
             return (
               <Pressable key={link.href} onPress={() => router.push(link.href)} style={styles.link}>
                 <Text style={[styles.linkText, active && styles.linkActive]}>{link.label}</Text>
-                <View style={[styles.underline, active && { backgroundColor: colors.rose }]} />
+                <View style={[styles.underline, active && { backgroundColor: colors.accent }]} />
               </Pressable>
             );
           })}
         </View>
         <View style={styles.actions}>
           <BellButton />
+          <SettingsButton />
           <NudgeButton />
         </View>
       </View>
@@ -45,7 +46,7 @@ export function TopNav() {
 
 const styles = StyleSheet.create({
   bar: {
-    backgroundColor: colors.cream,
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: colors.hairline,
   },
@@ -56,7 +57,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: space(6),
+    paddingHorizontal: sp.xl,
     height: 64,
   },
   wordmark: {
@@ -64,10 +65,16 @@ const styles = StyleSheet.create({
     fontSize: 24,
     color: colors.ink,
   },
-  links: { flexDirection: 'row', gap: space(2) },
-  link: { paddingHorizontal: space(3), paddingVertical: space(2), alignItems: 'center' },
-  linkText: { fontSize: type.body, color: colors.inkSoft, fontWeight: '500' },
+  links: { flexDirection: 'row', gap: sp.sm },
+  link: { paddingHorizontal: sp.md, paddingVertical: sp.sm, alignItems: 'center' },
+  linkText: { ...text.body, color: colors.inkMuted, fontWeight: '500' },
   linkActive: { color: colors.ink, fontWeight: '600' },
-  underline: { height: 2, alignSelf: 'stretch', marginTop: 4, borderRadius: 1, backgroundColor: 'transparent' },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: space(3) },
+  underline: {
+    height: 2,
+    width: 20,
+    marginTop: sp.xs,
+    borderRadius: 1,
+    backgroundColor: 'transparent',
+  },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: sp.md },
 });

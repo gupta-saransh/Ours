@@ -1,9 +1,8 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Button } from '@/components/ui';
-import { colors, font, radius, space, type } from '@/theme';
+import { Card, PrimaryButton, Screen, SecondaryButton } from '@/components/kit';
+import { colors, font, sp, text } from '@/theme';
 
 const FEATURES = [
   {
@@ -14,12 +13,12 @@ const FEATURES = [
   {
     glyph: '♥',
     title: 'Notes that arrive instantly',
-    line: 'Leave a note on your shared wall and it lands on their screen the moment you send it. Pin the ones worth keeping.',
+    line: 'Leave a note on your shared wall and it lands on their screen the moment you send it. Seal one as a time capsule for a future day.',
   },
   {
     glyph: '◷',
     title: 'Days counted, dates kept',
-    line: 'A running count of your days together, countdowns to anniversaries and birthdays, and a little list of things you still want to do.',
+    line: 'A running count of your days together, a daily question you both answer, countdowns, and a little list of things you still want to do.',
   },
 ];
 
@@ -30,11 +29,11 @@ export default function Welcome() {
   const wide = width >= 760;
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <Screen>
       <ScrollView contentContainerStyle={styles.body}>
         <View style={styles.nav}>
           <Text style={styles.wordmark}>Ours ♥</Text>
-          <Button title="Sign in" variant="secondary" onPress={() => router.push('/sign-in')} style={styles.navButton} />
+          <SecondaryButton title="Sign in" onPress={() => router.push('/sign-in')} style={styles.navButton} />
         </View>
 
         <View style={styles.hero}>
@@ -46,21 +45,21 @@ export default function Welcome() {
             Ours is a private space for you and your person. No feed, no followers, no audience.
             Just your memories, your notes, your days counted.
           </Text>
-          <View style={[styles.heroActions, wide && { flexDirection: 'row', gap: space(3) }]}>
-            <Button title="Start your space" onPress={() => router.push('/sign-up')} style={wide ? { minWidth: 220 } : undefined} />
+          <View style={[styles.heroActions, wide && { flexDirection: 'row', gap: sp.md }]}>
+            <PrimaryButton title="Start your space" onPress={() => router.push('/sign-up')} style={wide ? { minWidth: 220 } : undefined} />
             {!wide && (
-              <Button title="I already have one" variant="ghost" onPress={() => router.push('/sign-in')} style={{ marginTop: space(2) }} />
+              <SecondaryButton title="I already have one" onPress={() => router.push('/sign-in')} style={{ marginTop: sp.md }} />
             )}
           </View>
         </View>
 
         <View style={[styles.features, wide && styles.featuresWide]}>
           {FEATURES.map((f) => (
-            <View key={f.title} style={[styles.feature, wide && { flex: 1 }]}>
+            <Card key={f.title} style={wide ? { flex: 1 } : undefined}>
               <Text style={styles.featureGlyph}>{f.glyph}</Text>
-              <Text style={styles.featureTitle}>{f.title}</Text>
-              <Text style={styles.featureLine}>{f.line}</Text>
-            </View>
+              <Text style={[text.title, { marginBottom: sp.sm }]}>{f.title}</Text>
+              <Text style={[text.body, { color: colors.inkMuted }]}>{f.line}</Text>
+            </Card>
           ))}
         </View>
 
@@ -69,20 +68,19 @@ export default function Welcome() {
             You do not need a partner to begin. Start alone, add your memories, and share your invite
             code whenever you are ready. Everything you keep comes with you.
           </Text>
-          <Button title="Create your account" onPress={() => router.push('/sign-up')} style={{ alignSelf: 'center', minWidth: 260 }} />
+          <PrimaryButton title="Create your account" onPress={() => router.push('/sign-up')} style={{ alignSelf: 'center', minWidth: 260 }} />
         </View>
 
         <Text style={styles.footer}>Ours · made for exactly two people ♥</Text>
       </ScrollView>
-    </SafeAreaView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.cream },
   body: {
-    paddingHorizontal: space(7),
-    paddingBottom: space(10),
+    paddingHorizontal: sp.xl,
+    paddingBottom: sp.xxxl,
     width: '100%',
     maxWidth: 1040,
     alignSelf: 'center',
@@ -91,21 +89,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: space(4),
+    paddingVertical: sp.base,
   },
   wordmark: { fontFamily: font.display, fontSize: 26, color: colors.ink },
-  navButton: { minHeight: 42, paddingHorizontal: space(5) },
+  navButton: { height: 40, paddingHorizontal: sp.lg },
   hero: {
     alignItems: 'center',
-    paddingVertical: space(14),
+    paddingVertical: sp.huge,
   },
   heroKicker: {
-    fontSize: type.small,
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    color: colors.gold,
-    fontWeight: '700',
-    marginBottom: space(4),
+    ...text.section,
+    marginBottom: sp.base,
   },
   heroTitle: {
     fontFamily: font.display,
@@ -116,50 +110,42 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
   },
   heroLine: {
-    fontSize: type.heading,
-    lineHeight: 29,
-    color: colors.inkSoft,
+    ...text.bodySerif,
+    fontSize: 18,
+    lineHeight: 28,
+    color: colors.inkMuted,
     textAlign: 'center',
     maxWidth: 560,
-    marginTop: space(5),
-    marginBottom: space(8),
-    fontFamily: font.serif,
+    marginTop: sp.lg,
+    marginBottom: sp.xxl,
   },
-  heroActions: { width: '100%', maxWidth: 420, alignSelf: 'center', alignItems: 'stretch', justifyContent: 'center' },
-  features: { gap: space(4), paddingVertical: space(6) },
-  featuresWide: { flexDirection: 'row', gap: space(5) },
-  feature: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: radius.md,
-    padding: space(6),
+  heroActions: {
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+    alignItems: 'stretch',
+    justifyContent: 'center',
   },
-  featureGlyph: { fontSize: 24, color: colors.rose, marginBottom: space(3) },
-  featureTitle: {
-    fontFamily: font.displayMedium,
-    fontSize: type.title,
-    color: colors.ink,
-    marginBottom: space(2.5),
-  },
-  featureLine: { fontSize: type.body, lineHeight: 24, color: colors.inkSoft },
+  features: { gap: sp.lg, paddingVertical: sp.xl },
+  featuresWide: { flexDirection: 'row', gap: sp.lg },
+  featureGlyph: { fontSize: 24, color: colors.surfaceSealed, marginBottom: sp.md },
   closing: {
     alignItems: 'center',
-    paddingVertical: space(12),
-    gap: space(6),
+    paddingVertical: sp.xxxl,
+    gap: sp.xl,
   },
   closingLine: {
-    fontFamily: font.serifItalic,
-    fontSize: type.heading,
-    lineHeight: 29,
-    color: colors.inkSoft,
+    ...text.bodySerif,
+    fontStyle: 'italic',
+    fontSize: 18,
+    lineHeight: 28,
+    color: colors.inkMuted,
     textAlign: 'center',
     maxWidth: 540,
   },
   footer: {
+    ...text.caption,
     textAlign: 'center',
-    color: colors.inkSoft,
-    fontSize: type.small,
-    paddingTop: space(6),
+    paddingTop: sp.lg,
   },
 });

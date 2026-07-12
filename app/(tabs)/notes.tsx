@@ -1,21 +1,24 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
-  FlatList,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
+import { Lock, Smile, Keyboard as KeyboardIcon } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
-import { Card, EmptyState } from '@/components/ui';
+import { successHaptic } from '@/lib/haptics';
+import { AppPressable, Card, Empty, ErrorState, Screen, Skeleton, TextField } from '@/components/kit';
+import { Sheet } from '@/components/Sheet';
 import { EmojiPicker } from '@/components/EmojiPicker';
-import { colors, font, radius, space, type } from '@/theme';
+import { colors, radius, sp, text } from '@/theme';
 import { formatDay, formatTime } from '@/lib/format';
 
 interface Note {
@@ -25,6 +28,9 @@ interface Note {
   body: string;
   pinned: boolean;
   created_at: string;
+  sealed_until: string | null;
+  sealed: boolean;
+  opened: boolean;
 }
 
 function sortNotes(notes: Note[]): Note[] {
@@ -36,41 +42,53 @@ function sortNotes(notes: Note[]): Note[] {
 
 export default function LoveNotes() {
   const { user, partner } = useAuth();
+  const { width } = useWindowDimensions();
+  const wide = Platform.OS === 'web' && width >= 900;
   const [notes, setNotes] = useState<Note[] | null>(null);
+  const [failed, setFailed] = useState(false);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [sealOpen, setSealOpen] = useState(false);
+  const [sealDate, setSealDate] = useState('');
+  const [reveal, setReveal] = useState<Note | null>(null);
 
   const load = useCallback(async () => {
+    setFailed(false);
     const data = await api<{ notes: Note[] }>('/api/notes');
     setNotes(sortNotes(data.notes));
   }, []);
 
   useEffect(() => {
-    load().catch(() => setNotes([]));
+    load().catch(() => setFailed(true));
   }, [load]);
 
-  // The wall is live: partner's notes and pins land without a refresh.
   useCoupleEvent('note.created', (note: Note) => {
     if (note?.author_id === user?.id) return;
     setNotes((prev) => sortNotes([note, ...(prev ?? []).filter((n) => n.id !== note.id)]));
   });
   useCoupleEvent('note.pinned', (updated: Note) => {
-    setNotes((prev) =>
-      prev ? sortNotes(prev.map((n) => (n.id === updated.id ? { ...n, pinned: updated.pinned } : n))) : prev
-    );
+    setNotes((prev) => (prev ? sortNotes(prev.map((n) => (n.id === updated.id ? { ...n, pinned: updated.pinned } : n))) : prev));
   });
   useCoupleEvent('note.deleted', (data) => {
     setNotes((prev) => (prev ? prev.filter((n) => n.id !== data?.id) : prev));
   });
+  useCoupleEvent('capsule.opened', () => load().catch(() => {}));
 
   const send = async () => {
     const body = draft.trim();
     if (!body || sending) return;
+    if (sealOpen && sealDate.trim() && !/^\d{4}-\d{2}-\d{2}$/.test(sealDate.trim())) return;
     setSending(true);
     try {
-      const data = await api<{ note: Note }>('/api/notes', { method: 'POST', body: { body } });
+      const data = await api<{ note: Note }>('/api/notes', {
+        method: 'POST',
+        body: { body, sealedUntil: sealOpen && sealDate.trim() ? sealDate.trim() : undefined },
+      });
+      successHaptic();
       setDraft('');
+      setSealDate('');
+      setSealOpen(false);
       setNotes((prev) => sortNotes([data.note, ...(prev ?? [])]));
     } catch {
       // keep the draft so nothing is lost
@@ -80,16 +98,11 @@ export default function LoveNotes() {
   };
 
   const togglePin = async (note: Note) => {
-    // Optimistic — the Ably echo confirms it.
-    setNotes((prev) =>
-      prev ? sortNotes(prev.map((n) => (n.id === note.id ? { ...n, pinned: !n.pinned } : n))) : prev
-    );
+    setNotes((prev) => (prev ? sortNotes(prev.map((n) => (n.id === note.id ? { ...n, pinned: !n.pinned } : n))) : prev));
     try {
       await api(`/api/notes/${note.id}`, { method: 'PATCH', body: { pinned: !note.pinned } });
     } catch {
-      setNotes((prev) =>
-        prev ? sortNotes(prev.map((n) => (n.id === note.id ? { ...n, pinned: note.pinned } : n))) : prev
-      );
+      setNotes((prev) => (prev ? sortNotes(prev.map((n) => (n.id === note.id ? { ...n, pinned: note.pinned } : n))) : prev));
     }
   };
 
@@ -102,165 +115,285 @@ export default function LoveNotes() {
     }
   };
 
-  if (notes === null) {
+  const openCapsule = async (note: Note) => {
+    setReveal(note);
+    if (!note.opened && note.author_id !== user?.id) {
+      successHaptic();
+      setNotes((prev) => (prev ? prev.map((n) => (n.id === note.id ? { ...n, opened: true } : n)) : prev));
+      api(`/api/notes/${note.id}`, { method: 'PATCH', body: { open: true } }).catch(() => {});
+    }
+  };
+
+  if (failed && !notes) {
     return (
-      <View style={styles.loading}>
-        <ActivityIndicator color={colors.rose} />
-      </View>
+      <Screen>
+        <ErrorState onRetry={() => load().catch(() => setFailed(true))} />
+      </Screen>
+    );
+  }
+  if (!notes) {
+    return (
+      <Screen>
+        <View style={styles.list}>
+          <Skeleton height={110} style={{ marginBottom: sp.lg }} />
+          <Skeleton height={110} style={{ marginBottom: sp.lg }} />
+          <Skeleton height={110} />
+        </View>
+      </Screen>
     );
   }
 
+  const renderNote = (item: Note) => {
+    const mine = item.author_id === user?.id;
+
+    if (item.sealed && !mine) {
+      return (
+        <Card key={item.id} sealed style={styles.note}>
+          <Text style={styles.sealMark}>✦</Text>
+          <Text style={[text.subtitle, { color: colors.onSealed, textAlign: 'center' }]}>
+            Sealed until {formatDay(item.sealed_until!)}
+          </Text>
+          <Text style={[text.caption, { color: colors.onSealed, textAlign: 'center', marginTop: sp.xs }]}>
+            Written by {item.author_name}, {formatDay(item.created_at)}
+          </Text>
+        </Card>
+      );
+    }
+
+    const readyToOpen = !!item.sealed_until && !item.sealed && !item.opened && !mine;
+    if (readyToOpen) {
+      return (
+        <AppPressable key={item.id} onPress={() => openCapsule(item)}>
+          <Card sealed style={styles.note}>
+            <Text style={styles.sealMark}>✦</Text>
+            <Text style={[text.subtitle, { color: colors.onSealed, textAlign: 'center' }]}>A time capsule is ready</Text>
+            <Text style={[text.caption, { color: colors.onSealed, textAlign: 'center', marginTop: sp.xs }]}>
+              Tap to open it.
+            </Text>
+          </Card>
+        </AppPressable>
+      );
+    }
+
+    return (
+      <Card key={item.id} style={[styles.note, item.pinned && styles.notePinned]}>
+        {item.pinned ? <Text style={styles.pinMark}>✦</Text> : null}
+        {item.sealed && mine ? (
+          <View style={styles.sealedTag}>
+            <Lock size={12} color={colors.accent} strokeWidth={1.75} />
+            <Text style={[text.micro, { color: colors.accent }]}>Sealed until {formatDay(item.sealed_until!)}</Text>
+          </View>
+        ) : null}
+        <Text style={styles.noteBody}>{item.body}</Text>
+        <View style={styles.noteFooter}>
+          <View style={styles.noteActions}>
+            <Pressable onPress={() => togglePin(item)} hitSlop={8}>
+              <Text style={[text.caption, { color: colors.surfaceSealed, fontWeight: '600' }]}>
+                {item.pinned ? 'Unpin' : 'Pin'}
+              </Text>
+            </Pressable>
+            {mine && (
+              <Pressable onPress={() => remove(item)} hitSlop={8}>
+                <Text style={[text.caption, { color: colors.inkFaint }]}>Remove</Text>
+              </Pressable>
+            )}
+          </View>
+          <Text style={text.caption}>
+            {formatDay(item.created_at)}, {formatTime(item.created_at)}
+          </Text>
+        </View>
+      </Card>
+    );
+  };
+
+  // Web wide: two-column masonry. Native: single stack.
+  const left = wide ? notes.filter((_, i) => i % 2 === 0) : notes;
+  const right = wide ? notes.filter((_, i) => i % 2 === 1) : [];
+
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={90}
-    >
-      <FlatList
-        data={notes}
-        keyExtractor={(n) => n.id}
-        contentContainerStyle={styles.list}
-        ListEmptyComponent={
-          <EmptyState
-            title="No notes yet"
-            line={`Leave the first one. It will be waiting${partner ? ` for ${partner.display_name}` : ''} the next time they open the app.`}
-          />
-        }
-        renderItem={({ item }) => {
-          const mine = item.author_id === user?.id;
-          return (
-            <Card style={[styles.note, item.pinned && styles.notePinned]}>
-              {item.pinned ? <Text style={styles.pinMark}>✦ pinned</Text> : null}
-              <Text style={styles.noteBody}>{item.body}</Text>
-              <View style={styles.noteFooter}>
-                <Text style={styles.meta}>
-                  {mine ? 'You' : item.author_name} · {formatDay(item.created_at)}, {formatTime(item.created_at)}
-                </Text>
-                <View style={styles.noteActions}>
-                  <Pressable onPress={() => togglePin(item)} hitSlop={8}>
-                    <Text style={styles.action}>{item.pinned ? 'Unpin' : 'Pin'}</Text>
-                  </Pressable>
-                  {mine && (
-                    <Pressable onPress={() => remove(item)} hitSlop={8} style={{ marginLeft: space(4) }}>
-                      <Text style={[styles.action, { color: colors.inkSoft }]}>Remove</Text>
-                    </Pressable>
-                  )}
-                </View>
-              </View>
-            </Card>
-          );
-        }}
-      />
-      <View style={styles.composer}>
-        <Pressable
-          onPress={() => setEmojiOpen((o) => !o)}
-          style={({ pressed }) => [styles.emojiToggle, (pressed || emojiOpen) && { backgroundColor: colors.blushSoft }]}
-          hitSlop={4}
-        >
-          <Text style={{ fontSize: 22 }}>{emojiOpen ? '⌨' : '😊'}</Text>
-        </Pressable>
-        <TextInput
-          value={draft}
-          onChangeText={setDraft}
-          placeholder={partner ? `Leave a note for ${partner.display_name}…` : 'Leave a note for them…'}
-          placeholderTextColor={colors.inkSoft}
-          multiline
-          style={styles.input}
-        />
-        <Pressable
-          onPress={send}
-          disabled={!draft.trim() || sending}
-          style={({ pressed }) => [
-            styles.send,
-            (!draft.trim() || sending) && { opacity: 0.5 },
-            pressed && { backgroundColor: colors.rosePressed },
-          ]}
-        >
-          <Text style={styles.sendText}>♥</Text>
-        </Pressable>
-      </View>
-      {emojiOpen && <EmojiPicker onPick={(e) => setDraft((d) => d + e)} />}
-    </KeyboardAvoidingView>
+    <Screen>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={90}
+      >
+        <ScrollView contentContainerStyle={[styles.list, wide && { maxWidth: 900 }]}>
+          {notes.length === 0 && (
+            <Empty line={`No notes yet. The first one will be waiting${partner ? ` for ${partner.display_name}` : ''}.`} />
+          )}
+          {wide ? (
+            <View style={{ flexDirection: 'row', gap: sp.lg }}>
+              <View style={{ flex: 1 }}>{left.map(renderNote)}</View>
+              <View style={{ flex: 1 }}>{right.map(renderNote)}</View>
+            </View>
+          ) : (
+            left.map(renderNote)
+          )}
+        </ScrollView>
+
+        <View style={styles.composerWrap}>
+          {sealOpen && (
+            <View style={styles.sealRow}>
+              <TextField
+                label="Seal until (YYYY-MM-DD)"
+                value={sealDate}
+                onChangeText={setSealDate}
+                placeholder="2027-02-14"
+                autoCapitalize="none"
+                style={{ height: 40 }}
+              />
+            </View>
+          )}
+          <View style={styles.composer}>
+            <Pressable
+              onPress={() => setEmojiOpen((o) => !o)}
+              style={[styles.composerIcon, emojiOpen && { backgroundColor: colors.blushSoft }]}
+              hitSlop={4}
+            >
+              {emojiOpen ? (
+                <KeyboardIcon size={20} color={colors.ink} strokeWidth={1.75} />
+              ) : (
+                <Smile size={20} color={colors.ink} strokeWidth={1.75} />
+              )}
+            </Pressable>
+            <Pressable
+              onPress={() => setSealOpen((o) => !o)}
+              style={[styles.composerIcon, sealOpen && { backgroundColor: colors.blushSoft }]}
+              hitSlop={4}
+            >
+              <Lock size={18} color={sealOpen ? colors.accent : colors.ink} strokeWidth={1.75} />
+            </Pressable>
+            <TextInput
+              value={draft}
+              onChangeText={setDraft}
+              placeholder={partner ? `Write a note for ${partner.display_name}...` : 'Write a note...'}
+              placeholderTextColor={colors.inkFaint}
+              multiline
+              style={styles.input}
+            />
+            <AppPressable
+              onPress={send}
+              disabled={!draft.trim() || sending}
+              style={[styles.send, (!draft.trim() || sending) && { opacity: 0.5 }]}
+            >
+              <Text style={{ color: colors.onSealed, fontSize: 18 }}>♥</Text>
+            </AppPressable>
+          </View>
+          {emojiOpen && <EmojiPicker onPick={(e) => setDraft((d) => d + e)} />}
+        </View>
+      </KeyboardAvoidingView>
+
+      <Sheet visible={!!reveal} onClose={() => setReveal(null)} title="From a while ago" sealed>
+        {reveal && (
+          <>
+            <Text style={styles.revealSeal}>✦ ✦</Text>
+            <Text style={[text.bodySerif, { fontSize: 18, lineHeight: 28, color: colors.onSealed, textAlign: 'center' }]}>
+              {reveal.body}
+            </Text>
+            <Text style={[text.caption, { color: 'rgba(249, 239, 220, 0.65)', textAlign: 'center', marginTop: sp.lg }]}>
+              {reveal.author_name} sealed this on {formatDay(reveal.created_at)}
+            </Text>
+          </>
+        )}
+      </Sheet>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.cream },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream },
   list: {
-    padding: space(5),
-    paddingBottom: space(6),
+    padding: sp.lg,
+    paddingBottom: sp.xl,
     width: '100%',
-    maxWidth: 560,
+    maxWidth: 620,
     alignSelf: 'center',
   },
-  note: { marginBottom: space(3.5) },
+  note: { marginBottom: sp.lg },
   notePinned: { backgroundColor: colors.blushSoft, borderColor: colors.blush },
   pinMark: {
-    color: colors.rose,
-    fontSize: type.tiny,
-    letterSpacing: 0.6,
-    marginBottom: space(2),
-    textTransform: 'uppercase',
+    position: 'absolute',
+    top: sp.md,
+    right: sp.md,
+    color: colors.accent,
+    fontSize: 14,
+  },
+  sealMark: {
+    fontSize: 22,
+    color: colors.accent,
+    textAlign: 'center',
+    marginBottom: sp.sm,
+  },
+  sealedTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.xs,
+    marginBottom: sp.sm,
   },
   noteBody: {
-    fontFamily: font.serif,
-    fontSize: type.heading,
-    lineHeight: 28,
-    color: colors.ink,
+    ...text.bodySerif,
+    fontSize: 17,
+    lineHeight: 26,
   },
   noteFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: space(3),
+    marginTop: sp.md,
   },
-  meta: { fontSize: type.small, color: colors.inkSoft, flexShrink: 1 },
-  noteActions: { flexDirection: 'row', alignItems: 'center' },
-  action: { fontSize: type.small, color: colors.rose, fontWeight: '600' },
-  emojiToggle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: space(2),
-    borderWidth: 1,
-    borderColor: colors.hairline,
+  noteActions: { flexDirection: 'row', alignItems: 'center', gap: sp.base },
+  composerWrap: {
+    borderTopWidth: 1,
+    borderTopColor: colors.hairline,
     backgroundColor: colors.surface,
+    width: '100%',
+    maxWidth: 620,
+    alignSelf: 'center',
+  },
+  sealRow: {
+    paddingHorizontal: sp.lg,
+    paddingTop: sp.md,
   },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    padding: space(4),
-    paddingTop: space(2.5),
-    borderTopWidth: 1,
-    borderTopColor: colors.hairline,
-    backgroundColor: colors.cream,
-    width: '100%',
-    maxWidth: 560,
-    alignSelf: 'center',
+    padding: sp.base,
+    gap: sp.sm,
+  },
+  composerIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.surfaceRaised,
   },
   input: {
     flex: 1,
     borderWidth: 1,
     borderColor: colors.hairline,
-    borderRadius: radius.md,
-    backgroundColor: colors.surface,
-    paddingHorizontal: space(4),
-    paddingVertical: space(3),
-    fontSize: type.body,
-    color: colors.ink,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surfaceRaised,
+    paddingHorizontal: sp.base,
+    paddingVertical: sp.sm,
+    minHeight: 40,
     maxHeight: 120,
+    ...text.body,
   },
   send: {
-    marginLeft: space(3),
-    backgroundColor: colors.rose,
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.surfaceSealed,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sendText: { color: colors.onRose, fontSize: 20 },
+  revealSeal: {
+    fontSize: 22,
+    color: colors.accent,
+    textAlign: 'center',
+    letterSpacing: 12,
+    marginBottom: sp.lg,
+  },
 });

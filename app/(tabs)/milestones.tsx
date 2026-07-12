@@ -1,16 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  Modal,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { api } from '@/lib/api';
-import { Button, Card, EmptyState, Field, FormError } from '@/components/ui';
-import { colors, font, radius, space, type } from '@/theme';
+import { successHaptic } from '@/lib/haptics';
+import {
+  Card,
+  Empty,
+  ErrorState,
+  FormError,
+  Pill,
+  PrimaryButton,
+  Screen,
+  SecondaryButton,
+  Skeleton,
+  TextField,
+} from '@/components/kit';
+import { Sheet } from '@/components/Sheet';
+import { colors, sp, text } from '@/theme';
 import { countdownTo, milestoneDate, nextOccurrence } from '@/lib/format';
 
 interface Milestone {
@@ -28,16 +33,18 @@ const KIND_LABEL: Record<Milestone['kind'], string> = {
 
 export default function Milestones() {
   const [milestones, setMilestones] = useState<Milestone[] | null>(null);
+  const [failed, setFailed] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
   const load = useCallback(async () => {
+    setFailed(false);
     const data = await api<{ milestones: Milestone[] }>('/api/milestones');
     setMilestones(data.milestones);
   }, []);
 
   useEffect(() => {
-    load().catch(() => setMilestones([]));
+    load().catch(() => setFailed(true));
   }, [load]);
 
   // Live countdown tick.
@@ -51,7 +58,8 @@ export default function Milestones() {
     return [...milestones].sort(
       (a, b) => nextOccurrence(a.date, a.kind, now).getTime() - nextOccurrence(b.date, b.kind, now).getTime()
     );
-  }, [milestones, now.getDate()]); // re-sort at most daily
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [milestones, now.getDate()]);
 
   const remove = async (id: string) => {
     setMilestones((prev) => (prev ? prev.filter((m) => m.id !== id) : prev));
@@ -62,31 +70,44 @@ export default function Milestones() {
     }
   };
 
+  if (failed && !milestones) {
+    return (
+      <Screen>
+        <ErrorState onRetry={() => load().catch(() => setFailed(true))} />
+      </Screen>
+    );
+  }
   if (sorted === null) {
     return (
-      <View style={styles.loading}>
-        <ActivityIndicator color={colors.rose} />
-      </View>
+      <Screen>
+        <View style={styles.list}>
+          <Skeleton height={140} style={{ marginBottom: sp.lg }} />
+          <Skeleton height={140} />
+        </View>
+      </Screen>
     );
   }
 
   return (
-    <View style={styles.screen}>
+    <Screen>
       <FlatList
         data={sorted}
         keyExtractor={(m) => m.id}
         contentContainerStyle={styles.list}
         ListEmptyComponent={
-          <EmptyState
-            title="Mark what matters"
-            line="Your anniversary, their birthday, the trip you’re counting down to."
+          <Empty
+            line="No dates marked yet."
+            actionTitle="Add the first"
+            onAction={() => setComposerOpen(true)}
           />
+        }
+        ListFooterComponent={
+          sorted.length > 0 ? (
+            <PrimaryButton title="Add a date" onPress={() => setComposerOpen(true)} style={{ marginTop: sp.md }} />
+          ) : null
         }
         renderItem={({ item }) => <MilestoneCard milestone={item} now={now} onRemove={() => remove(item.id)} />}
       />
-      <Pressable style={({ pressed }) => [styles.fab, pressed && { backgroundColor: colors.rosePressed }]} onPress={() => setComposerOpen(true)}>
-        <Text style={styles.fabText}>＋ Add a date</Text>
-      </Pressable>
       <MilestoneComposer
         open={composerOpen}
         onClose={() => setComposerOpen(false)}
@@ -95,7 +116,7 @@ export default function Milestones() {
           setComposerOpen(false);
         }}
       />
-    </View>
+    </Screen>
   );
 }
 
@@ -107,13 +128,13 @@ function MilestoneCard({ milestone, now, onRemove }: { milestone: Milestone; now
 
   return (
     <Card style={styles.milestone}>
-      <View style={styles.milestoneTop}>
-        <Text style={styles.kind}>{KIND_LABEL[milestone.kind]}</Text>
+      <View style={styles.topRow}>
+        <Pill label={KIND_LABEL[milestone.kind]} tone="positive" />
         <Pressable onPress={onRemove} hitSlop={8}>
-          <Text style={styles.remove}>Remove</Text>
+          <Text style={[text.caption, { color: colors.inkFaint }]}>Remove</Text>
         </Pressable>
       </View>
-      <Text style={styles.title}>{milestone.title}</Text>
+      <Text style={[text.title, { marginTop: sp.md, marginBottom: sp.base }]}>{milestone.title}</Text>
       {c.past && milestone.kind === 'custom' ? (
         <Text style={styles.countPast}>
           {c.days === 0 ? 'Today ♥' : `${c.days.toLocaleString()} ${c.days === 1 ? 'day' : 'days'} ago`}
@@ -126,7 +147,7 @@ function MilestoneCard({ milestone, now, onRemove }: { milestone: Milestone; now
           <CountUnit n={c.seconds} label="sec" />
         </View>
       )}
-      <Text style={styles.dateLine}>
+      <Text style={[text.caption, { marginTop: sp.base }]}>
         {target.getDate()} {target.toLocaleString('en', { month: 'long' })} {target.getFullYear()}
         {yearsNext > 0 ? ` · ${yearsNext} ${yearsNext === 1 ? 'year' : 'years'}` : ''}
       </Text>
@@ -136,9 +157,9 @@ function MilestoneCard({ milestone, now, onRemove }: { milestone: Milestone; now
 
 function CountUnit({ n, label }: { n: number; label: string }) {
   return (
-    <View style={styles.unit}>
+    <View>
       <Text style={styles.unitNumber}>{n.toLocaleString()}</Text>
-      <Text style={styles.unitLabel}>{label}</Text>
+      <Text style={text.caption}>{label}</Text>
     </View>
   );
 }
@@ -170,6 +191,7 @@ function MilestoneComposer({
         method: 'POST',
         body: { title, date: date.trim(), kind },
       });
+      successHaptic();
       setTitle('');
       setDate('');
       onCreated(data.milestone);
@@ -181,117 +203,63 @@ function MilestoneComposer({
   };
 
   return (
-    <Modal visible={open} animationType="slide" transparent onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
-      <View style={styles.sheet}>
-        <Text style={styles.sheetTitle}>A date to hold onto</Text>
-        <View style={styles.kindRow}>
-          {(['anniversary', 'birthday', 'custom'] as const).map((k) => (
-            <Pressable
-              key={k}
-              onPress={() => setKind(k)}
-              style={[styles.chip, kind === k && styles.chipActive]}
-            >
-              <Text style={[styles.chipText, kind === k && styles.chipTextActive]}>{KIND_LABEL[k]}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <Field
-          label="What is it?"
-          value={title}
-          onChangeText={setTitle}
-          placeholder={kind === 'anniversary' ? 'The day we met' : kind === 'birthday' ? 'Their birthday' : 'Trip to the coast'}
-        />
-        <Field
-          label={kind === 'custom' ? 'Date (YYYY-MM-DD)' : 'Original date (YYYY-MM-DD), repeats every year'}
-          value={date}
-          onChangeText={setDate}
-          placeholder="2024-06-14"
-          autoCapitalize="none"
-        />
-        <FormError message={error} />
-        <Button title="Add to our calendar" onPress={save} loading={busy} disabled={!title.trim() || !date.trim()} />
-        <Button title="Not now" variant="ghost" onPress={onClose} style={{ marginTop: space(2) }} />
+    <Sheet visible={open} onClose={onClose} title="A date to hold onto">
+      <View style={styles.kindRow}>
+        {(['anniversary', 'birthday', 'custom'] as const).map((k) => (
+          <Pressable key={k} onPress={() => setKind(k)} style={[styles.chip, kind === k && styles.chipActive]}>
+            <Text style={[text.caption, kind === k && { color: colors.surfaceSealed, fontWeight: '600' }]}>
+              {KIND_LABEL[k]}
+            </Text>
+          </Pressable>
+        ))}
       </View>
-    </Modal>
+      <TextField
+        label="What is it?"
+        value={title}
+        onChangeText={setTitle}
+        placeholder={kind === 'anniversary' ? 'The day we met' : kind === 'birthday' ? 'Their birthday' : 'Trip to the coast'}
+      />
+      <TextField
+        label={kind === 'custom' ? 'Date (YYYY-MM-DD)' : 'Original date (YYYY-MM-DD), repeats every year'}
+        value={date}
+        onChangeText={setDate}
+        placeholder="2024-06-14"
+        autoCapitalize="none"
+      />
+      <FormError message={error} />
+      <PrimaryButton title="Add to our calendar" onPress={save} loading={busy} disabled={!title.trim() || !date.trim()} />
+      <SecondaryButton title="Not now" onPress={onClose} style={{ marginTop: sp.md }} />
+    </Sheet>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.cream },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream },
   list: {
-    padding: space(5),
-    paddingBottom: space(28),
+    padding: sp.lg,
+    paddingBottom: sp.huge,
     width: '100%',
-    maxWidth: 560,
+    maxWidth: 620,
     alignSelf: 'center',
   },
-  milestone: { marginBottom: space(4) },
-  milestoneTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  kind: {
-    fontSize: type.tiny,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    color: colors.sage,
-    fontWeight: '700',
-  },
-  remove: { fontSize: type.small, color: colors.inkSoft },
-  title: {
-    fontFamily: font.displayMedium,
-    fontSize: type.title,
-    color: colors.ink,
-    marginTop: space(2),
-    marginBottom: space(4),
-  },
-  countRow: { flexDirection: 'row', gap: space(5) },
-  unit: { alignItems: 'flex-start' },
+  milestone: { marginBottom: sp.lg },
+  topRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  countRow: { flexDirection: 'row', gap: sp.lg },
   unitNumber: {
-    fontFamily: font.display,
+    ...text.title,
     fontSize: 28,
-    color: colors.rose,
+    lineHeight: 34,
+    color: colors.surfaceSealed,
     fontVariant: ['tabular-nums'],
   },
-  unitLabel: { fontSize: type.tiny, color: colors.inkSoft, marginTop: 2 },
-  countPast: { fontFamily: font.display, fontSize: 28, color: colors.rose },
-  dateLine: { marginTop: space(4), fontSize: type.small, color: colors.inkSoft },
-  fab: {
-    position: 'absolute',
-    bottom: space(6),
-    alignSelf: 'center',
-    backgroundColor: colors.rose,
-    borderRadius: radius.full,
-    paddingVertical: space(3.5),
-    paddingHorizontal: space(6),
-  },
-  fabText: { color: colors.onRose, fontSize: type.body, fontWeight: '600' },
-  backdrop: { flex: 1, backgroundColor: 'rgba(59, 46, 42, 0.35)' },
-  sheet: {
-    backgroundColor: colors.cream,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    padding: space(6),
-    paddingBottom: space(10),
-    width: '100%',
-    maxWidth: 560,
-    alignSelf: 'center',
-  },
-  sheetTitle: {
-    fontFamily: font.display,
-    fontSize: type.title,
-    color: colors.ink,
-    marginBottom: space(4),
-  },
-  kindRow: { flexDirection: 'row', gap: space(2), marginBottom: space(5) },
+  countPast: { ...text.title, fontSize: 28, lineHeight: 34, color: colors.surfaceSealed },
+  kindRow: { flexDirection: 'row', gap: sp.sm, marginBottom: sp.lg },
   chip: {
     borderWidth: 1,
     borderColor: colors.hairline,
-    borderRadius: radius.full,
-    paddingVertical: space(2),
-    paddingHorizontal: space(4),
-    backgroundColor: colors.surface,
+    borderRadius: 999,
+    paddingVertical: sp.sm,
+    paddingHorizontal: sp.base,
+    backgroundColor: colors.surfaceRaised,
   },
-  chipActive: { backgroundColor: colors.blushSoft, borderColor: colors.blush },
-  chipText: { fontSize: type.small, color: colors.inkSoft, fontWeight: '600' },
-  chipTextActive: { color: colors.rose },
+  chipActive: { borderColor: colors.surfaceSealed },
 });

@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -15,9 +16,32 @@ import * as Clipboard from 'expo-clipboard';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
-import { Button, Card } from '@/components/ui';
-import { colors, font, radius, space, type } from '@/theme';
+import { successHaptic } from '@/lib/haptics';
+import {
+  AppPressable,
+  Card,
+  ErrorState,
+  FadeIn,
+  PressableCard,
+  PrimaryButton,
+  Screen,
+  Section,
+  SecondaryButton,
+  Skeleton,
+  TextField,
+} from '@/components/kit';
+import { Sheet } from '@/components/Sheet';
+import { BellButton, NudgeButton, SettingsButton } from '@/components/HeaderActions';
+import { colors, radius, sp, text } from '@/theme';
 import { countdownTo, daysSince, formatDay, nextOccurrence } from '@/lib/format';
+
+interface PromptState {
+  prompt: { prompt_date: string; text: string };
+  myAnswer: string | null;
+  partnerAnswer: string | null;
+  partnerAnswered: boolean;
+  bothAnswered: boolean;
+}
 
 interface HomeData {
   couple: { id: string; invite_code: string; created_at: string } | null;
@@ -27,17 +51,29 @@ interface HomeData {
   resurfaced: { id: string; thumb_data: string | null; note: string; memory_date: string; tag: string } | null;
   bucket: { id: string; title: string; done: boolean }[];
   pinnedNote: { id: string; body: string; author_name: string } | null;
+  prompt: PromptState;
+  upcomingDate: { id: string; title: string; location: string | null; proposed_for: string } | null;
+  isSunday: boolean;
+  reflection: {
+    week_start: string;
+    week_end: string;
+    counts: Record<string, number>;
+    highlight: { id: string; thumb_data: string | null; note: string } | null;
+    saved: boolean;
+  } | null;
 }
 
 export default function Home() {
   const { user } = useAuth();
   const router = useRouter();
+  const { width } = useWindowDimensions();
+  const wide = Platform.OS === 'web' && width >= 900;
   const [data, setData] = useState<HomeData | null>(null);
   const [failed, setFailed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [newItem, setNewItem] = useState('');
-  const [addingItem, setAddingItem] = useState(false);
+  const [answerOpen, setAnswerOpen] = useState(false);
 
   const load = useCallback(async () => {
     setFailed(false);
@@ -50,6 +86,9 @@ export default function Home() {
   }, [load]);
 
   useCoupleEvent('partner.joined', () => load().catch(() => {}));
+  useCoupleEvent('prompt.answered', () => load().catch(() => {}));
+  useCoupleEvent('prompt.revealed', () => load().catch(() => {}));
+  useCoupleEvent('date.updated', () => load().catch(() => {}));
 
   const refresh = async () => {
     setRefreshing(true);
@@ -57,40 +96,40 @@ export default function Home() {
     setRefreshing(false);
   };
 
-  if (!data) {
-    if (failed) {
-      return (
-        <View style={styles.loading}>
-          <Text style={styles.errorTitle}>Could not load your space</Text>
-          <Text style={styles.errorLine}>
-            Check your connection. If this keeps happening after a deploy, the database schema may need
-            migrating (npm run migrate).
-          </Text>
-          <Button
-            title="Try again"
-            variant="secondary"
-            onPress={() => load().catch(() => setFailed(true))}
-            style={{ marginTop: space(4), minWidth: 180 }}
-          />
-        </View>
-      );
-    }
+  if (failed && !data) {
     return (
-      <View style={styles.loading}>
-        <ActivityIndicator color={colors.rose} />
-      </View>
+      <Screen>
+        <ErrorState onRetry={() => load().catch(() => setFailed(true))} />
+      </Screen>
+    );
+  }
+
+  if (!data) {
+    return (
+      <Screen>
+        <View style={styles.body}>
+          <View style={{ alignItems: 'center', paddingVertical: sp.xxxl, gap: sp.md }}>
+            <Skeleton height={88} width={88} round={44} />
+            <Skeleton height={32} width={220} />
+            <Skeleton height={16} width={160} />
+          </View>
+          <Skeleton height={140} style={{ marginBottom: sp.lg }} />
+          <Skeleton height={96} style={{ marginBottom: sp.lg }} />
+          <Skeleton height={96} />
+        </View>
+      </Screen>
     );
   }
 
   const basis = data.daysBasis ?? data.couple?.created_at ?? new Date().toISOString();
   const days = daysSince(basis);
-  const firstName = user?.display_name?.split(' ')[0] ?? '';
   const now = new Date();
   const upcoming = [...data.milestones]
     .map((m) => ({ ...m, next: nextOccurrence(m.date, m.kind, now) }))
     .filter((m) => m.next.getTime() >= new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime())
     .sort((a, b) => a.next.getTime() - b.next.getTime())
     .slice(0, 2);
+  const initials = [user?.display_name?.[0], data.partner?.display_name?.[0]].filter(Boolean).join(' ♥ ');
 
   const copyCode = async () => {
     if (!data.couple) return;
@@ -101,238 +140,514 @@ export default function Home() {
 
   const addBucketItem = async () => {
     const title = newItem.trim();
-    if (!title || addingItem) return;
-    setAddingItem(true);
+    if (!title) return;
+    setNewItem('');
     try {
       const res = await api<{ item: HomeData['bucket'][0] }>('/api/bucket', { method: 'POST', body: { title } });
-      setNewItem('');
       setData((d) => (d ? { ...d, bucket: [res.item, ...d.bucket].slice(0, 5) } : d));
     } catch {
-      // keep the draft
-    } finally {
-      setAddingItem(false);
+      setNewItem(title);
     }
   };
 
   const toggleBucketItem = async (id: string) => {
+    successHaptic();
     setData((d) => (d ? { ...d, bucket: d.bucket.filter((b) => b.id !== id) } : d));
     await api(`/api/bucket/${id}`, { method: 'PATCH', body: { done: true } }).catch(() => load().catch(() => {}));
   };
 
   return (
-    <ScrollView
-      style={styles.screen}
-      contentContainerStyle={styles.body}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.rose} />}
-    >
-      <Text style={styles.greeting}>Hi {firstName} ♥</Text>
-      <Text style={styles.daysNumber}>{days.toLocaleString()}</Text>
-      <Text style={styles.daysLabel}>
-        {days === 1 ? 'day' : 'days'} {data.daysBasis ? 'of you two' : 'since your space began'}
-        {' · since '}
-        {formatDay(basis)}
-      </Text>
-
-      {!data.partner && data.couple && (
-        <Card style={[styles.card, styles.inviteCard]}>
-          <Text style={styles.cardKicker}>Just you here so far</Text>
-          <Text style={styles.inviteLine}>
-            Ours is better with your person in it. Share your code and everything you have added comes with you.
-          </Text>
-          <Pressable onPress={copyCode} style={styles.codeChip}>
-            <Text style={styles.codeText}>{data.couple.invite_code}</Text>
-            <Text style={styles.codeHint}>{copied ? 'Copied ✓' : 'Tap to copy'}</Text>
-          </Pressable>
-          <Pressable onPress={() => router.push('/pair')} hitSlop={6}>
-            <Text style={styles.linkAction}>I have their code instead</Text>
-          </Pressable>
-        </Card>
-      )}
-
-      {data.resurfaced && (
-        <Pressable onPress={() => router.push('/memories')}>
-          <Card style={styles.card}>
-            <Text style={styles.cardKicker}>✦ {data.resurfaced.tag}</Text>
-            <View style={styles.resurfacedRow}>
-              {data.resurfaced.thumb_data && (
-                <Image source={{ uri: data.resurfaced.thumb_data }} style={styles.resurfacedPhoto} contentFit="cover" />
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={styles.resurfacedNote} numberOfLines={3}>
-                  {data.resurfaced.note}
-                </Text>
-                <Text style={styles.metaLine}>{formatDay(data.resurfaced.memory_date)}</Text>
-              </View>
+    <Screen>
+      <ScrollView
+        contentContainerStyle={styles.body}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.accent} />}
+      >
+        {!wide && (
+          <View style={styles.heroChrome}>
+            <NudgeButton />
+            <View style={{ flexDirection: 'row', gap: sp.sm }}>
+              <BellButton />
+              <SettingsButton />
             </View>
-          </Card>
-        </Pressable>
-      )}
+          </View>
+        )}
 
-      {upcoming.length > 0 && (
-        <Card style={styles.card}>
-          <Text style={styles.cardKicker}>Coming up</Text>
-          {upcoming.map((m) => {
-            const c = countdownTo(m.next, now);
-            return (
-              <Pressable key={m.id} onPress={() => router.push('/milestones')} style={styles.upcomingRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.upcomingTitle}>{m.title}</Text>
-                  <Text style={styles.metaLine}>
-                    {m.next.getDate()} {m.next.toLocaleString('en', { month: 'long' })}
+        <FadeIn>
+          <View style={styles.hero}>
+            <View style={styles.monogram}>
+              <Text style={styles.monogramText}>{initials || '✦'}</Text>
+            </View>
+            <Text style={[text.display, styles.heroDays]}>
+              {days.toLocaleString()} {days === 1 ? 'day' : 'days'} of you two
+            </Text>
+            <Text style={[text.caption, { textAlign: 'center' }]}>
+              since {formatDay(basis)}
+              {upcoming[0] ? `  ·  ${upcoming[0].title} in ${countdownTo(upcoming[0].next, now).days} days` : ''}
+            </Text>
+          </View>
+        </FadeIn>
+
+        {!data.partner && data.couple && (
+          <FadeIn delay={40}>
+            <Section label="Just you here so far">
+              <Card>
+                <Text style={[text.bodySerif, { marginBottom: sp.base }]}>
+                  Ours is better with your person in it. Share your code and everything you have added comes with you.
+                </Text>
+                <AppPressable onPress={copyCode} style={styles.codeChip}>
+                  <Text style={styles.codeText}>{data.couple.invite_code}</Text>
+                  <Text style={text.caption}>{copied ? 'Copied ✓' : 'Tap to copy'}</Text>
+                </AppPressable>
+                <SecondaryButton title="I have their code" onPress={() => router.push('/pair')} />
+              </Card>
+            </Section>
+          </FadeIn>
+        )}
+
+        {/* Today's prompt */}
+        <FadeIn delay={80}>
+          <Section label="Today's prompt" trailing={
+            <Pressable onPress={() => router.push('/prompts')} hitSlop={8}>
+              <Text style={[text.caption, { color: colors.accent }]}>History</Text>
+            </Pressable>
+          }>
+            {!data.prompt.myAnswer ? (
+              <Card sealed>
+                <Text style={styles.promptQuestion}>{data.prompt.prompt.text}</Text>
+                {data.prompt.partnerAnswered && (
+                  <Text style={[text.caption, { color: colors.onSealed, textAlign: 'center', marginBottom: sp.md }]}>
+                    Their answer is waiting for yours.
+                  </Text>
+                )}
+                <PrimaryButton inverted title="Answer" onPress={() => setAnswerOpen(true)} />
+              </Card>
+            ) : !data.prompt.bothAnswered ? (
+              <Card>
+                <Text style={[text.bodySerif, { fontStyle: 'italic', marginBottom: sp.sm }]}>
+                  {data.prompt.prompt.text}
+                </Text>
+                <Text style={text.caption}>✦ You answered. Waiting for your partner.</Text>
+              </Card>
+            ) : (
+              <Card>
+                <Text style={[text.bodySerif, { fontStyle: 'italic', marginBottom: sp.base }]}>
+                  {data.prompt.prompt.text}
+                </Text>
+                <Text style={text.micro}>You</Text>
+                <Text style={[text.bodySerif, { marginBottom: sp.md }]}>{data.prompt.myAnswer}</Text>
+                <View style={styles.divider} />
+                <Text style={text.micro}>{data.partner?.display_name ?? 'Them'}</Text>
+                <Text style={text.bodySerif}>{data.prompt.partnerAnswer}</Text>
+              </Card>
+            )}
+          </Section>
+        </FadeIn>
+
+        {/* Weekly reflection, Sundays only */}
+        {data.isSunday && data.reflection && (
+          <FadeIn delay={120}>
+            <Section label="This week">
+              <ReflectionCard
+                reflection={data.reflection}
+                onSaved={() => setData((d) => (d && d.reflection ? { ...d, reflection: { ...d.reflection, saved: true } } : d))}
+                onOpenHistory={() => router.push('/reflections')}
+              />
+            </Section>
+          </FadeIn>
+        )}
+
+        {data.upcomingDate && (
+          <FadeIn delay={120}>
+            <Section label="Upcoming date">
+              <PressableCard onPress={() => router.push('/dates')}>
+                <View style={styles.rowBetween}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={text.subtitle}>{data.upcomingDate.title}</Text>
+                    <Text style={text.caption}>
+                      {formatDay(data.upcomingDate.proposed_for)}
+                      {data.upcomingDate.location ? ` · ${data.upcomingDate.location}` : ''}
+                    </Text>
+                  </View>
+                  <Text style={styles.upcomingDays}>
+                    {daysUntilLabel(data.upcomingDate.proposed_for)}
                   </Text>
                 </View>
-                <Text style={styles.upcomingDays}>
-                  {c.days === 0 ? 'today ♥' : `${c.days} ${c.days === 1 ? 'day' : 'days'}`}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </Card>
-      )}
-
-      <Card style={styles.card}>
-        <Text style={styles.cardKicker}>Our list</Text>
-        {data.bucket.length === 0 && (
-          <Text style={styles.emptyLine}>Things you two want to do. Add the first one.</Text>
+              </PressableCard>
+            </Section>
+          </FadeIn>
         )}
-        {data.bucket.map((item) => (
-          <Pressable key={item.id} onPress={() => toggleBucketItem(item.id)} style={styles.bucketRow}>
-            <View style={styles.checkbox} />
-            <Text style={styles.bucketTitle}>{item.title}</Text>
-          </Pressable>
-        ))}
-        <View style={styles.bucketComposer}>
-          <TextInput
-            value={newItem}
-            onChangeText={setNewItem}
-            placeholder="Someday, together we will..."
-            placeholderTextColor={colors.inkSoft}
-            style={styles.bucketInput}
-            onSubmitEditing={addBucketItem}
-          />
-          <Pressable
-            onPress={addBucketItem}
-            disabled={!newItem.trim()}
-            style={({ pressed }) => [styles.bucketAdd, !newItem.trim() && { opacity: 0.4 }, pressed && { backgroundColor: colors.rosePressed }]}
-          >
-            <Text style={{ color: colors.onRose, fontSize: 18 }}>＋</Text>
-          </Pressable>
-        </View>
-      </Card>
 
-      {data.pinnedNote && (
-        <Pressable onPress={() => router.push('/notes')}>
-          <Card style={[styles.card, styles.pinnedCard]}>
-            <Text style={styles.cardKicker}>✦ Pinned on your wall</Text>
-            <Text style={styles.pinnedBody} numberOfLines={3}>
-              {data.pinnedNote.body}
-            </Text>
-            <Text style={styles.metaLine}>{data.pinnedNote.author_name}</Text>
-          </Card>
+        {upcoming.length > 0 && (
+          <FadeIn delay={160}>
+            <Section label="Coming up soon">
+              <Card>
+                {upcoming.map((m, i) => {
+                  const c = countdownTo(m.next, now);
+                  return (
+                    <AppPressable key={m.id} onPress={() => router.push('/milestones')}>
+                      <View style={[styles.rowBetween, i > 0 && styles.rowTopBorder]}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={text.subtitle}>{m.title}</Text>
+                          <Text style={text.caption}>{formatDay(m.next.toISOString())}</Text>
+                        </View>
+                        <Text style={styles.upcomingDays}>{c.days === 0 ? 'today ♥' : `${c.days}d`}</Text>
+                      </View>
+                    </AppPressable>
+                  );
+                })}
+              </Card>
+            </Section>
+          </FadeIn>
+        )}
+
+        <FadeIn delay={200}>
+          <Section label="Our list">
+            <Card>
+              {data.bucket.length === 0 && (
+                <Text style={[text.caption, { marginBottom: sp.sm }]}>Your bucket list is empty.</Text>
+              )}
+              {data.bucket.map((item) => (
+                <AppPressable key={item.id} onPress={() => toggleBucketItem(item.id)}>
+                  <View style={styles.bucketRow}>
+                    <View style={styles.checkbox} />
+                    <Text style={[text.body, { flex: 1 }]}>{item.title}</Text>
+                  </View>
+                </AppPressable>
+              ))}
+              <View style={styles.bucketComposer}>
+                <TextInput
+                  value={newItem}
+                  onChangeText={setNewItem}
+                  placeholder="Someday, together we will..."
+                  placeholderTextColor={colors.inkFaint}
+                  style={styles.bucketInput}
+                  onSubmitEditing={addBucketItem}
+                />
+                <AppPressable onPress={addBucketItem} disabled={!newItem.trim()} style={[styles.bucketAdd, !newItem.trim() && { opacity: 0.4 }]}>
+                  <Text style={{ color: colors.onSealed, fontSize: 18, lineHeight: 20 }}>＋</Text>
+                </AppPressable>
+              </View>
+            </Card>
+          </Section>
+        </FadeIn>
+
+        {data.pinnedNote && (
+          <FadeIn delay={240}>
+            <Section label="Pinned on your wall">
+              <PressableCard onPress={() => router.push('/notes')}>
+                <Text style={text.bodySerif} numberOfLines={3}>
+                  {data.pinnedNote.body}
+                </Text>
+                <Text style={[text.caption, { marginTop: sp.sm }]}>{data.pinnedNote.author_name} ✦</Text>
+              </PressableCard>
+            </Section>
+          </FadeIn>
+        )}
+
+        {data.resurfaced && (
+          <FadeIn delay={280}>
+            <Section label={data.resurfaced.tag}>
+              <PressableCard onPress={() => router.push('/memories')}>
+                <View style={{ flexDirection: 'row', gap: sp.base, alignItems: 'center' }}>
+                  {data.resurfaced.thumb_data && (
+                    <Image source={{ uri: data.resurfaced.thumb_data }} style={styles.resurfacedPhoto} contentFit="cover" />
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={text.bodySerif} numberOfLines={3}>
+                      {data.resurfaced.note}
+                    </Text>
+                    <Text style={[text.caption, { marginTop: sp.xs }]}>{formatDay(data.resurfaced.memory_date)}</Text>
+                  </View>
+                </View>
+              </PressableCard>
+            </Section>
+          </FadeIn>
+        )}
+      </ScrollView>
+
+      <AnswerSheet
+        open={answerOpen}
+        question={data.prompt.prompt.text}
+        onClose={() => setAnswerOpen(false)}
+        onSubmitted={(state) => {
+          setAnswerOpen(false);
+          setData((d) => (d ? { ...d, prompt: state } : d));
+        }}
+      />
+    </Screen>
+  );
+}
+
+function daysUntilLabel(date: string): string {
+  const d = daysSince(date) === 0 ? 0 : -daysSince(date);
+  const target = new Date(date);
+  const today = new Date();
+  const diff = Math.round(
+    (new Date(target.getFullYear(), target.getMonth(), target.getDate()).getTime() -
+      new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) /
+      86_400_000
+  );
+  void d;
+  return diff <= 0 ? 'today ♥' : `${diff}d`;
+}
+
+function AnswerSheet({
+  open,
+  question,
+  onClose,
+  onSubmitted,
+}: {
+  open: boolean;
+  question: string;
+  onClose: () => void;
+  onSubmitted: (state: PromptState) => void;
+}) {
+  const [answer, setAnswer] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!answer.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const state = await api<PromptState>('/api/prompt/today', { method: 'POST', body: { text: answer.trim() } });
+      successHaptic();
+      setAnswer('');
+      onSubmitted(state);
+    } catch (err: any) {
+      setError(err?.message ?? 'Something went wrong');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Sheet visible={open} onClose={onClose} title="Today's prompt">
+      <Text style={[text.bodySerif, { fontStyle: 'italic', marginBottom: sp.lg }]}>{question}</Text>
+      <TextField
+        value={answer}
+        onChangeText={setAnswer}
+        placeholder="Only they will read this"
+        multiline
+        style={{ height: 96 }}
+      />
+      {error ? <Text style={[text.caption, { color: colors.danger, marginBottom: sp.md }]}>{error}</Text> : null}
+      <Text style={[text.caption, { marginBottom: sp.lg }]}>
+        Your answer stays hidden until you have both written one.
+      </Text>
+      <PrimaryButton title="Answer" onPress={submit} loading={busy} disabled={!answer.trim()} />
+    </Sheet>
+  );
+}
+
+function ReflectionCard({
+  reflection,
+  onSaved,
+  onOpenHistory,
+}: {
+  reflection: NonNullable<HomeData['reflection']>;
+  onSaved: () => void;
+  onOpenHistory: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const labels: Record<string, string> = {
+    memories: 'memories',
+    notes: 'notes',
+    prompts_together: 'prompts together',
+    hearts: 'hearts',
+    bucket_added: 'list items',
+    nudges: 'nudges',
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api('/api/reflection', { method: 'POST' });
+      successHaptic();
+      onSaved();
+    } catch {
+      // soft failure; the card stays savable
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <View style={styles.reflectionRule} />
+      <Text style={[text.title, { marginBottom: sp.base }]}>
+        {formatDay(reflection.week_start)} to {formatDay(reflection.week_end)}
+      </Text>
+      <View style={{ flexDirection: 'row', gap: sp.base }}>
+        <View style={styles.reflectionGrid}>
+          {Object.entries(labels).map(([key, label]) => (
+            <View key={key} style={styles.reflectionStat}>
+              <Text style={[text.title, { color: colors.surfaceSealed }]}>
+                {(reflection.counts[key] ?? 0).toLocaleString()}
+              </Text>
+              <Text style={text.caption}>{label}</Text>
+            </View>
+          ))}
+        </View>
+        {reflection.highlight?.thumb_data && (
+          <Image source={{ uri: reflection.highlight.thumb_data }} style={styles.reflectionHighlight} contentFit="cover" />
+        )}
+      </View>
+      <View style={[styles.rowBetween, { marginTop: sp.lg }]}>
+        <Pressable onPress={onOpenHistory} hitSlop={8}>
+          <Text style={[text.caption, { color: colors.accent }]}>Past weeks</Text>
         </Pressable>
-      )}
-    </ScrollView>
+        <SecondaryButton
+          title={reflection.saved ? 'Saved ✓' : 'Save this week'}
+          onPress={save}
+          loading={saving}
+          disabled={reflection.saved}
+        />
+      </View>
+    </Card>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.cream },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream, padding: space(8) },
-  errorTitle: { fontFamily: font.display, fontSize: type.title, color: colors.ink, textAlign: 'center' },
-  errorLine: {
-    fontSize: type.body,
-    color: colors.inkSoft,
-    marginTop: space(2),
-    textAlign: 'center',
-    lineHeight: 23,
-    maxWidth: 420,
-  },
   body: {
-    padding: space(6),
-    paddingBottom: space(16),
+    padding: sp.xl,
+    paddingBottom: sp.huge,
     width: '100%',
-    maxWidth: 640,
+    maxWidth: 680,
     alignSelf: 'center',
   },
-  greeting: { fontSize: type.body, color: colors.rose, marginBottom: space(4) },
-  daysNumber: {
-    fontFamily: font.display,
-    fontSize: 72,
-    lineHeight: 76,
-    color: colors.ink,
-    letterSpacing: -2,
+  heroChrome: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
-  daysLabel: {
-    fontFamily: font.serifItalic,
-    fontSize: type.heading,
-    color: colors.inkSoft,
-    marginBottom: space(7),
+  hero: {
+    alignItems: 'center',
+    paddingVertical: sp.xxl,
   },
-  card: { marginBottom: space(4) },
-  inviteCard: { backgroundColor: colors.blushSoft, borderColor: colors.blush },
-  cardKicker: {
-    fontSize: type.tiny,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    color: colors.sage,
-    fontWeight: '700',
-    marginBottom: space(3),
+  monogram: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: sp.lg,
   },
-  inviteLine: { fontSize: type.body, color: colors.ink, lineHeight: 23, marginBottom: space(4) },
+  monogramText: {
+    ...text.subtitle,
+    color: colors.surfaceSealed,
+  },
+  heroDays: {
+    textAlign: 'center',
+    marginBottom: sp.sm,
+  },
+  promptQuestion: {
+    ...text.bodySerif,
+    fontSize: 22,
+    lineHeight: 30,
+    fontStyle: 'italic',
+    color: colors.onSealed,
+    textAlign: 'center',
+    marginVertical: sp.lg,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: colors.hairline,
+    marginBottom: sp.md,
+  },
+  rowBetween: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: sp.md,
+    paddingVertical: sp.sm,
+  },
+  rowTopBorder: {
+    borderTopWidth: 1,
+    borderTopColor: colors.hairline,
+  },
+  upcomingDays: {
+    ...text.subtitle,
+    color: colors.surfaceSealed,
+  },
   codeChip: {
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.hairline,
     borderRadius: radius.sm,
     alignItems: 'center',
-    paddingVertical: space(3.5),
-    marginBottom: space(3),
+    paddingVertical: sp.md,
+    marginBottom: sp.md,
   },
-  codeText: { fontFamily: font.display, fontSize: 26, letterSpacing: 8, color: colors.ink },
-  codeHint: { fontSize: type.tiny, color: colors.inkSoft, marginTop: 2 },
-  linkAction: { fontSize: type.small, color: colors.rose, fontWeight: '600', textAlign: 'center' },
-  resurfacedRow: { flexDirection: 'row', gap: space(4), alignItems: 'center' },
-  resurfacedPhoto: { width: 84, height: 84, borderRadius: radius.sm, backgroundColor: colors.blushSoft },
-  resurfacedNote: { fontFamily: font.serif, fontSize: type.heading, lineHeight: 26, color: colors.ink },
-  metaLine: { fontSize: type.small, color: colors.inkSoft, marginTop: space(1.5) },
-  upcomingRow: {
+  codeText: {
+    ...text.title,
+    letterSpacing: 8,
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+  },
+  bucketRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: space(2.5),
+    gap: sp.md,
+    paddingVertical: sp.sm,
   },
-  upcomingTitle: { fontFamily: font.displayMedium, fontSize: type.heading, color: colors.ink },
-  upcomingDays: { fontFamily: font.display, fontSize: type.heading, color: colors.rose },
-  emptyLine: { fontSize: type.small, color: colors.inkSoft, marginBottom: space(2) },
-  bucketRow: { flexDirection: 'row', alignItems: 'center', gap: space(3), paddingVertical: space(2) },
   checkbox: {
     width: 20,
     height: 20,
-    borderRadius: 6,
+    borderRadius: radius.sm,
     borderWidth: 1.5,
-    borderColor: colors.blush,
+    borderColor: colors.accent,
     backgroundColor: colors.surface,
   },
-  bucketTitle: { fontSize: type.body, color: colors.ink, flex: 1 },
-  bucketComposer: { flexDirection: 'row', alignItems: 'center', gap: space(2), marginTop: space(3) },
+  bucketComposer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.sm,
+    marginTop: sp.md,
+  },
   bucketInput: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: radius.sm,
-    backgroundColor: colors.surface,
-    paddingHorizontal: space(3),
-    paddingVertical: space(2.5),
-    fontSize: type.body,
+    height: 44,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairline,
+    fontSize: 15,
     color: colors.ink,
   },
   bucketAdd: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: colors.rose,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.surfaceSealed,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  pinnedCard: { backgroundColor: colors.blushSoft, borderColor: colors.blush },
-  pinnedBody: { fontFamily: font.serif, fontSize: type.heading, lineHeight: 27, color: colors.ink },
+  resurfacedPhoto: {
+    width: 84,
+    height: 84,
+    borderRadius: radius.sm,
+    backgroundColor: colors.blushSoft,
+  },
+  reflectionRule: {
+    height: 1,
+    backgroundColor: colors.accent,
+    marginBottom: sp.base,
+  },
+  reflectionGrid: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  reflectionStat: {
+    width: '33.3%',
+    marginBottom: sp.md,
+  },
+  reflectionHighlight: {
+    width: 88,
+    height: 88,
+    borderRadius: radius.sm,
+    backgroundColor: colors.blushSoft,
+  },
 });
