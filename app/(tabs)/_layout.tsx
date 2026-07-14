@@ -1,6 +1,5 @@
 import React from 'react';
 import { Platform, useWindowDimensions, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Redirect, Tabs } from 'expo-router';
 import { CalendarHeart, Gift, Home, Image as ImageIcon, StickyNote } from 'lucide-react-native';
 import { useAuth } from '@/lib/auth';
@@ -10,6 +9,7 @@ import { HeaderActions } from '@/components/HeaderActions';
 import { TopNav } from '@/components/TopNav';
 import { NudgeToast } from '@/components/NudgeToast';
 import { AddMenu } from '@/components/AddMenu';
+import { useSafeBottom } from '@/lib/safeArea';
 import { colors, font, text } from '@/theme';
 
 // Height of the interactive strip (icons + labels). The bar's background then
@@ -20,7 +20,7 @@ const TAB_BAR_CONTENT_HEIGHT = 54;
 export default function TabsLayout() {
   const { status } = useAuth();
   const { width } = useWindowDimensions();
-  const insets = useSafeAreaInsets();
+  const safeBottom = useSafeBottom();
   const wide = Platform.OS === 'web' && width >= 900;
 
   if (status === 'loading') return null;
@@ -53,8 +53,8 @@ export default function TabsLayout() {
                   borderTopWidth: 1,
                   // Fill the home-indicator area with the bar's own background,
                   // but keep icons and labels above it via paddingBottom.
-                  height: TAB_BAR_CONTENT_HEIGHT + insets.bottom,
-                  paddingBottom: insets.bottom,
+                  height: TAB_BAR_CONTENT_HEIGHT + safeBottom,
+                  paddingBottom: safeBottom,
                   paddingTop: 6,
                 },
             tabBarActiveTintColor: colors.surfaceSealed,

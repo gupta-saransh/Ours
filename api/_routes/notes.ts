@@ -27,7 +27,7 @@ export default route(['GET', 'POST'], async (req, res) => {
       `SELECT ${NOTE_COLUMNS} FROM love_notes n
        JOIN users u ON u.id = n.author_id
        WHERE n.couple_id = $1 ORDER BY n.pinned DESC, n.created_at DESC LIMIT 200`,
-      [user.couple_id, user.id]
+      [user.couple_id]
     );
     const notes = await Promise.all(
       rows.map(async ({ body_ct, ...n }) => {

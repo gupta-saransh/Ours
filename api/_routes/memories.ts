@@ -25,6 +25,7 @@ const LIST_COLUMNS = `m.id, m.author_id,
   u.display_name AS author_name,
   (SELECT count(*)::int FROM memory_hearts h WHERE h.memory_id = m.id) AS hearts,
   EXISTS(SELECT 1 FROM memory_hearts h WHERE h.memory_id = m.id AND h.user_id = $2) AS hearted_by_me,
+  (SELECT count(*)::int FROM memory_comments c WHERE c.memory_id = m.id) AS comments,
   (m.photo_data IS NOT NULL) AS has_photo`;
 
 function validImage(value: unknown, maxLen: number): string {
@@ -98,6 +99,7 @@ export default route(['GET', 'POST'], async (req, res) => {
     author_name: user.display_name,
     hearts: 0,
     hearted_by_me: false,
+    comments: 0,
     sealed: !!sealedUntil,
     opened: false,
   };

@@ -145,8 +145,8 @@ export default function Settings() {
             </View>
             <Text style={[text.body, { color: colors.inkMuted, marginTop: sp.sm }]}>
               {encryption
-                ? 'Your memories, notes, prompts, and reflections are encrypted before they reach our database. If our systems were ever exposed, the contents would be unreadable without our keys. We’re working toward end to end encryption, where only you and your partner hold the keys.'
-                : 'We’re turning on encryption at rest for your private moments. Once it’s live, your memories, notes, prompts, and reflections are encrypted before they reach our database, so their contents would be unreadable if our systems were ever exposed.'}
+                ? 'Your memories, notes, prompts, and wishes are encrypted before they reach our database. If our systems were ever exposed, the contents would be unreadable without our keys. What you keep here stays between the two of you.'
+                : 'We’re turning on encryption at rest for your private moments. Once it’s live, your memories, notes, prompts, and wishes are encrypted before they reach our database, so their contents would be unreadable if our systems were ever exposed.'}
             </Text>
           </Card>
         </Section>
@@ -168,7 +168,7 @@ export default function Settings() {
           )}
         </Section>
 
-        <Text style={styles.footer}>Ours · made for exactly two people ♥</Text>
+        <Text style={styles.footer}>Ours · a little home for the two of you ♥</Text>
       </ScrollView>
     </Screen>
   );

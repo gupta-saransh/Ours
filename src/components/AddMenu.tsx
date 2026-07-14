@@ -10,25 +10,25 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePathname, useRouter } from 'expo-router';
 import {
   CalendarHeart,
   Gift,
   Image as ImageIcon,
-  Milestone as MilestoneIcon,
   Plus,
   StickyNote,
   type LucideIcon,
 } from 'lucide-react-native';
 import { tapHaptic } from '@/lib/haptics';
+import { useSafeBottom } from '@/lib/safeArea';
 import { colors, motion, radius, sp, text } from '@/theme';
 
 /**
- * Universal add button. A wax-seal FAB anchored bottom-right; tapping it fans a
- * short arc of labelled actions (Apple Pencil tool-picker style). Each action
- * deep-links to the right composer via a `compose` param the target screen
- * reads. Quiet motion: fade + scale, staggered, no bounce.
+ * Universal add button. A wax-seal FAB anchored bottom-right; tapping it raises
+ * a vertical column of labelled actions (labels to the left of each disc, so
+ * nothing can overlap). Each action deep-links to the right composer via a
+ * `compose` param the target screen reads. Quiet motion: fade + rise, staggered,
+ * no bounce.
  */
 
 interface Action {
@@ -38,14 +38,13 @@ interface Action {
   path: string;
 }
 
-// Order is top-of-arc first, so reading order (and web focus order) runs
-// top → bottom-left.
+// Bottom-up: index 0 sits closest to the FAB. Four actions keep the column
+// short; milestones are added from the Home screen's own flow.
 const ACTIONS: Action[] = [
-  { key: 'memory', label: 'Add memory', Icon: ImageIcon, path: '/memories' },
-  { key: 'note', label: 'Add note', Icon: StickyNote, path: '/notes' },
-  { key: 'wishlist', label: 'Add wishlist item', Icon: Gift, path: '/wishlist' },
   { key: 'date', label: 'Propose a date', Icon: CalendarHeart, path: '/dates' },
-  { key: 'milestone', label: 'Add milestone', Icon: MilestoneIcon, path: '/milestones' },
+  { key: 'wishlist', label: 'Add wishlist item', Icon: Gift, path: '/wishlist' },
+  { key: 'note', label: 'Add note', Icon: StickyNote, path: '/notes' },
+  { key: 'memory', label: 'Add memory', Icon: ImageIcon, path: '/memories' },
 ];
 
 // Routes that show the FAB. Hidden elsewhere (Settings, Milestones list, etc.).
@@ -53,28 +52,19 @@ const VISIBLE_ON = new Set(['/', '/memories', '/notes', '/dates', '/wishlist']);
 
 const FAB_SIZE = 56;
 const FAB_RIGHT = sp.xl; // gap from the screen's right edge
-const ICON = 48; // diameter of each action's icon disc
-const ARC_RADIUS = 132;
-
-// Precomputed arc offsets (screen coords, y grows downward), fanning from
-// straight-up to straight-left across a quarter circle.
-const OFFSETS = ACTIONS.map((_, i) => {
-  const theta = (90 + (i * 90) / (ACTIONS.length - 1)) * (Math.PI / 180);
-  return { dx: ARC_RADIUS * Math.cos(theta), dy: -ARC_RADIUS * Math.sin(theta) };
-});
+const ICON = 46; // diameter of each action's icon disc
+const STEP = ICON + sp.md; // vertical distance between action rows
 
 export function AddMenu() {
   const pathname = usePathname();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const safeBottom = useSafeBottom();
   const { width } = useWindowDimensions();
   const wide = Platform.OS === 'web' && width >= 900;
 
   const [open, setOpen] = useState(false);
-  const [mounted, setMounted] = useState(false); // keeps the arc alive through the close animation
+  const [mounted, setMounted] = useState(false); // keeps the column alive through the close animation
   const anim = useRef(new Animated.Value(0)).current;
-
-  const close = () => setOpen(false);
 
   useEffect(() => {
     if (open) {
@@ -112,7 +102,7 @@ export function AddMenu() {
 
   if (!VISIBLE_ON.has(pathname)) return null;
 
-  const fabBottom = wide ? insets.bottom + sp.xl : insets.bottom + 54 + sp.base;
+  const fabBottom = wide ? safeBottom + sp.xl : safeBottom + 54 + sp.base;
 
   const go = (action: Action) => {
     setOpen(false);
@@ -128,34 +118,27 @@ export function AddMenu() {
     <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
       {mounted && (
         <>
-          <Animated.View
-            {...pan.panHandlers}
-            style={[styles.scrim, { opacity: scrimOpacity }]}
-          />
+          <Animated.View {...pan.panHandlers} style={[styles.scrim, { opacity: scrimOpacity }]} />
           {ACTIONS.map((action, i) => {
-            const { dx, dy } = OFFSETS[i];
-            const start = i * 0.08;
+            const start = i * 0.07;
             const end = Math.min(start + 0.6, 1);
             const range = { inputRange: [start, end], extrapolate: 'clamp' as const };
-            const translateX = anim.interpolate({ ...range, outputRange: [0, dx] });
-            const translateY = anim.interpolate({ ...range, outputRange: [0, dy] });
-            const scale = anim.interpolate({ ...range, outputRange: [0.6, 1] });
+            const translateY = anim.interpolate({ ...range, outputRange: [12, 0] });
             const opacity = anim.interpolate({ ...range, outputRange: [0, 1] });
             const { Icon } = action;
             return (
               // Positioned within the full-screen container (not a 0x0 anchor)
-              // so the buttons stay inside their parent's bounds and remain
-              // tappable on Android; the icon disc lines up on the FAB centre
-              // when untranslated, then rides out to its arc point.
+              // so the rows stay inside their parent's bounds and remain
+              // tappable on Android. The discs line up over the FAB's centre.
               <Animated.View
                 key={action.key}
                 style={[
                   styles.action,
                   {
-                    right: FAB_RIGHT + FAB_SIZE / 2 - ICON / 2,
-                    bottom: fabBottom + FAB_SIZE / 2 - ICON / 2,
+                    right: FAB_RIGHT + (FAB_SIZE - ICON) / 2,
+                    bottom: fabBottom + FAB_SIZE + sp.md + i * STEP,
                     opacity,
-                    transform: [{ translateX }, { translateY }, { scale }],
+                    transform: [{ translateY }],
                   },
                 ]}
               >
@@ -210,9 +193,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // Icon disc sits at the arc point; the label rides to its left. The row is
-  // right-anchored so it grows leftward from the icon; right/bottom are applied
-  // inline (they depend on the runtime safe-area inset).
+  // Each row is right-anchored so the label grows leftward from its disc;
+  // right/bottom are applied inline (they depend on the runtime safe inset).
   action: {
     position: 'absolute',
   },

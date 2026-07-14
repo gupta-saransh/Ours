@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Image } from 'expo-image';
+import { Lock } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -64,7 +65,7 @@ interface HomeData {
 }
 
 export default function Home() {
-  const { user } = useAuth();
+  const { user, encryption } = useAuth();
   const router = useRouter();
   const { width } = useWindowDimensions();
   const wide = Platform.OS === 'web' && width >= 900;
@@ -363,6 +364,15 @@ export default function Home() {
             </Section>
           </FadeIn>
         )}
+
+        {encryption && (
+          <View style={styles.lockLine}>
+            <Lock size={12} color={colors.inkFaint} strokeWidth={1.75} />
+            <Text style={[text.caption, { color: colors.inkFaint }]}>
+              Encrypted at rest, kept just for the two of you.
+            </Text>
+          </View>
+        )}
       </ScrollView>
 
       <AnswerSheet
@@ -649,5 +659,12 @@ const styles = StyleSheet.create({
     height: 88,
     borderRadius: radius.sm,
     backgroundColor: colors.blushSoft,
+  },
+  lockLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: sp.sm,
+    marginTop: sp.xl,
   },
 });

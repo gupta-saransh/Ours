@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useRef, useState } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
+import { useSafeBottom } from '@/lib/safeArea';
 import { colors, motion, radius, sp, text } from '@/theme';
 
 /**
@@ -18,6 +19,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [message, setMessage] = useState<string | null>(null);
   const opacity = useRef(new Animated.Value(0)).current;
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const safeBottom = useSafeBottom();
 
   const show = useCallback(
     (msg: string) => {
@@ -39,7 +41,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     <ToastContext.Provider value={{ show }}>
       {children}
       {message !== null && (
-        <View pointerEvents="none" style={styles.overlay}>
+        // Clears the 54px tab bar plus the home-indicator inset so the toast
+        // never sits on top of the bar's labels.
+        <View pointerEvents="none" style={[styles.overlay, { paddingBottom: 54 + safeBottom + sp.lg }]}>
           <Animated.View style={[styles.toast, { opacity }]}>
             <Text style={styles.toastText}>{message}</Text>
           </Animated.View>
@@ -58,16 +62,15 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'flex-end',
-    paddingBottom: sp.huge, // clears the tab bar so the toast reads clearly
   },
+  // Espresso on cream reversed: ink chip, cream text. Small confirmations were
+  // barely readable as muted-on-cream; this reads at a glance.
   toast: {
-    backgroundColor: colors.surfaceRaised,
-    borderWidth: 1,
-    borderColor: colors.hairline,
+    backgroundColor: colors.ink,
     borderRadius: radius.pill,
-    paddingVertical: sp.sm,
+    paddingVertical: sp.md,
     paddingHorizontal: sp.lg,
     maxWidth: '90%',
   },
-  toastText: { ...text.caption, color: colors.inkMuted, textAlign: 'center' },
+  toastText: { ...text.body, fontWeight: '500', color: colors.onRose, textAlign: 'center' },
 });

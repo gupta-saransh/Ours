@@ -51,7 +51,9 @@ export default route(['GET', 'POST'], async (req, res) => {
     [memoryId, user.couple_id, user.id, bodyCt ? '' : body, bodyCt]
   );
   const comment = { ...created, body, author_name: user.display_name };
-  await publish(user.couple_id, 'memory.commented', { memory_id: memoryId, id: comment.id, by: user.id });
+  // `created` lets list views bump their comment count without refetching
+  // (edits publish the same event without it).
+  await publish(user.couple_id, 'memory.commented', { memory_id: memoryId, id: comment.id, by: user.id, created: true });
   // Generic text: the comment body is encrypted and must not land in the
   // plaintext notifications table.
   await notify(user.couple_id, user.id, 'comment', `${user.display_name} commented on a memory`);

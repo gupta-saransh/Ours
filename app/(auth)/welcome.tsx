@@ -1,6 +1,7 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Lock } from 'lucide-react-native';
 import { Card, PrimaryButton, Screen, SecondaryButton } from '@/components/kit';
 import { colors, font, sp, text } from '@/theme';
 
@@ -37,7 +38,7 @@ export default function Welcome() {
         </View>
 
         <View style={styles.hero}>
-          <Text style={styles.heroKicker}>For exactly two people</Text>
+          <Text style={styles.heroKicker}>For you and your favorite person</Text>
           <Text style={[styles.heroTitle, wide && { fontSize: 58, lineHeight: 64 }]}>
             The quiet little{'\n'}corner of the internet{'\n'}that is only yours
           </Text>
@@ -50,6 +51,10 @@ export default function Welcome() {
             {!wide && (
               <SecondaryButton title="I already have one" onPress={() => router.push('/sign-in')} style={{ marginTop: sp.md }} />
             )}
+          </View>
+          <View style={styles.lockLine}>
+            <Lock size={13} color={colors.inkMuted} strokeWidth={1.75} />
+            <Text style={text.caption}>Everything you write is encrypted at rest. Your story stays yours.</Text>
           </View>
         </View>
 
@@ -71,7 +76,7 @@ export default function Welcome() {
           <PrimaryButton title="Create your account" onPress={() => router.push('/sign-up')} style={{ alignSelf: 'center', minWidth: 260 }} />
         </View>
 
-        <Text style={styles.footer}>Ours · made for exactly two people ♥</Text>
+        <Text style={styles.footer}>Ours · a little home for the two of you ♥</Text>
       </ScrollView>
     </Screen>
   );
@@ -125,6 +130,12 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     alignItems: 'stretch',
     justifyContent: 'center',
+  },
+  lockLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.sm,
+    marginTop: sp.lg,
   },
   features: { gap: sp.lg, paddingVertical: sp.xl },
   featuresWide: { flexDirection: 'row', gap: sp.lg },

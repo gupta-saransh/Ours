@@ -16,10 +16,12 @@ interface Comment {
   edited_at: string | null;
 }
 
-// Light palette for the dark memory viewer.
-const CREAM = colors.onSealed;
-const FAINT = 'rgba(249, 239, 220, 0.55)';
-const HAIR = 'rgba(249, 239, 220, 0.16)';
+// Light palette for the dark memory viewer. Kept bright: the backdrop behind
+// this thread is near-black, anything under ~0.7 alpha gets hard to read.
+const CREAM = '#F9EFDC';
+const FAINT = 'rgba(249, 239, 220, 0.72)';
+const HAIR = 'rgba(249, 239, 220, 0.22)';
+const FIELD = 'rgba(249, 239, 220, 0.08)';
 
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -234,8 +236,9 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 40,
     maxHeight: 100,
-    color: CREAM,
     ...text.body,
+    color: CREAM,
+    backgroundColor: FIELD,
     paddingVertical: sp.sm,
     paddingHorizontal: sp.md,
     borderWidth: 1,

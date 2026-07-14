@@ -15,7 +15,7 @@ import {
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { ChevronLeft, ChevronRight, Lock, Trash2, X } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, Lock, MessageCircle, Trash2, X } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
@@ -52,6 +52,7 @@ interface Memory {
   created_at: string;
   hearts: number;
   hearted_by_me: boolean;
+  comments: number;
   sealed_until: string | null;
   sealed: boolean;
   opened: boolean;
@@ -95,6 +96,16 @@ export default function Memories() {
     if (data?.by === user?.id) return;
     setMemories((prev) => (prev ? prev.map((m) => (m.id === data?.id ? { ...m, hearts: data.hearts } : m)) : prev));
   });
+  // Keep card comment counts fresh. Own events count too: the server echoes
+  // them back on the couple channel, which is what updates the list while the
+  // viewer is open.
+  useCoupleEvent('memory.commented', (data) => {
+    const delta = data?.created ? 1 : data?.deleted ? -1 : 0;
+    if (!delta) return;
+    setMemories((prev) =>
+      prev ? prev.map((m) => (m.id === data?.memory_id ? { ...m, comments: Math.max(0, m.comments + delta) } : m)) : prev
+    );
+  });
 
   const datesWithMemories = useMemo(() => {
     const set = new Set<string>();
@@ -107,10 +118,18 @@ export default function Memories() {
     if (next) successHaptic();
     const apply = (list: Memory[] | null, hearted: boolean, hearts: number) =>
       list ? list.map((m) => (m.id === memory.id ? { ...m, hearted_by_me: hearted, hearts } : m)) : list;
-    setMemories((prev) => apply(prev, next, memory.hearts + (next ? 1 : -1)));
-    await api(`/api/memories/${memory.id}`, { method: 'PATCH', body: { hearted: next } }).catch(() => {
+    setMemories((prev) => apply(prev, next, Math.max(0, memory.hearts + (next ? 1 : -1))));
+    try {
+      // The response carries the authoritative count and my own heart state;
+      // settling on it means the UI can never drift from the database.
+      const saved = await api<{ hearts: number; hearted_by_me: boolean }>(`/api/memories/${memory.id}`, {
+        method: 'PATCH',
+        body: { hearted: next },
+      });
+      setMemories((prev) => apply(prev, saved.hearted_by_me, saved.hearts));
+    } catch {
       setMemories((prev) => apply(prev, memory.hearted_by_me, memory.hearts));
-    });
+    }
   };
 
   const onCreated = (m: Memory) => {
@@ -287,12 +306,20 @@ function MemoryCard({
         <Text style={text.caption}>
           {mine ? 'You' : memory.author_name} · {formatDay(memory.memory_date)}
         </Text>
-        <Pressable onPress={onHeart} hitSlop={8} style={styles.heartButton}>
-          <Text style={[styles.heartGlyph, memory.hearted_by_me && { color: colors.surfaceSealed }]}>
-            {memory.hearted_by_me ? '♥' : '♡'}
-          </Text>
-          {memory.hearts > 0 && <Text style={[text.caption, { fontWeight: '600' }]}>{memory.hearts}</Text>}
-        </Pressable>
+        <View style={styles.footerActions}>
+          {memory.comments > 0 && (
+            <Pressable onPress={onOpen} hitSlop={8} style={styles.commentButton}>
+              <MessageCircle size={16} color={colors.inkMuted} strokeWidth={1.75} />
+              <Text style={[text.caption, { fontWeight: '600' }]}>{memory.comments}</Text>
+            </Pressable>
+          )}
+          <Pressable onPress={onHeart} hitSlop={8} style={styles.heartButton}>
+            <Text style={[styles.heartGlyph, memory.hearted_by_me && { color: colors.surfaceSealed }]}>
+              {memory.hearted_by_me ? '♥' : '♡'}
+            </Text>
+            {memory.hearts > 0 && <Text style={[text.caption, { fontWeight: '600' }]}>{memory.hearts}</Text>}
+          </Pressable>
+        </View>
       </View>
     </Card>
   );
@@ -736,6 +763,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingTop: sp.sm,
   },
+  footerActions: { flexDirection: 'row', alignItems: 'center', gap: sp.base },
+  commentButton: { flexDirection: 'row', alignItems: 'center', gap: sp.xs },
   heartButton: { flexDirection: 'row', alignItems: 'center', gap: sp.xs },
   heartGlyph: { fontSize: 19, color: colors.inkMuted },
   photoPick: {
@@ -768,9 +797,11 @@ const styles = StyleSheet.create({
     gap: sp.sm,
     marginBottom: sp.base,
   },
+  // Fully opaque: the timeline (and the FAB) must never bleed through the
+  // viewer, or its light text becomes unreadable over parchment content.
   viewerBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(28, 18, 12, 0.92)',
+    backgroundColor: '#1C120C',
     alignItems: 'center',
   },
   viewerScroll: { flex: 1, width: '100%', maxWidth: 720, alignSelf: 'center' },
