@@ -2,18 +2,22 @@ import { one, q } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
 import { publish } from '../_lib/ably';
 import { notify } from '../_lib/notify';
+import { encryptField, readField } from '../_lib/envelope';
 import { route, requireString, HttpError } from '../_lib/respond';
 
 /**
  * Performance contract: the list NEVER carries full-resolution photos, only
  * small thumbnails (~15 KB). The full photo is fetched on demand from
  * GET /api/memories/:id when a card is opened.
+ *
+ * The note is encrypted at rest (envelope.ts): the row carries `note` (empty
+ * when encrypted) and `note_ct` (ciphertext), resolved to plaintext in JS after
+ * the query. Sealed partner rows still come back with the note stripped.
  */
 const LIST_COLUMNS = `m.id, m.author_id,
   CASE WHEN m.sealed_until IS NOT NULL AND m.sealed_until > now()::DATE AND m.author_id != $2
        THEN NULL ELSE m.thumb_data END AS thumb_data,
-  CASE WHEN m.sealed_until IS NOT NULL AND m.sealed_until > now()::DATE AND m.author_id != $2
-       THEN '' ELSE m.note END AS note,
+  m.note, m.note_ct,
   m.sealed_until::STRING AS sealed_until,
   (m.sealed_until IS NOT NULL AND m.sealed_until > now()::DATE) AS sealed,
   (m.capsule_opened_at IS NOT NULL) AS opened,
@@ -35,13 +39,25 @@ export default route(['GET', 'POST'], async (req, res) => {
   const user = await requirePairedUser(req);
 
   if (req.method === 'GET') {
-    const memories = await q(
+    const rows = await q<{
+      note: string;
+      note_ct: Buffer | null;
+      sealed: boolean;
+      author_id: string;
+    }>(
       `SELECT ${LIST_COLUMNS} FROM memories m
        JOIN users u ON u.id = m.author_id
        WHERE m.couple_id = $1
        ORDER BY COALESCE(m.memory_date, m.created_at::DATE) DESC, m.created_at DESC
        LIMIT 400`,
       [user.couple_id, user.id]
+    );
+    const memories = await Promise.all(
+      rows.map(async ({ note_ct, ...m }) => {
+        const stripped = m.sealed && m.author_id !== user.id; // partner's sealed capsule
+        const note = stripped ? '' : (await readField(user.couple_id, note_ct, m.note)) ?? '';
+        return { ...m, note };
+      })
     );
     res.status(200).json({ memories });
     return;
@@ -66,15 +82,19 @@ export default route(['GET', 'POST'], async (req, res) => {
     sealedUntil = req.body.sealedUntil;
   }
 
+  // Encrypt the note at rest; when encryption is on the plaintext column is
+  // stored empty and the ciphertext lives in note_ct.
+  const noteCt = await encryptField(user.couple_id, note);
   const created = await one(
-    `INSERT INTO memories (couple_id, author_id, photo_data, thumb_data, note, memory_date, sealed_until)
-     VALUES ($1, $2, $3, $4, $5, COALESCE($6::DATE, now()::DATE), $7)
-     RETURNING id, author_id, thumb_data, note, memory_date::STRING AS memory_date, created_at,
+    `INSERT INTO memories (couple_id, author_id, photo_data, thumb_data, note, note_ct, memory_date, sealed_until)
+     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::DATE, now()::DATE), $8)
+     RETURNING id, author_id, thumb_data, memory_date::STRING AS memory_date, created_at,
        sealed_until::STRING AS sealed_until, (photo_data IS NOT NULL) AS has_photo`,
-    [user.couple_id, user.id, photoData, thumbData, note, memoryDate, sealedUntil]
+    [user.couple_id, user.id, photoData, thumbData, noteCt ? '' : note, noteCt, memoryDate, sealedUntil]
   );
   const memory = {
     ...created,
+    note, // echo the plaintext back to the author's client
     author_name: user.display_name,
     hearts: 0,
     hearted_by_me: false,

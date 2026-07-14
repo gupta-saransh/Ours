@@ -2,6 +2,7 @@ import { one, q } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
 import { publish } from '../_lib/ably';
 import { notify } from '../_lib/notify';
+import { encryptField, readField } from '../_lib/envelope';
 import { route, requireString, HttpError } from '../_lib/respond';
 
 /**
@@ -140,10 +141,13 @@ interface Answer {
 
 export async function promptStateFor(coupleId: string, userId: string) {
   const prompt = await todaysPrompt();
-  const answers = await q<Answer>(
-    `SELECT user_id, text, created_at FROM daily_prompt_answers
+  const rows = await q<Answer & { text_ct: Buffer | null }>(
+    `SELECT user_id, text, text_ct, created_at FROM daily_prompt_answers
      WHERE couple_id = $1 AND prompt_date = $2`,
     [coupleId, prompt.prompt_date]
+  );
+  const answers = await Promise.all(
+    rows.map(async ({ text_ct, ...a }) => ({ ...a, text: (await readField(coupleId, text_ct, a.text)) ?? '' }))
   );
   const mine = answers.find((a) => a.user_id === userId) ?? null;
   const theirs = answers.find((a) => a.user_id !== userId) ?? null;
@@ -167,7 +171,7 @@ export default route(['GET', 'POST'], async (req, res) => {
       ? req.query.before
       : '9999-12-31';
     const rows = await q(
-      `SELECT a.prompt_date::STRING AS prompt_date, p.text AS prompt, a.user_id, a.text
+      `SELECT a.prompt_date::STRING AS prompt_date, p.text AS prompt, a.user_id, a.text, a.text_ct
        FROM daily_prompt_answers a
        JOIN daily_prompts p ON p.prompt_date = a.prompt_date
        WHERE a.couple_id = $1 AND a.prompt_date < $2
@@ -177,7 +181,7 @@ export default route(['GET', 'POST'], async (req, res) => {
        LIMIT 40`,
       [user.couple_id, before]
     );
-    // Group the row pairs into one entry per date.
+    // Group the row pairs into one entry per date, decrypting each answer.
     const byDate = new Map<string, { prompt_date: string; prompt: string; answers: { user_id: string; text: string }[] }>();
     for (const r of rows as any[]) {
       const entry =
@@ -187,7 +191,7 @@ export default route(['GET', 'POST'], async (req, res) => {
           prompt: string;
           answers: { user_id: string; text: string }[];
         });
-      entry.answers.push({ user_id: r.user_id, text: r.text });
+      entry.answers.push({ user_id: r.user_id, text: (await readField(user.couple_id, r.text_ct, r.text)) ?? '' });
       byDate.set(r.prompt_date, entry);
     }
     res.status(200).json({ entries: [...byDate.values()] });
@@ -208,9 +212,10 @@ export default route(['GET', 'POST'], async (req, res) => {
   );
   if (existing) throw new HttpError(409, 'You already answered today');
 
+  const answerCt = await encryptField(user.couple_id, answerText);
   await one(
-    `INSERT INTO daily_prompt_answers (couple_id, user_id, prompt_date, text) VALUES ($1, $2, $3, $4)`,
-    [user.couple_id, user.id, prompt.prompt_date, answerText]
+    `INSERT INTO daily_prompt_answers (couple_id, user_id, prompt_date, text, text_ct) VALUES ($1, $2, $3, $4, $5)`,
+    [user.couple_id, user.id, prompt.prompt_date, answerCt ? '' : answerText, answerCt]
   );
 
   const count = await one<{ n: number }>(

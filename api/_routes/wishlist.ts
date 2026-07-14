@@ -2,9 +2,23 @@ import { one, q } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
 import { publish } from '../_lib/ably';
 import { notify } from '../_lib/notify';
+import { encryptField, readField } from '../_lib/envelope';
 import { route, requireString, HttpError } from '../_lib/respond';
 
-const ITEM_COLUMNS = 'id, owner_id, added_by, title, url, notes, secret, gotten, gotten_by, created_at';
+// title/url/notes are encrypted at rest (envelope.ts): each has a _ct column,
+// resolved to plaintext in JS after the query.
+const ITEM_COLUMNS =
+  'id, owner_id, added_by, title, title_ct, url, url_ct, notes, notes_ct, secret, gotten, gotten_by, created_at';
+
+async function decodeItem(coupleId: string, row: Record<string, any>) {
+  const { title_ct, url_ct, notes_ct, ...rest } = row;
+  return {
+    ...rest,
+    title: (await readField(coupleId, title_ct, rest.title)) ?? '',
+    url: (await readField(coupleId, url_ct, rest.url)) ?? rest.url ?? null,
+    notes: (await readField(coupleId, notes_ct, rest.notes)) ?? rest.notes ?? null,
+  };
+}
 
 /**
  * Each partner keeps their own wishlist; the other sees it read-only.
@@ -16,21 +30,25 @@ export default route(['GET', 'POST'], async (req, res) => {
   const user = await requirePairedUser(req);
 
   if (req.method === 'GET') {
-    const [mine, theirs] = await Promise.all([
+    const [mineRows, theirsRows] = await Promise.all([
       // My list, minus any secret gift plans my partner added for me.
-      q(
+      q<Record<string, any>>(
         `SELECT ${ITEM_COLUMNS} FROM wishlist_items
          WHERE couple_id = $1 AND owner_id = $2 AND secret = false
          ORDER BY gotten ASC, created_at DESC LIMIT 200`,
         [user.couple_id, user.id]
       ),
       // Partner's list, plus my own secret plans on it.
-      q(
+      q<Record<string, any>>(
         `SELECT ${ITEM_COLUMNS} FROM wishlist_items
          WHERE couple_id = $1 AND owner_id != $2 AND (secret = false OR added_by = $2)
          ORDER BY gotten ASC, created_at DESC LIMIT 200`,
         [user.couple_id, user.id]
       ),
+    ]);
+    const [mine, theirs] = await Promise.all([
+      Promise.all(mineRows.map((r) => decodeItem(user.couple_id, r))),
+      Promise.all(theirsRows.map((r) => decodeItem(user.couple_id, r))),
     ]);
     res.status(200).json({ mine, theirs });
     return;
@@ -49,14 +67,31 @@ export default route(['GET', 'POST'], async (req, res) => {
   if (!owner) throw new HttpError(400, 'Owner must be in your space');
   if (secret && ownerId === user.id) throw new HttpError(400, 'You cannot keep secrets from yourself here');
 
-  const item = await one(
-    `INSERT INTO wishlist_items (couple_id, owner_id, added_by, title, url, notes, secret)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING ${ITEM_COLUMNS}`,
-    [user.couple_id, ownerId, user.id, title, url, notes, secret]
+  const titleCt = await encryptField(user.couple_id, title);
+  const urlCt = url ? await encryptField(user.couple_id, url) : null;
+  const notesCt = notes ? await encryptField(user.couple_id, notes) : null;
+  const created = await one(
+    `INSERT INTO wishlist_items (couple_id, owner_id, added_by, title, title_ct, url, url_ct, notes, notes_ct, secret)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING id, owner_id, added_by, secret, gotten, gotten_by, created_at`,
+    [
+      user.couple_id,
+      ownerId,
+      user.id,
+      titleCt ? '' : title,
+      titleCt,
+      urlCt ? null : url,
+      urlCt,
+      notesCt ? null : notes,
+      notesCt,
+      secret,
+    ]
   );
+  const item = { ...created, title, url, notes };
   await publish(user.couple_id, 'wishlist.updated', { id: item.id, secret });
   if (!secret && ownerId === user.id) {
-    await notify(user.couple_id, user.id, 'wishlist', `${user.display_name} added "${title}" to their wishlist`);
+    // Keep the encrypted title out of the plaintext notifications table.
+    await notify(user.couple_id, user.id, 'wishlist', `${user.display_name} added something to their wishlist`);
   }
   res.status(201).json({ item });
 });

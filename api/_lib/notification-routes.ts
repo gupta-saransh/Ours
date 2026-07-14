@@ -16,6 +16,7 @@ const ROUTES: Record<NotificationKind, string> = {
   capsule: '/memories',
   date: '/dates',
   wishlist: '/wishlist',
+  comment: '/memories',
 };
 
 export function routeForKind(kind: string): string {

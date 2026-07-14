@@ -19,7 +19,9 @@ import {
   TextField,
 } from '@/components/kit';
 import { Sheet } from '@/components/Sheet';
+import { LockBadge } from '@/components/LockBadge';
 import { colors, sp, text } from '@/theme';
+import { useComposeParam } from '@/lib/useComposeParam';
 
 interface WishItem {
   id: string;
@@ -41,6 +43,12 @@ export default function Wishlist() {
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<'mine' | 'theirs'>('mine');
   const [composerFor, setComposerFor] = useState<'mine' | 'theirs' | null>(null);
+
+  // Opened from the universal add button: always the user's own list.
+  useComposeParam(() => {
+    setTab('mine');
+    setComposerFor('mine');
+  });
 
   const load = useCallback(async () => {
     setFailed(false);
@@ -283,6 +291,7 @@ function WishComposer({
       <TextField label="Notes (optional)" value={notes} onChangeText={setNotes} placeholder="Size, color, where to find it" />
       <FormError message={error} />
       <PrimaryButton title={secret ? 'Keep the secret' : 'Add it'} onPress={submit} loading={busy} disabled={!title.trim()} />
+      <LockBadge style={{ marginTop: sp.base, alignSelf: 'center' }} />
     </Sheet>
   );
 }

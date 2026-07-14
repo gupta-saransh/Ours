@@ -17,6 +17,7 @@ import {
 import { Sheet } from '@/components/Sheet';
 import { colors, sp, text } from '@/theme';
 import { countdownTo, milestoneDate, nextOccurrence } from '@/lib/format';
+import { useComposeParam } from '@/lib/useComposeParam';
 
 interface Milestone {
   id: string;
@@ -36,6 +37,9 @@ export default function Milestones() {
   const [failed, setFailed] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
   const [now, setNow] = useState(() => new Date());
+
+  // Opened from the universal add button.
+  useComposeParam(() => setComposerOpen(true));
 
   const load = useCallback(async () => {
     setFailed(false);

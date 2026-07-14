@@ -2,16 +2,18 @@ import { one, q } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
 import { publish } from '../_lib/ably';
 import { notify } from '../_lib/notify';
+import { encryptField, readField } from '../_lib/envelope';
 import { route, requireString, HttpError } from '../_lib/respond';
 
 /**
  * Love notes, optionally sealed as time capsules. Sealed rows authored by
  * your partner come back with the body stripped until the reveal date; the
- * stripping is server-side and must stay that way.
+ * stripping is server-side and must stay that way. The body is encrypted at
+ * rest (envelope.ts): `body` is empty when encrypted, `body_ct` holds the
+ * ciphertext, resolved to plaintext in JS after the query.
  */
 const NOTE_COLUMNS = `n.id, n.author_id, n.pinned, n.created_at,
-  CASE WHEN n.sealed_until IS NOT NULL AND n.sealed_until > now()::DATE AND n.author_id != $2
-       THEN '' ELSE n.body END AS body,
+  n.body, n.body_ct,
   n.sealed_until::STRING AS sealed_until,
   (n.sealed_until IS NOT NULL AND n.sealed_until > now()::DATE) AS sealed,
   (n.capsule_opened_at IS NOT NULL) AS opened,
@@ -21,11 +23,18 @@ export default route(['GET', 'POST'], async (req, res) => {
   const user = await requirePairedUser(req);
 
   if (req.method === 'GET') {
-    const notes = await q(
+    const rows = await q<{ body: string; body_ct: Buffer | null; sealed: boolean; author_id: string }>(
       `SELECT ${NOTE_COLUMNS} FROM love_notes n
        JOIN users u ON u.id = n.author_id
        WHERE n.couple_id = $1 ORDER BY n.pinned DESC, n.created_at DESC LIMIT 200`,
       [user.couple_id, user.id]
+    );
+    const notes = await Promise.all(
+      rows.map(async ({ body_ct, ...n }) => {
+        const stripped = n.sealed && n.author_id !== user.id; // partner's sealed capsule
+        const body = stripped ? '' : (await readField(user.couple_id, body_ct, n.body)) ?? '';
+        return { ...n, body };
+      })
     );
     res.status(200).json({ notes });
     return;
@@ -41,11 +50,12 @@ export default route(['GET', 'POST'], async (req, res) => {
     sealedUntil = req.body.sealedUntil;
   }
 
+  const bodyCt = await encryptField(user.couple_id, body);
   const created = await one(
-    `INSERT INTO love_notes (couple_id, author_id, body, sealed_until)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id, author_id, body, pinned, created_at, sealed_until::STRING AS sealed_until`,
-    [user.couple_id, user.id, body, sealedUntil]
+    `INSERT INTO love_notes (couple_id, author_id, body, body_ct, sealed_until)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, author_id, pinned, created_at, sealed_until::STRING AS sealed_until`,
+    [user.couple_id, user.id, bodyCt ? '' : body, bodyCt, sealedUntil]
   );
   const note = {
     ...created,
@@ -53,7 +63,7 @@ export default route(['GET', 'POST'], async (req, res) => {
     sealed: !!sealedUntil,
     opened: false,
     // never leak a sealed body over the wire to the other subscriber
-    body: sealedUntil ? '' : created.body,
+    body: sealedUntil ? '' : body,
   };
   await publish(user.couple_id, 'note.created', note);
   await notify(
@@ -62,5 +72,5 @@ export default route(['GET', 'POST'], async (req, res) => {
     sealedUntil ? 'capsule' : 'note',
     sealedUntil ? `${user.display_name} sealed a time capsule for you` : `${user.display_name} left you a note`
   );
-  res.status(201).json({ note: { ...note, body: created.body } });
+  res.status(201).json({ note: { ...note, body } });
 });

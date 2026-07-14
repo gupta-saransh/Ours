@@ -21,6 +21,7 @@ const KIND_ICON: Record<string, React.ComponentType<{ size?: number; color?: str
   capsule: Hourglass,
   date: CalendarHeart,
   wishlist: Gift,
+  comment: MessageCircle,
 };
 
 // Where each notification deep-links on tap (mirrors api/_lib/notification-routes.ts).
@@ -35,6 +36,7 @@ const KIND_ROUTE: Record<string, string> = {
   capsule: '/memories',
   date: '/dates',
   wishlist: '/wishlist',
+  comment: '/memories',
 };
 
 export default function Notifications() {

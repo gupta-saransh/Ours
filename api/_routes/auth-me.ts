@@ -1,5 +1,6 @@
 import { one } from '../_lib/db';
 import { requireUser } from '../_lib/auth';
+import { encryptionEnabled } from '../_lib/envelope';
 import { route } from '../_lib/respond';
 
 export default route(['GET'], async (req, res) => {
@@ -13,5 +14,5 @@ export default route(['GET'], async (req, res) => {
       [user.couple_id, user.id]
     );
   }
-  res.status(200).json({ user, couple, partner: partner ?? null });
+  res.status(200).json({ user, couple, partner: partner ?? null, encryption: encryptionEnabled() });
 });

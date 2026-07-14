@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Platform, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Lock } from 'lucide-react-native';
 import { useAuth } from '@/lib/auth';
 import { disableWebPush, enableWebPush } from '@/lib/push-web';
 import {
@@ -15,7 +16,7 @@ import {
 import { colors, sp, text } from '@/theme';
 
 export default function Settings() {
-  const { user, couple, partner, updateProfile, signOut, deleteAccount } = useAuth();
+  const { user, couple, partner, encryption, updateProfile, signOut, deleteAccount } = useAuth();
   const router = useRouter();
   const [name, setName] = useState(user?.display_name ?? '');
   const [savingName, setSavingName] = useState(false);
@@ -136,6 +137,20 @@ export default function Settings() {
           </Card>
         </Section>
 
+        <Section label="Privacy">
+          <Card>
+            <View style={styles.privacyHead}>
+              <Lock size={16} color={colors.accent} strokeWidth={1.75} />
+              <Text style={text.subtitle}>Encrypted at rest</Text>
+            </View>
+            <Text style={[text.body, { color: colors.inkMuted, marginTop: sp.sm }]}>
+              {encryption
+                ? 'Your memories, notes, prompts, and reflections are encrypted before they reach our database. If our systems were ever exposed, the contents would be unreadable without our keys. We’re working toward end to end encryption, where only you and your partner hold the keys.'
+                : 'We’re turning on encryption at rest for your private moments. Once it’s live, your memories, notes, prompts, and reflections are encrypted before they reach our database, so their contents would be unreadable if our systems were ever exposed.'}
+            </Text>
+          </Card>
+        </Section>
+
         <Section label="Account">
           <SecondaryButton title="Log out" onPress={signOut} />
           <View style={{ height: sp.md }} />
@@ -168,6 +183,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: sp.md },
+  privacyHead: { flexDirection: 'row', alignItems: 'center', gap: sp.sm },
   saveButton: { height: 40, paddingHorizontal: sp.base, marginTop: sp.sm },
   row: {
     flexDirection: 'row',

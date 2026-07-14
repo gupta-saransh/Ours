@@ -143,3 +143,42 @@ CREATE TABLE IF NOT EXISTS weekly_reflections (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (couple_id, week_start)
 );
+
+-- v4: envelope encryption at rest. Each couple gets a random 256-bit data
+-- encryption key (DEK), wrapped with the master key (MASTER_ENCRYPTION_KEY env)
+-- and stored here. Sensitive free-text fields get a BYTEA ciphertext column
+-- (iv||ciphertext||tag) beside the original plaintext column. When encryption
+-- is enabled the plaintext column is written empty and reads come from the _ct
+-- column; when it is disabled everything falls back to plaintext, so the app
+-- keeps working with or without the key. Old plaintext columns are NOT dropped
+-- this session (additive only); a future session backfills then drops reads.
+ALTER TABLE couples ADD COLUMN IF NOT EXISTS wrapped_dek BYTEA;
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS note_ct BYTEA;
+ALTER TABLE love_notes ADD COLUMN IF NOT EXISTS body_ct BYTEA;
+ALTER TABLE daily_prompt_answers ADD COLUMN IF NOT EXISTS text_ct BYTEA;
+ALTER TABLE wishlist_items ADD COLUMN IF NOT EXISTS title_ct BYTEA;
+ALTER TABLE wishlist_items ADD COLUMN IF NOT EXISTS url_ct BYTEA;
+ALTER TABLE wishlist_items ADD COLUMN IF NOT EXISTS notes_ct BYTEA;
+ALTER TABLE date_proposals ADD COLUMN IF NOT EXISTS title_ct BYTEA;
+ALTER TABLE date_proposals ADD COLUMN IF NOT EXISTS location_ct BYTEA;
+
+-- v5: comments on memories (body encrypted at rest like every other free text)
+CREATE TABLE IF NOT EXISTS memory_comments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  memory_id UUID NOT NULL,
+  couple_id UUID NOT NULL,
+  author_id UUID NOT NULL,
+  body STRING NOT NULL DEFAULT '',
+  body_ct BYTEA,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  edited_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS comments_by_memory ON memory_comments (memory_id, created_at ASC);
+
+-- v6: prompt streak. A day counts when BOTH partners answered and the reveal
+-- fired. Tracked on the couple; grace_used_week holds the Monday of the week a
+-- grace (single allowed skip) was last spent.
+ALTER TABLE couples ADD COLUMN IF NOT EXISTS current_streak_days INT NOT NULL DEFAULT 0;
+ALTER TABLE couples ADD COLUMN IF NOT EXISTS longest_streak_days INT NOT NULL DEFAULT 0;
+ALTER TABLE couples ADD COLUMN IF NOT EXISTS last_streak_date DATE;
+ALTER TABLE couples ADD COLUMN IF NOT EXISTS grace_used_week DATE;

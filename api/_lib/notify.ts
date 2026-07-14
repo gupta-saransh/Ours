@@ -13,7 +13,8 @@ export type NotificationKind =
   | 'prompt'
   | 'capsule'
   | 'date'
-  | 'wishlist';
+  | 'wishlist'
+  | 'comment';
 
 /**
  * The notification service: every meaningful action lands in the

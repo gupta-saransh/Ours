@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -18,8 +18,10 @@ import { successHaptic } from '@/lib/haptics';
 import { AppPressable, Card, Empty, ErrorState, Screen, Skeleton, TextField } from '@/components/kit';
 import { Sheet } from '@/components/Sheet';
 import { EmojiPicker } from '@/components/EmojiPicker';
+import { LockBadge } from '@/components/LockBadge';
 import { colors, radius, sp, text } from '@/theme';
 import { formatDay, formatTime } from '@/lib/format';
+import { useComposeParam } from '@/lib/useComposeParam';
 
 interface Note {
   id: string;
@@ -52,6 +54,10 @@ export default function LoveNotes() {
   const [sealOpen, setSealOpen] = useState(false);
   const [sealDate, setSealDate] = useState('');
   const [reveal, setReveal] = useState<Note | null>(null);
+  const inputRef = useRef<TextInput>(null);
+
+  // Opened from the universal add button: focus the note composer.
+  useComposeParam(() => inputRef.current?.focus());
 
   const load = useCallback(async () => {
     setFailed(false);
@@ -264,6 +270,7 @@ export default function LoveNotes() {
               <Lock size={18} color={sealOpen ? colors.accent : colors.ink} strokeWidth={1.75} />
             </Pressable>
             <TextInput
+              ref={inputRef}
               value={draft}
               onChangeText={setDraft}
               placeholder={partner ? `Write a note for ${partner.display_name}...` : 'Write a note...'}
@@ -280,6 +287,7 @@ export default function LoveNotes() {
             </AppPressable>
           </View>
           {emojiOpen && <EmojiPicker onPick={(e) => setDraft((d) => d + e)} />}
+          <LockBadge style={{ marginTop: sp.sm, alignSelf: 'center' }} />
         </View>
       </KeyboardAvoidingView>
 

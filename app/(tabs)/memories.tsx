@@ -15,7 +15,7 @@ import {
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { ChevronLeft, ChevronRight, Lock, Trash2 } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, Lock, Trash2, X } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
@@ -35,8 +35,11 @@ import {
   TextField,
 } from '@/components/kit';
 import { Sheet } from '@/components/Sheet';
+import { LockBadge } from '@/components/LockBadge';
+import { MemoryComments } from '@/components/MemoryComments';
 import { colors, radius, sp, text } from '@/theme';
 import { formatDay } from '@/lib/format';
+import { useComposeParam } from '@/lib/useComposeParam';
 
 interface Memory {
   id: string;
@@ -67,6 +70,9 @@ export default function Memories() {
   const [view, setView] = useState<'calendar' | 'timeline'>('timeline');
   const [composerDate, setComposerDate] = useState<string | null>(null);
   const [viewer, setViewer] = useState<Memory | null>(null);
+
+  // Opened from the universal add button: compose a memory dated today.
+  useComposeParam(() => setComposerDate(new Date().toISOString().slice(0, 10)));
 
   const load = useCallback(async () => {
     setFailed(false);
@@ -515,6 +521,7 @@ function MemoryComposer({
         disabled={note.trim().length === 0}
       />
       <SecondaryButton title="Not now" onPress={onClose} style={{ marginTop: sp.md }} />
+      <LockBadge style={{ marginTop: sp.base, alignSelf: 'center' }} />
     </Sheet>
   );
 }
@@ -577,46 +584,54 @@ function RevealViewer({
 
   return (
     <Modal visible animationType="fade" transparent onRequestClose={onClose}>
-      <Pressable style={styles.viewerBackdrop} onPress={onBackdrop}>
-        <View style={styles.viewerBody}>
-          {/* Keep taps on the delete controls from bubbling to the backdrop
-              (which would close/cancel on web where clicks propagate). */}
-          <Pressable style={styles.viewerBar} onPress={(e) => e.stopPropagation()}>
-            {deleting ? (
-              <ActivityIndicator size="small" color={colors.onSealed} />
-            ) : confirming ? (
-              <View style={styles.confirmRow}>
-                <Text style={styles.confirmLabel}>Delete?</Text>
-                <SecondaryButton
-                  title="Yes, delete"
-                  destructive
-                  onPress={doDelete}
-                  style={styles.confirmButton}
-                />
-              </View>
-            ) : (
-              <IconButton onPress={() => setConfirming(true)}>
-                <Trash2 size={20} color={colors.onSealed} strokeWidth={1.75} />
+      <View style={styles.viewerBackdrop}>
+        {/* Tap the dark area around the content to close (cancels a pending
+            confirm first). The content sits above this in the scroll view. */}
+        <Pressable style={StyleSheet.absoluteFill} onPress={onBackdrop} />
+        <ScrollView
+          style={styles.viewerScroll}
+          contentContainerStyle={styles.viewerScrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.viewerBody}>
+            <View style={styles.viewerBar}>
+              <IconButton onPress={onClose}>
+                <X size={20} color={colors.onSealed} strokeWidth={1.75} />
               </IconButton>
-            )}
-          </Pressable>
-          {isReveal && <Text style={styles.viewerSeal}>✦ ✦</Text>}
-          {memory.has_photo ? (
-            photo ? (
-              <Image source={{ uri: photo }} style={styles.viewerPhoto} contentFit="contain" transition={150} />
-            ) : memory.thumb_data ? (
-              <Image source={{ uri: memory.thumb_data }} style={styles.viewerPhoto} contentFit="contain" />
-            ) : (
-              <ActivityIndicator size="small" color={colors.onSealed} />
-            )
-          ) : null}
-          <Text style={styles.viewerNote}>{memory.note}</Text>
-          <Text style={styles.viewerMeta}>
-            {memory.author_name} · {formatDay(memory.memory_date)}
-            {memory.sealed_until ? ` · sealed ${formatDay(memory.created_at)}` : ''}
-          </Text>
-        </View>
-      </Pressable>
+              <View style={{ flex: 1 }} />
+              {deleting ? (
+                <ActivityIndicator size="small" color={colors.onSealed} />
+              ) : confirming ? (
+                <View style={styles.confirmRow}>
+                  <Text style={styles.confirmLabel}>Delete?</Text>
+                  <SecondaryButton title="Yes, delete" destructive onPress={doDelete} style={styles.confirmButton} />
+                </View>
+              ) : (
+                <IconButton onPress={() => setConfirming(true)}>
+                  <Trash2 size={20} color={colors.onSealed} strokeWidth={1.75} />
+                </IconButton>
+              )}
+            </View>
+            {isReveal && <Text style={styles.viewerSeal}>✦ ✦</Text>}
+            {memory.has_photo ? (
+              photo ? (
+                <Image source={{ uri: photo }} style={styles.viewerPhoto} contentFit="contain" transition={150} />
+              ) : memory.thumb_data ? (
+                <Image source={{ uri: memory.thumb_data }} style={styles.viewerPhoto} contentFit="contain" />
+              ) : (
+                <ActivityIndicator size="small" color={colors.onSealed} />
+              )
+            ) : null}
+            <Text style={styles.viewerNote}>{memory.note}</Text>
+            <Text style={styles.viewerMeta}>
+              {memory.author_name} · {formatDay(memory.memory_date)}
+              {memory.sealed_until ? ` · sealed ${formatDay(memory.created_at)}` : ''}
+            </Text>
+            <MemoryComments memoryId={memory.id} myId={myId} />
+          </View>
+        </ScrollView>
+      </View>
     </Modal>
   );
 }
@@ -757,10 +772,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(28, 18, 12, 0.92)',
     alignItems: 'center',
-    justifyContent: 'center',
-    padding: sp.xl,
   },
-  viewerBody: { width: '100%', maxWidth: 720, alignItems: 'center' },
+  viewerScroll: { flex: 1, width: '100%', maxWidth: 720, alignSelf: 'center' },
+  viewerScrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: sp.xl,
+    paddingVertical: sp.xl,
+  },
+  viewerBody: { width: '100%', alignItems: 'center' },
   viewerBar: {
     width: '100%',
     minHeight: 40,

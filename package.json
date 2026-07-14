@@ -10,6 +10,7 @@
     "ios": "expo start --ios",
     "migrate": "tsx scripts/migrate.ts",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "build:web": "expo export --platform web"
   },
   "dependencies": {
@@ -51,6 +52,7 @@
     "@types/web-push": "^3.6.4",
     "@vercel/node": "^5.1.14",
     "tsx": "^4.19.3",
-    "typescript": "~5.8.3"
+    "typescript": "~5.8.3",
+    "vitest": "^2.1.9"
   }
 }

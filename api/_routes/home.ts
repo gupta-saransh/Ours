@@ -1,10 +1,11 @@
 import { one, q } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
+import { readField } from '../_lib/envelope';
 import { route } from '../_lib/respond';
 import { promptStateFor } from './prompts';
 import { computeReflection } from './reflection';
 
-const RESURFACE_COLUMNS = `id, thumb_data, note,
+const RESURFACE_COLUMNS = `id, thumb_data, note, note_ct,
   COALESCE(memory_date, created_at::DATE)::STRING AS memory_date`;
 
 /**
@@ -49,7 +50,7 @@ export default route(['GET'], async (req, res) => {
         [cid]
       ),
       one(
-        `SELECT n.id, n.body, n.created_at, u.display_name AS author_name
+        `SELECT n.id, n.body, n.body_ct, n.created_at, u.display_name AS author_name
          FROM love_notes n JOIN users u ON u.id = n.author_id
          WHERE n.couple_id = $1 AND n.pinned = true ORDER BY n.created_at DESC LIMIT 1`,
         [cid]
@@ -57,7 +58,7 @@ export default route(['GET'], async (req, res) => {
       one<{ notifications_seen_at: string }>('SELECT notifications_seen_at FROM users WHERE id = $1', [user.id]),
       promptStateFor(cid, user.id),
       one(
-        `SELECT id, title, location, proposed_for::STRING AS proposed_for FROM date_proposals
+        `SELECT id, title, title_ct, location, location_ct, proposed_for::STRING AS proposed_for FROM date_proposals
          WHERE couple_id = $1 AND status = 'accepted' AND proposed_for >= now()::DATE
            AND proposed_for < now()::DATE + 30
          ORDER BY proposed_for ASC LIMIT 1`,
@@ -72,13 +73,42 @@ export default route(['GET'], async (req, res) => {
     [cid, user.id, seen?.notifications_seen_at ?? new Date(0).toISOString()]
   );
 
-  const resurfaced = yearAgo
+  const picked = yearAgo
     ? { ...yearAgo, tag: 'One year ago today' }
     : monthAgo
       ? { ...monthAgo, tag: 'One month ago today' }
       : older
         ? { ...older, tag: 'From your story' }
         : null;
+
+  // Decrypt the couple-authored free text (envelope.ts) and drop the raw
+  // ciphertext columns from the response.
+  let resurfaced = null as Record<string, unknown> | null;
+  if (picked) {
+    const { note_ct, note, ...rest } = picked as Record<string, unknown> & { note_ct?: Buffer | null; note?: string };
+    resurfaced = { ...rest, note: (await readField(cid, note_ct, note ?? '')) ?? '' };
+  }
+
+  let pinnedNoteOut = null as Record<string, unknown> | null;
+  if (pinnedNote) {
+    const { body_ct, body, ...rest } = pinnedNote as Record<string, unknown> & { body_ct?: Buffer | null; body?: string };
+    pinnedNoteOut = { ...rest, body: (await readField(cid, body_ct, body ?? '')) ?? '' };
+  }
+
+  let upcomingDateOut = null as Record<string, unknown> | null;
+  if (upcomingDate) {
+    const { title_ct, title, location_ct, location, ...rest } = upcomingDate as Record<string, unknown> & {
+      title_ct?: Buffer | null;
+      title?: string;
+      location_ct?: Buffer | null;
+      location?: string | null;
+    };
+    upcomingDateOut = {
+      ...rest,
+      title: (await readField(cid, title_ct, title ?? '')) ?? '',
+      location: (await readField(cid, location_ct, location ?? null)) ?? location ?? null,
+    };
+  }
 
   res.status(200).json({
     couple,
@@ -87,10 +117,10 @@ export default route(['GET'], async (req, res) => {
     milestones,
     resurfaced,
     bucket,
-    pinnedNote: pinnedNote ?? null,
+    pinnedNote: pinnedNoteOut,
     unseen: unseenRow?.n ?? 0,
     prompt,
-    upcomingDate: upcomingDate ?? null,
+    upcomingDate: upcomingDateOut,
     isSunday,
     reflection,
   });

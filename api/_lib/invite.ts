@@ -1,5 +1,6 @@
 import { randomInt } from 'node:crypto';
 import { one } from './db';
+import { freshWrappedDek } from './envelope';
 
 // No 0/O/1/I; codes get read aloud between partners.
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -15,12 +16,13 @@ export function makeCode(): string {
  * pairing is optional. Retries on the (rare) invite-code collision.
  */
 export async function createCoupleForUser(userId: string): Promise<{ id: string; invite_code: string }> {
+  const wrappedDek = freshWrappedDek(); // null when encryption is disabled
   let couple;
   for (let attempt = 0; attempt < 5 && !couple; attempt++) {
     try {
       couple = await one<{ id: string; invite_code: string }>(
-        'INSERT INTO couples (invite_code) VALUES ($1) RETURNING id, invite_code',
-        [makeCode()]
+        'INSERT INTO couples (invite_code, wrapped_dek) VALUES ($1, $2) RETURNING id, invite_code',
+        [makeCode(), wrappedDek]
       );
     } catch {
       // collision, try a fresh code

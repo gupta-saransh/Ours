@@ -10,6 +10,8 @@ import coupleJoin from './_routes/couple-join';
 import coupleGet from './_routes/couple-get';
 import memories from './_routes/memories';
 import memoryItem from './_routes/memory-item';
+import memoryComments from './_routes/memory-comments';
+import commentItem from './_routes/comment-item';
 import notes from './_routes/notes';
 import noteItem from './_routes/note-item';
 import milestones from './_routes/milestones';
@@ -52,6 +54,8 @@ const routes: Partial<Record<string, Handler>> = {
   couple: coupleGet,
   memories,
   'memories/:id': memoryItem,
+  comments: memoryComments,
+  'comments/:id': commentItem,
   notes,
   'notes/:id': noteItem,
   milestones,

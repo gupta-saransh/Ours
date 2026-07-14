@@ -6,7 +6,13 @@
       "Bash(npx tsc *)",
       "Bash(cd \"d:/Coding/NewProjects/RelationshipHQ\" && rm \"api/[...path].ts\" && ls api)",
       "Bash(npx tsx *)",
-      "Bash(rm -rf dist)"
+      "Bash(rm -rf dist)",
+      "PowerShell(npm install -D vitest@^2.1.9 2>&1)",
+      "PowerShell(npx vitest run api/_routes/memory-item.test.ts 2>&1)",
+      "PowerShell(npx tsc --noEmit 2>&1)",
+      "PowerShell(if \\($?\\) { \"TYPECHECK OK\" })",
+      "PowerShell(npx vitest run 2>&1)",
+      "PowerShell(npx expo export --platform web 2>&1)"
     ],
     "additionalDirectories": [
       "d:\\Coding\\NewProjects\\RelationshipHQ\\api"

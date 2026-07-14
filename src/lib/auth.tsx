@@ -29,6 +29,7 @@ interface AuthContextValue {
   couple: Couple | null;
   partner: Partner | null;
   token: string | null;
+  encryption: boolean; // server confirms envelope encryption at rest is active
   signUp(email: string, password: string, displayName: string): Promise<void>;
   signIn(email: string, password: string): Promise<void>;
   signOut(): Promise<void>;
@@ -47,6 +48,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [couple, setCouple] = useState<Couple | null>(null);
   const [partner, setPartner] = useState<Partner | null>(null);
+  const [encryption, setEncryption] = useState(false);
 
   const applySession = useCallback(async (newToken: string, newUser: User) => {
     setAuthToken(newToken);
@@ -63,14 +65,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     setCouple(null);
     setPartner(null);
+    setEncryption(false);
     setStatus('signedOut');
   }, []);
 
   const refresh = useCallback(async () => {
-    const data = await api<{ user: User; couple: Couple | null; partner: Partner | null }>('/api/auth/me');
+    const data = await api<{ user: User; couple: Couple | null; partner: Partner | null; encryption?: boolean }>(
+      '/api/auth/me'
+    );
     setUser(data.user);
     setCouple(data.couple);
     setPartner(data.partner);
+    setEncryption(!!data.encryption);
   }, []);
 
   // Hydrate the session on launch.
@@ -99,6 +105,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       couple,
       partner,
       token,
+      encryption,
       async signUp(email, password, displayName) {
         const data = await api<{ token: string; user: User }>('/api/auth/signup', {
           method: 'POST',
@@ -136,7 +143,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(data.user);
       },
     }),
-    [status, user, couple, partner, token, applySession, clearSession, refresh]
+    [status, user, couple, partner, token, encryption, applySession, clearSession, refresh]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

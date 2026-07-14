@@ -2,6 +2,7 @@ import { one } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
 import { publish } from '../_lib/ably';
 import { notify } from '../_lib/notify';
+import { readField } from '../_lib/envelope';
 import { route, HttpError } from '../_lib/respond';
 
 /**
@@ -40,11 +41,12 @@ export default route(['GET', 'PATCH', 'DELETE'], async (req, res) => {
       await publish(user.couple_id, 'capsule.opened', { id, kind: 'memory', by: user.id });
       await notify(user.couple_id, user.id, 'capsule', `${user.display_name} opened your time capsule`);
     }
-    const row = await one<{ photo_data: string | null; note: string }>(
-      'SELECT photo_data, note FROM memories WHERE id = $1',
+    const row = await one<{ photo_data: string | null; note: string; note_ct: Buffer | null }>(
+      'SELECT photo_data, note, note_ct FROM memories WHERE id = $1',
       [id]
     );
-    res.status(200).json({ photo_data: row?.photo_data ?? null, note: row?.note ?? '' });
+    const note = (await readField(user.couple_id, row?.note_ct, row?.note ?? '')) ?? '';
+    res.status(200).json({ photo_data: row?.photo_data ?? null, note });
     return;
   }
 

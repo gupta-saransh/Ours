@@ -19,8 +19,10 @@ import {
   TextField,
 } from '@/components/kit';
 import { Sheet } from '@/components/Sheet';
+import { LockBadge } from '@/components/LockBadge';
 import { colors, sp, text } from '@/theme';
 import { formatDay } from '@/lib/format';
+import { useComposeParam } from '@/lib/useComposeParam';
 
 interface Proposal {
   id: string;
@@ -47,6 +49,9 @@ export default function Dates() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [selected, setSelected] = useState<Proposal | null>(null);
   const [countering, setCountering] = useState(false);
+
+  // Opened from the universal add button.
+  useComposeParam(() => setComposerOpen(true));
 
   const load = useCallback(async () => {
     setFailed(false);
@@ -248,6 +253,7 @@ function ProposeSheet({
       />
       <FormError message={error} />
       <PrimaryButton title={counterOf ? 'Send counter' : 'Propose'} onPress={submit} loading={busy} disabled={!title.trim()} />
+      <LockBadge style={{ marginTop: sp.base, alignSelf: 'center' }} />
     </Sheet>
   );
 }
