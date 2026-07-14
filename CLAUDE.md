@@ -123,6 +123,7 @@ Direction: **aged love letters**. Parchment `#F4ECDD` ground, espresso ink `#332
 - Milestone dates are validated `YYYY-MM-DD` text fields (no native picker dependency).
 - Invite codes use `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (no 0/O/1/I).
 - Windows machine; PowerShell 5.1 has no `&&`; use the Bash tool for chained commands.
+- iOS Safari auto-inflates small text ("text size adjust"), which blew the 11px tab labels past the fixed-height tab bar and clipped them. `app/+html.tsx` sets `html { -webkit-text-size-adjust: 100% }`; the tab bar also pins `lineHeight: 14` + `tabBarAllowFontScaling: false`. Keep all three.
 
 ## Hard constraints from the user
 

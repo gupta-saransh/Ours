@@ -15,7 +15,7 @@ import { colors, font, text } from '@/theme';
 // Height of the interactive strip (icons + labels). The bar's background then
 // extends BELOW this by the bottom safe-area inset, so on an iPhone PWA the
 // parchment fills behind the home indicator while touch targets stay above it.
-const TAB_BAR_CONTENT_HEIGHT = 54;
+const TAB_BAR_CONTENT_HEIGHT = 58;
 
 export default function TabsLayout() {
   const { status } = useAuth();
@@ -59,7 +59,10 @@ export default function TabsLayout() {
                 },
             tabBarActiveTintColor: colors.surfaceSealed,
             tabBarInactiveTintColor: colors.inkMuted,
-            tabBarLabelStyle: { ...text.micro, textTransform: 'none' },
+            // Explicit lineHeight + no font scaling: label height must never
+            // exceed the fixed bar height (clipped labels otherwise).
+            tabBarLabelStyle: { ...text.micro, textTransform: 'none', lineHeight: 14 },
+            tabBarAllowFontScaling: false,
             sceneStyle: { backgroundColor: colors.surface },
           }}
         >

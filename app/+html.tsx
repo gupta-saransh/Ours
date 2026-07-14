@@ -46,6 +46,9 @@ export default function Root({ children }: PropsWithChildren) {
 // Parchment ground everywhere so the status bar area and any uncovered edge
 // match the app background instead of flashing white on launch.
 const bodyReset = `
+/* Stop iOS Safari from auto-inflating small text (it boosted the 11px tab
+   labels to ~2x, overflowing the fixed-height tab bar and clipping them). */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 html, body { background-color: #F4ECDD; }
 @media (prefers-color-scheme: dark) {
   html, body { background-color: #F4ECDD; }
