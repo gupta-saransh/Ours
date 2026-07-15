@@ -182,3 +182,7 @@ ALTER TABLE couples ADD COLUMN IF NOT EXISTS current_streak_days INT NOT NULL DE
 ALTER TABLE couples ADD COLUMN IF NOT EXISTS longest_streak_days INT NOT NULL DEFAULT 0;
 ALTER TABLE couples ADD COLUMN IF NOT EXISTS last_streak_date DATE;
 ALTER TABLE couples ADD COLUMN IF NOT EXISTS grace_used_week DATE;
+
+-- v7: appearance. The id of the client theme preset the user chose (each
+-- partner picks their own look; tokens live in src/theme.ts).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_preset STRING;

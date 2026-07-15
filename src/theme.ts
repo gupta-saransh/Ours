@@ -7,32 +7,195 @@
 
 import type { TextStyle } from 'react-native';
 
-export const colors = {
-  // semantic roles (preferred)
-  surface: '#F4ECDD',            // parchment ground
-  surfaceRaised: '#FCF7EB',      // paper cards
-  surfaceSealed: '#7E382C',      // oxblood, sealed capsules + prompt card
-  onSealed: 'rgba(249, 239, 220, 0.92)',
-  ink: '#33241C',                // espresso text
-  inkMuted: 'rgba(51, 36, 28, 0.68)',
-  inkFaint: 'rgba(51, 36, 28, 0.40)',
-  hairline: 'rgba(51, 36, 28, 0.12)',
-  accent: '#B8862F',             // ochre gold flourishes
-  positive: '#77743F',           // dry olive
-  danger: '#94301F',
+// ---------------------------------------------------------------------------
+// Theme presets. Five full palettes, all light, all the same aged-stationery
+// discipline; only the paper, ink, and seal change. Radius, spacing, type, and
+// motion never vary between presets.
+//
+// HOW SWITCHING WORKS: every screen bakes `colors` into module-scope
+// StyleSheet.create calls, so the palette must be decided before any module
+// evaluates. On web the chosen preset id sits in localStorage and is read
+// synchronously right here at bundle evaluation; picking a new preset persists
+// it and reloads the page once, which re-evaluates everything under the new
+// palette. Native (not deployed) always gets the default; a live ThemeProvider
+// refactor is the eventual native path.
+// ---------------------------------------------------------------------------
 
-  // legacy aliases kept while every screen migrates; do not use in new code
-  cream: '#F4ECDD',
-  inkSoft: 'rgba(51, 36, 28, 0.68)',
-  blush: '#D9B491',
-  blushSoft: '#EFE4CC',
-  rose: '#7E382C',
-  rosePressed: '#61281F',
-  gold: '#B8862F',
-  sage: '#77743F',
-  sageSoft: '#ECE8D5',
-  onRose: '#F9EFDC',
+export type ThemePresetId = 'parchment' | 'dusk' | 'meadow' | 'tide' | 'petal';
+
+interface PaletteSeed {
+  surface: string;       // ground
+  surfaceRaised: string; // cards
+  sealed: string;        // wax seal: primary buttons, sealed capsules
+  sealedPressed: string;
+  onSealedHex: string;   // light text on the seal color
+  onSealedRgb: string;   // same, as "r, g, b" for the 0.92 alpha variant
+  ink: string;
+  inkRgb: string;        // "r, g, b" for muted/faint/hairline alphas
+  accent: string;        // flourishes, section labels
+  positive: string;
+  positiveSoft: string;
+  blush: string;         // legacy warm mid-tone
+  blushSoft: string;
+}
+
+function makeColors(p: PaletteSeed) {
+  const inkA = (alpha: number) => `rgba(${p.inkRgb}, ${alpha})`;
+  return {
+    // semantic roles (preferred)
+    surface: p.surface,
+    surfaceRaised: p.surfaceRaised,
+    surfaceSealed: p.sealed,
+    onSealed: `rgba(${p.onSealedRgb}, 0.92)`,
+    ink: p.ink,
+    inkMuted: inkA(0.68),
+    inkFaint: inkA(0.40),
+    hairline: inkA(0.12),
+    accent: p.accent,
+    positive: p.positive,
+    danger: '#94301F',
+
+    // legacy aliases kept while every screen migrates; do not use in new code
+    cream: p.surface,
+    inkSoft: inkA(0.68),
+    blush: p.blush,
+    blushSoft: p.blushSoft,
+    rose: p.sealed,
+    rosePressed: p.sealedPressed,
+    gold: p.accent,
+    sage: p.positive,
+    sageSoft: p.positiveSoft,
+    onRose: p.onSealedHex,
+  };
+}
+
+const PALETTES: Record<ThemePresetId, ReturnType<typeof makeColors>> = {
+  // The original: parchment, espresso ink, oxblood seal, ochre gold.
+  parchment: makeColors({
+    surface: '#F4ECDD',
+    surfaceRaised: '#FCF7EB',
+    sealed: '#7E382C',
+    sealedPressed: '#61281F',
+    onSealedHex: '#F9EFDC',
+    onSealedRgb: '249, 239, 220',
+    ink: '#33241C',
+    inkRgb: '51, 36, 28',
+    accent: '#B8862F',
+    positive: '#77743F',
+    positiveSoft: '#ECE8D5',
+    blush: '#D9B491',
+    blushSoft: '#EFE4CC',
+  }),
+  dusk: makeColors({
+    surface: '#EFEAF2',
+    surfaceRaised: '#F9F5FB',
+    sealed: '#553A63',
+    sealedPressed: '#42294F',
+    onSealedHex: '#F6F0F9',
+    onSealedRgb: '246, 240, 249',
+    ink: '#302438',
+    inkRgb: '48, 36, 56',
+    accent: '#8E5B8A',
+    positive: '#6E7150',
+    positiveSoft: '#E7E1EC',
+    blush: '#C7A9CF',
+    blushSoft: '#E8DFEC',
+  }),
+  meadow: makeColors({
+    surface: '#EEF0E2',
+    surfaceRaised: '#F9FAF0',
+    sealed: '#4A5A33',
+    sealedPressed: '#384526',
+    onSealedHex: '#F2F6E7',
+    onSealedRgb: '242, 246, 231',
+    ink: '#2A3122',
+    inkRgb: '42, 49, 34',
+    accent: '#9B7B2E',
+    positive: '#77743F',
+    positiveSoft: '#E6E9D6',
+    blush: '#C9CBA3',
+    blushSoft: '#E9EBD3',
+  }),
+  tide: makeColors({
+    surface: '#E9F0EC',
+    surfaceRaised: '#F5FAF7',
+    sealed: '#2F5D57',
+    sealedPressed: '#234741',
+    onSealedHex: '#EEF6F3',
+    onSealedRgb: '238, 246, 243',
+    ink: '#233230',
+    inkRgb: '35, 50, 48',
+    accent: '#3E7E76',
+    positive: '#5E7A64',
+    positiveSoft: '#E1EBE6',
+    blush: '#A9C8C0',
+    blushSoft: '#DEEBE6',
+  }),
+  petal: makeColors({
+    surface: '#F6ECE8',
+    surfaceRaised: '#FCF5F2',
+    sealed: '#8C3A4B',
+    sealedPressed: '#6E2C3A',
+    onSealedHex: '#FAF0EC',
+    onSealedRgb: '250, 240, 236',
+    ink: '#3A2529',
+    inkRgb: '58, 37, 41',
+    accent: '#B26E4F',
+    positive: '#7A7248',
+    positiveSoft: '#EFE7DC',
+    blush: '#DBAFA6',
+    blushSoft: '#F1DFD9',
+  }),
 };
+
+// Picker metadata (Settings → Appearance).
+export const THEME_PRESETS: { id: ThemePresetId; name: string; line: string }[] = [
+  { id: 'parchment', name: 'Parchment', line: 'Aged love letters, the original' },
+  { id: 'dusk', name: 'Lavender dusk', line: 'Violet evenings, quiet hours' },
+  { id: 'meadow', name: 'Morning meadow', line: 'Green fields, early light' },
+  { id: 'tide', name: 'Sea glass', line: 'Cool water, soft edges' },
+  { id: 'petal', name: 'Pressed petals', line: 'A rose kept in a book' },
+];
+
+export const THEME_STORAGE_KEY = 'ours.theme';
+
+export function isThemePresetId(v: unknown): v is ThemePresetId {
+  return typeof v === 'string' && v in PALETTES;
+}
+
+/** Palette for a preset, for preview tiles that render in a non-active theme. */
+export function paletteFor(id: ThemePresetId) {
+  return PALETTES[id];
+}
+
+function activePresetId(): ThemePresetId {
+  // localStorage exists on web only; native and the static-export Node pass
+  // fall through to the default.
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const v = localStorage.getItem(THEME_STORAGE_KEY);
+      if (isThemePresetId(v)) return v;
+    }
+  } catch {}
+  return 'parchment';
+}
+
+/** Store the preset for the next bundle evaluation. Caller reloads the page. */
+export function persistThemePreset(id: ThemePresetId) {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(THEME_STORAGE_KEY, id);
+      // Read by the inline script in app/+html.tsx so the page background is
+      // right before the bundle loads (no parchment flash on other themes).
+      localStorage.setItem('ours.theme-bg', PALETTES[id].surface);
+    }
+  } catch {}
+}
+
+/** The preset the running bundle was evaluated under. */
+export const themePreset: ThemePresetId = activePresetId();
+
+export const colors = PALETTES[themePreset];
 
 export const font = {
   display: 'Fraunces_600SemiBold',

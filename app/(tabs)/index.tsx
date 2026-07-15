@@ -12,10 +12,11 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Image } from 'expo-image';
-import { Lock } from 'lucide-react-native';
+import { Flame, Lock } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { useToast } from '@/lib/toast';
 import { useCoupleEvent } from '@/lib/realtime';
 import { successHaptic } from '@/lib/haptics';
 import {
@@ -36,12 +37,21 @@ import { BellButton, NudgeButton, SettingsButton } from '@/components/HeaderActi
 import { colors, radius, sp, text } from '@/theme';
 import { countdownTo, daysSince, formatDay, nextOccurrence } from '@/lib/format';
 
+interface StreakState {
+  current: number;
+  longest: number;
+  countedToday: boolean;
+  atRisk: boolean;
+  graceUsed?: boolean;
+}
+
 interface PromptState {
   prompt: { prompt_date: string; text: string };
   myAnswer: string | null;
   partnerAnswer: string | null;
   partnerAnswered: boolean;
   bothAnswered: boolean;
+  streak?: StreakState;
 }
 
 interface HomeData {
@@ -54,6 +64,7 @@ interface HomeData {
   pinnedNote: { id: string; body: string; author_name: string } | null;
   prompt: PromptState;
   upcomingDate: { id: string; title: string; location: string | null; proposed_for: string } | null;
+  streak: StreakState;
   isSunday: boolean;
   reflection: {
     week_start: string;
@@ -67,6 +78,7 @@ interface HomeData {
 export default function Home() {
   const { user, encryption } = useAuth();
   const router = useRouter();
+  const toast = useToast();
   const { width } = useWindowDimensions();
   const wide = Platform.OS === 'web' && width >= 900;
   const [data, setData] = useState<HomeData | null>(null);
@@ -185,6 +197,14 @@ export default function Home() {
               since {formatDay(basis)}
               {upcoming[0] ? `  ·  ${upcoming[0].title} in ${countdownTo(upcoming[0].next, now).days} days` : ''}
             </Text>
+            {data.streak && data.streak.current >= 2 && (
+              <AppPressable onPress={() => router.push('/prompts')} style={styles.streakChip}>
+                <Flame size={13} color={colors.accent} strokeWidth={1.75} />
+                <Text style={[text.caption, { color: colors.inkMuted }]}>
+                  {data.streak.current} days in a row
+                </Text>
+              </AppPressable>
+            )}
           </View>
         </FadeIn>
 
@@ -221,6 +241,16 @@ export default function Home() {
                   </Text>
                 )}
                 <PrimaryButton inverted title="Answer" onPress={() => setAnswerOpen(true)} />
+                {data.streak?.atRisk && data.streak.current >= 2 && (
+                  <Text style={[text.caption, { color: colors.onSealed, textAlign: 'center', marginTop: sp.md }]}>
+                    Answer today to keep your {data.streak.current} day streak going.
+                  </Text>
+                )}
+                {data.streak && data.streak.current === 0 && data.streak.longest >= 3 && (
+                  <Text style={[text.caption, { color: colors.onSealed, textAlign: 'center', marginTop: sp.md }]}>
+                    You paused. Start again whenever.
+                  </Text>
+                )}
               </Card>
             ) : !data.prompt.bothAnswered ? (
               <Card>
@@ -239,6 +269,11 @@ export default function Home() {
                 <View style={styles.divider} />
                 <Text style={text.micro}>{data.partner?.display_name ?? 'Them'}</Text>
                 <Text style={text.bodySerif}>{data.prompt.partnerAnswer}</Text>
+                {data.streak && data.streak.countedToday && data.streak.current >= 2 && (
+                  <Text style={[text.caption, { marginTop: sp.md }]}>
+                    That makes {data.streak.current} days in a row. ♥
+                  </Text>
+                )}
               </Card>
             )}
           </Section>
@@ -381,7 +416,8 @@ export default function Home() {
         onClose={() => setAnswerOpen(false)}
         onSubmitted={(state) => {
           setAnswerOpen(false);
-          setData((d) => (d ? { ...d, prompt: state } : d));
+          setData((d) => (d ? { ...d, prompt: state, streak: state.streak ?? d.streak } : d));
+          if (state.streak?.graceUsed) toast.show('Grace day used. Streak continues.');
         }}
       />
     </Screen>
@@ -554,6 +590,18 @@ const styles = StyleSheet.create({
   heroDays: {
     textAlign: 'center',
     marginBottom: sp.sm,
+  },
+  streakChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.xs,
+    marginTop: sp.md,
+    paddingHorizontal: sp.md,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.surfaceRaised,
   },
   promptQuestion: {
     ...text.bodySerif,

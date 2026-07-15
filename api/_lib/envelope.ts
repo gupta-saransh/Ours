@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { one } from './db';
 
 /**
@@ -123,6 +123,25 @@ export function getDek(coupleId: string): Promise<Buffer | null> {
  */
 export function recryptBlob(fromDek: Buffer, toDek: Buffer, blob: Buffer): Buffer {
   return seal(toDek, unseal(fromDek, blob));
+}
+
+// Same lookalike-free alphabet the invite codes use; 32 chars, so one digest
+// byte mod 32 maps uniformly.
+const FINGERPRINT_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+/**
+ * A short human-comparable fingerprint of the couple's DEK ("seal code" in the
+ * UI): both partners see the same code, proof they sit under the same key. A
+ * one-way SHA-256 with a fixed context string, so it reveals nothing about the
+ * key itself. Null when encryption is disabled.
+ */
+export async function keyFingerprint(coupleId: string): Promise<string | null> {
+  const dek = await coupleDek(coupleId);
+  if (!dek) return null;
+  const digest = createHash('sha256').update('ours-seal-code-v1').update(dek).digest();
+  let code = '';
+  for (let i = 0; i < 8; i++) code += FINGERPRINT_ALPHABET[digest[i] % FINGERPRINT_ALPHABET.length];
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
 }
 
 /**

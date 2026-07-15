@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { Platform, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Lock } from 'lucide-react-native';
+import { Check, Lock } from 'lucide-react-native';
 import { useAuth } from '@/lib/auth';
 import { disableWebPush, enableWebPush } from '@/lib/push-web';
 import {
+  AppPressable,
   Card,
   FormError,
   PrimaryButton,
@@ -13,10 +14,21 @@ import {
   Section,
   TextField,
 } from '@/components/kit';
-import { colors, sp, text } from '@/theme';
+import {
+  colors,
+  font,
+  paletteFor,
+  persistThemePreset,
+  radius,
+  sp,
+  text,
+  THEME_PRESETS,
+  themePreset,
+  type ThemePresetId,
+} from '@/theme';
 
 export default function Settings() {
-  const { user, couple, partner, encryption, updateProfile, signOut, deleteAccount } = useAuth();
+  const { user, couple, partner, encryption, encryptionCode, updateProfile, signOut, deleteAccount } = useAuth();
   const router = useRouter();
   const [name, setName] = useState(user?.display_name ?? '');
   const [savingName, setSavingName] = useState(false);
@@ -55,6 +67,19 @@ export default function Settings() {
     } catch (err: any) {
       setError(err?.message ?? 'Something went wrong');
     }
+  };
+
+  // Presets bake into module-scope styles, so applying one is: persist the id
+  // (localStorage + account) and reload the page under the new palette.
+  const chooseTheme = async (id: ThemePresetId) => {
+    if (id === themePreset) return;
+    persistThemePreset(id);
+    try {
+      await updateProfile({ themePreset: id });
+    } catch {
+      // The local choice still applies; the account catches up next save.
+    }
+    if (typeof window !== 'undefined') window.location.reload();
   };
 
   const removeAccount = async () => {
@@ -137,6 +162,45 @@ export default function Settings() {
           </Card>
         </Section>
 
+        {/* Theme switching relies on a synchronous localStorage read at bundle
+            evaluation, which only exists on web (the deployed platform). */}
+        {Platform.OS === 'web' && (
+          <Section label="Appearance">
+            <Card>
+              <Text style={[text.caption, { marginBottom: sp.sm }]}>
+                Dress your space. This look is yours, your partner picks their own.
+              </Text>
+              {THEME_PRESETS.map((p, i) => {
+                const pal = paletteFor(p.id);
+                const active = p.id === themePreset;
+                return (
+                  <AppPressable key={p.id} onPress={() => chooseTheme(p.id)}>
+                    <View style={[styles.themeRow, i > 0 && styles.rowBorder]}>
+                      <View style={[styles.themeTile, { backgroundColor: pal.surface, borderColor: pal.hairline }]}>
+                        <View
+                          style={[
+                            styles.themeTileCard,
+                            { backgroundColor: pal.surfaceRaised, borderColor: pal.hairline },
+                          ]}
+                        >
+                          <Text style={[styles.themeTileAa, { color: pal.ink }]}>Aa</Text>
+                          <View style={[styles.themeTileSeal, { backgroundColor: pal.surfaceSealed }]} />
+                        </View>
+                        <View style={[styles.themeTileRule, { backgroundColor: pal.accent }]} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={text.body}>{p.name}</Text>
+                        <Text style={text.caption}>{p.line}</Text>
+                      </View>
+                      {active && <Check size={18} color={colors.accent} strokeWidth={2} />}
+                    </View>
+                  </AppPressable>
+                );
+              })}
+            </Card>
+          </Section>
+        )}
+
         <Section label="Privacy">
           <Card>
             <View style={styles.privacyHead}>
@@ -148,6 +212,18 @@ export default function Settings() {
                 ? 'Your memories, notes, prompts, and wishes are encrypted before they reach our database. If our systems were ever exposed, the contents would be unreadable without our keys. What you keep here stays between the two of you.'
                 : 'We’re turning on encryption at rest for your private moments. Once it’s live, your memories, notes, prompts, and wishes are encrypted before they reach our database, so their contents would be unreadable if our systems were ever exposed.'}
             </Text>
+            {encryption && encryptionCode && (
+              <View style={styles.sealRow}>
+                <View style={{ flex: 1, paddingRight: sp.base }}>
+                  <Text style={text.body}>Your seal code</Text>
+                  <Text style={text.caption}>
+                    Made from your space's encryption key. Open Settings on your partner's phone and this
+                    code reads the same there.
+                  </Text>
+                </View>
+                <Text style={styles.code}>{encryptionCode}</Text>
+              </View>
+            )}
           </Card>
         </Section>
 
@@ -193,6 +269,42 @@ const styles = StyleSheet.create({
     gap: sp.md,
   },
   rowBorder: { borderTopWidth: 1, borderTopColor: colors.hairline },
+  themeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.md,
+    paddingVertical: sp.md,
+  },
+  // Mini mock of a themed screen: ground, one raised card with serif ink and a
+  // wax-seal dot, one accent rule. Enough to read the palette at a glance.
+  themeTile: {
+    width: 64,
+    height: 48,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    padding: 6,
+    justifyContent: 'space-between',
+  },
+  themeTileCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  themeTileAa: { fontFamily: font.serif, fontSize: 11, lineHeight: 14 },
+  themeTileSeal: { width: 8, height: 8, borderRadius: 4 },
+  themeTileRule: { height: 2, borderRadius: 1, width: 24 },
+  sealRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: sp.base,
+    paddingTop: sp.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.hairline,
+  },
   code: {
     ...text.body,
     color: colors.surfaceSealed,

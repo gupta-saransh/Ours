@@ -13,16 +13,25 @@ interface Entry {
   answers: { user_id: string; text: string }[];
 }
 
+interface StreakState {
+  current: number;
+  longest: number;
+}
+
 /** Every prompt you both answered, newest first. */
 export default function Prompts() {
   const { user, partner } = useAuth();
   const [entries, setEntries] = useState<Entry[] | null>(null);
+  const [streak, setStreak] = useState<StreakState | null>(null);
   const [failed, setFailed] = useState(false);
 
   const load = useCallback(async () => {
     setFailed(false);
     const data = await api<{ entries: Entry[] }>('/api/prompt/history');
     setEntries(data.entries);
+    api<{ streak?: StreakState }>('/api/prompt/today')
+      .then((d) => setStreak(d.streak ?? null))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -55,6 +64,15 @@ export default function Prompts() {
         data={entries}
         keyExtractor={(e) => e.prompt_date}
         contentContainerStyle={styles.body}
+        ListHeaderComponent={
+          streak && streak.longest >= 2 ? (
+            <Text style={styles.streakLine}>
+              {streak.current >= 2
+                ? `♥ ${streak.current} days in a row · longest ${streak.longest}`
+                : `You paused. Start again whenever. Longest so far, ${streak.longest} days.`}
+            </Text>
+          ) : null
+        }
         ListEmptyComponent={<Empty line="No prompts answered together yet." />}
         renderItem={({ item }) => {
           const mine = item.answers.find((a) => a.user_id === user?.id);
@@ -96,5 +114,10 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: colors.hairline,
     marginVertical: sp.md,
+  },
+  streakLine: {
+    ...text.caption,
+    textAlign: 'center',
+    marginBottom: sp.lg,
   },
 });

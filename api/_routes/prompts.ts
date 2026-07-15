@@ -133,6 +133,92 @@ export async function todaysPrompt(): Promise<{ prompt_date: string; text: strin
   return row!;
 }
 
+// ---------------------------------------------------------------------------
+// Streak. A day counts when BOTH partners answered (the reveal moment). Days
+// are UTC, matching the prompt's own day boundary. One grace day per
+// Monday-to-Sunday week (the same weeks reflections use): a single missed day
+// keeps the streak alive; a longer gap, or a second miss in the same week,
+// starts over at one. The peak lives on in longest_streak_days.
+
+export interface StreakState {
+  current: number;
+  longest: number;
+  countedToday: boolean;
+  atRisk: boolean; // alive, but today has not been counted yet
+  graceUsed?: boolean;
+}
+
+function addDays(dateStr: string, n: number): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function mondayOf(dateStr: string): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  return addDays(dateStr, -((d.getUTCDay() + 6) % 7));
+}
+
+interface StreakRow {
+  current_streak_days: number;
+  longest_streak_days: number;
+  last_streak_date: string | null;
+  grace_used_week: string | null;
+}
+
+const STREAK_COLUMNS = `current_streak_days, longest_streak_days,
+  last_streak_date::STRING AS last_streak_date, grace_used_week::STRING AS grace_used_week`;
+
+/**
+ * Advance the streak for a revealed day. Idempotent per day, and the UPDATE's
+ * WHERE guard makes the both-answers-land-together race a harmless no-op.
+ */
+export async function advanceStreak(coupleId: string, today: string): Promise<StreakState | null> {
+  const row = await one<StreakRow>(`SELECT ${STREAK_COLUMNS} FROM couples WHERE id = $1`, [coupleId]);
+  if (!row || row.last_streak_date === today) return null;
+  const week = mondayOf(today);
+  const graceFree = !row.grace_used_week || row.grace_used_week < week;
+  let graceUsed = false;
+  let current = 1;
+  if (row.last_streak_date === addDays(today, -1)) {
+    current = row.current_streak_days + 1;
+  } else if (row.last_streak_date === addDays(today, -2) && graceFree) {
+    current = row.current_streak_days + 1;
+    graceUsed = true;
+  }
+  const longest = Math.max(current, row.longest_streak_days);
+  await one(
+    `UPDATE couples SET current_streak_days = $2, longest_streak_days = $3, last_streak_date = $4,
+       grace_used_week = COALESCE($5, grace_used_week)
+     WHERE id = $1 AND (last_streak_date IS NULL OR last_streak_date < $4)`,
+    [coupleId, current, longest, today, graceUsed ? week : null]
+  );
+  return { current, longest, countedToday: true, atRisk: false, graceUsed };
+}
+
+/**
+ * Read-only streak view. A lapsed streak displays as 0 without waiting for the
+ * next reveal to write the reset; the stored row is corrected lazily then.
+ */
+export async function streakStateFor(coupleId: string): Promise<StreakState> {
+  const row = await one<StreakRow>(`SELECT ${STREAK_COLUMNS} FROM couples WHERE id = $1`, [coupleId]);
+  if (!row || !row.last_streak_date || row.current_streak_days === 0) {
+    return { current: 0, longest: row?.longest_streak_days ?? 0, countedToday: false, atRisk: false };
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const graceFree = !row.grace_used_week || row.grace_used_week < mondayOf(today);
+  const alive =
+    row.last_streak_date === today ||
+    row.last_streak_date === addDays(today, -1) ||
+    (row.last_streak_date === addDays(today, -2) && graceFree);
+  return {
+    current: alive ? row.current_streak_days : 0,
+    longest: row.longest_streak_days,
+    countedToday: row.last_streak_date === today,
+    atRisk: alive && row.last_streak_date !== today,
+  };
+}
+
 interface Answer {
   user_id: string;
   text: string;
@@ -199,7 +285,11 @@ export default route(['GET', 'POST'], async (req, res) => {
   }
 
   if (req.method === 'GET') {
-    res.status(200).json(await promptStateFor(user.couple_id, user.id));
+    const [state, streak] = await Promise.all([
+      promptStateFor(user.couple_id, user.id),
+      streakStateFor(user.couple_id),
+    ]);
+    res.status(200).json({ ...state, streak });
     return;
   }
 
@@ -222,7 +312,9 @@ export default route(['GET', 'POST'], async (req, res) => {
     `SELECT count(*)::int AS n FROM daily_prompt_answers WHERE couple_id = $1 AND prompt_date = $2`,
     [user.couple_id, prompt.prompt_date]
   );
+  let streak: StreakState | null = null;
   if ((count?.n ?? 0) >= 2) {
+    streak = await advanceStreak(user.couple_id, prompt.prompt_date);
     await publish(user.couple_id, 'prompt.revealed', { prompt_date: prompt.prompt_date });
     await notify(user.couple_id, user.id, 'prompt', 'You both answered today’s prompt');
   } else {
@@ -230,5 +322,8 @@ export default route(['GET', 'POST'], async (req, res) => {
     await notify(user.couple_id, user.id, 'prompt', 'A new answer is waiting for yours');
   }
 
-  res.status(201).json(await promptStateFor(user.couple_id, user.id));
+  res.status(201).json({
+    ...(await promptStateFor(user.couple_id, user.id)),
+    streak: streak ?? (await streakStateFor(user.couple_id)),
+  });
 });

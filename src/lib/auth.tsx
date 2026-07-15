@@ -1,6 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { Platform } from 'react-native';
 import { api, setAuthToken } from './api';
 import { loadToken, saveToken } from './storage';
+import { isThemePresetId, persistThemePreset, themePreset } from '@/theme';
 
 export interface User {
   id: string;
@@ -8,6 +10,7 @@ export interface User {
   display_name: string;
   couple_id: string | null;
   notifications_enabled: boolean;
+  theme_preset: string | null;
 }
 
 export interface Couple {
@@ -30,6 +33,7 @@ interface AuthContextValue {
   partner: Partner | null;
   token: string | null;
   encryption: boolean; // server confirms envelope encryption at rest is active
+  encryptionCode: string | null; // "seal code": same for both partners, derived from the couple's key
   signUp(email: string, password: string, displayName: string): Promise<void>;
   signIn(email: string, password: string): Promise<void>;
   signOut(): Promise<void>;
@@ -37,7 +41,7 @@ interface AuthContextValue {
   refresh(): Promise<void>;
   createSpace(): Promise<Couple>;
   joinSpace(code: string): Promise<void>;
-  updateProfile(patch: { displayName?: string; notificationsEnabled?: boolean }): Promise<void>;
+  updateProfile(patch: { displayName?: string; notificationsEnabled?: boolean; themePreset?: string }): Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -49,6 +53,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [couple, setCouple] = useState<Couple | null>(null);
   const [partner, setPartner] = useState<Partner | null>(null);
   const [encryption, setEncryption] = useState(false);
+  const [encryptionCode, setEncryptionCode] = useState<string | null>(null);
 
   const applySession = useCallback(async (newToken: string, newUser: User) => {
     setAuthToken(newToken);
@@ -66,17 +71,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setCouple(null);
     setPartner(null);
     setEncryption(false);
+    setEncryptionCode(null);
     setStatus('signedOut');
   }, []);
 
   const refresh = useCallback(async () => {
-    const data = await api<{ user: User; couple: Couple | null; partner: Partner | null; encryption?: boolean }>(
-      '/api/auth/me'
-    );
+    const data = await api<{
+      user: User;
+      couple: Couple | null;
+      partner: Partner | null;
+      encryption?: boolean;
+      encryptionCode?: string | null;
+    }>('/api/auth/me');
     setUser(data.user);
     setCouple(data.couple);
     setPartner(data.partner);
     setEncryption(!!data.encryption);
+    setEncryptionCode(data.encryptionCode ?? null);
+    // Theme presets bake into module-scope styles at bundle evaluation, so an
+    // account preset chosen on another device applies here via one reload.
+    if (Platform.OS === 'web' && isThemePresetId(data.user.theme_preset) && data.user.theme_preset !== themePreset) {
+      persistThemePreset(data.user.theme_preset);
+      if (typeof window !== 'undefined') window.location.reload();
+    }
   }, []);
 
   // Hydrate the session on launch.
@@ -106,6 +123,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       partner,
       token,
       encryption,
+      encryptionCode,
       async signUp(email, password, displayName) {
         const data = await api<{ token: string; user: User }>('/api/auth/signup', {
           method: 'POST',
@@ -143,7 +161,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(data.user);
       },
     }),
-    [status, user, couple, partner, token, encryption, applySession, clearSession, refresh]
+    [status, user, couple, partner, token, encryption, encryptionCode, applySession, clearSession, refresh]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

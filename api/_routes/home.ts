@@ -2,7 +2,7 @@ import { one, q } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
 import { readField } from '../_lib/envelope';
 import { route } from '../_lib/respond';
-import { promptStateFor } from './prompts';
+import { promptStateFor, streakStateFor } from './prompts';
 import { computeReflection } from './reflection';
 
 const RESURFACE_COLUMNS = `id, thumb_data, note, note_ct,
@@ -20,7 +20,7 @@ export default route(['GET'], async (req, res) => {
 
   const isSunday = new Date().getUTCDay() === 0;
 
-  const [couple, partner, anniversary, milestones, yearAgo, monthAgo, older, bucket, pinnedNote, seen, prompt, upcomingDate, reflection] =
+  const [couple, partner, anniversary, milestones, yearAgo, monthAgo, older, bucket, pinnedNote, seen, prompt, upcomingDate, reflection, streak] =
     await Promise.all([
       one('SELECT id, invite_code, created_at FROM couples WHERE id = $1', [cid]),
       one('SELECT id, display_name FROM users WHERE couple_id = $1 AND id != $2', [cid, user.id]),
@@ -65,6 +65,7 @@ export default route(['GET'], async (req, res) => {
         [cid]
       ),
       isSunday ? computeReflection(cid) : Promise.resolve(null),
+      streakStateFor(cid),
     ]);
 
   const unseenRow = await one<{ n: number }>(
@@ -123,5 +124,6 @@ export default route(['GET'], async (req, res) => {
     upcomingDate: upcomingDateOut,
     isSunday,
     reflection,
+    streak,
   });
 });

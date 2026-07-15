@@ -37,6 +37,9 @@ export default function Root({ children }: PropsWithChildren) {
 
         <ScrollViewStyleReset />
         <style dangerouslySetInnerHTML={{ __html: bodyReset }} />
+        {/* Theme presets: paint the chosen theme's ground before the bundle
+            evaluates, so switching away from parchment does not flash it. */}
+        <script dangerouslySetInnerHTML={{ __html: themeBackground }} />
       </head>
       <body>{children}</body>
     </html>
@@ -53,4 +56,17 @@ html, body { background-color: #F4ECDD; }
 @media (prefers-color-scheme: dark) {
   html, body { background-color: #F4ECDD; }
 }
+`;
+
+// src/theme.ts writes 'ours.theme-bg' (the active preset's surface color)
+// whenever a preset is persisted.
+const themeBackground = `
+try {
+  var b = localStorage.getItem('ours.theme-bg');
+  if (b && /^#[0-9A-Fa-f]{6}$/.test(b)) {
+    var s = document.createElement('style');
+    s.textContent = 'html, body { background-color: ' + b + ' !important }';
+    document.head.appendChild(s);
+  }
+} catch (e) {}
 `;

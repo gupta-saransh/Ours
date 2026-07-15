@@ -12,7 +12,8 @@
       "PowerShell(npx tsc --noEmit 2>&1)",
       "PowerShell(if \\($?\\) { \"TYPECHECK OK\" })",
       "PowerShell(npx vitest run 2>&1)",
-      "PowerShell(npx expo export --platform web 2>&1)"
+      "PowerShell(npx expo export --platform web 2>&1)",
+      "Bash(npx vitest *)"
     ],
     "additionalDirectories": [
       "d:\\Coding\\NewProjects\\RelationshipHQ\\api"
