@@ -10,13 +10,13 @@ export interface User {
   display_name: string;
   couple_id: string | null;
   notifications_enabled: boolean;
-  theme_preset: string | null;
 }
 
 export interface Couple {
   id: string;
   invite_code: string;
   created_at: string;
+  theme_preset: string | null; // shared: either partner sets it, both wear it
 }
 
 export interface Partner {
@@ -88,10 +88,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setPartner(data.partner);
     setEncryption(!!data.encryption);
     setEncryptionCode(data.encryptionCode ?? null);
-    // Theme presets bake into module-scope styles at bundle evaluation, so an
-    // account preset chosen on another device applies here via one reload.
-    if (Platform.OS === 'web' && isThemePresetId(data.user.theme_preset) && data.user.theme_preset !== themePreset) {
-      persistThemePreset(data.user.theme_preset);
+    // The couple's shared preset bakes into module-scope styles at bundle
+    // evaluation, so a look either partner chose (on any device) applies here
+    // via one reload on the next app load.
+    const shared = data.couple?.theme_preset;
+    if (Platform.OS === 'web' && isThemePresetId(shared) && shared !== themePreset) {
+      persistThemePreset(shared);
       if (typeof window !== 'undefined') window.location.reload();
     }
   }, []);

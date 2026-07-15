@@ -1,5 +1,5 @@
 import { one } from '../_lib/db';
-import { requireUser, USER_COLUMNS, type SessionUser } from '../_lib/auth';
+import { requirePairedUser, USER_COLUMNS, type SessionUser } from '../_lib/auth';
 import { registerPushToken } from '../_lib/push';
 import { route, requireString, HttpError } from '../_lib/respond';
 
@@ -8,7 +8,7 @@ const THEME_PRESET_IDS = ['parchment', 'dusk', 'meadow', 'tide', 'petal'];
 
 /** PATCH /api/auth/profile — display name, notifications toggle, push token, theme. */
 export default route(['PATCH'], async (req, res) => {
-  const user = await requireUser(req);
+  const user = await requirePairedUser(req);
   const body = req.body ?? {};
 
   if (body.displayName !== undefined) {
@@ -26,7 +26,8 @@ export default route(['PATCH'], async (req, res) => {
     if (typeof body.themePreset !== 'string' || !THEME_PRESET_IDS.includes(body.themePreset)) {
       throw new HttpError(400, 'Unknown theme preset');
     }
-    await one(`UPDATE users SET theme_preset = $2 WHERE id = $1`, [user.id, body.themePreset]);
+    // The look is shared: one preset per couple, either partner may set it.
+    await one(`UPDATE couples SET theme_preset = $2 WHERE id = $1`, [user.couple_id, body.themePreset]);
   }
 
   const updated = await one<SessionUser>(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [user.id]);

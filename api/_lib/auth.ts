@@ -36,10 +36,9 @@ export interface SessionUser {
   display_name: string;
   couple_id: string | null;
   notifications_enabled: boolean;
-  theme_preset: string | null;
 }
 
-const USER_COLUMNS = 'id, email, display_name, couple_id, notifications_enabled, theme_preset';
+const USER_COLUMNS = 'id, email, display_name, couple_id, notifications_enabled';
 
 /** Verifies the Bearer token and loads the user fresh (couple_id must never be stale). */
 export async function requireUser(req: VercelRequest): Promise<SessionUser> {

@@ -10,7 +10,7 @@ export default route(['GET'], async (req, res) => {
   let encryptionCode: string | null = null;
   if (user.couple_id) {
     [couple, partner, encryptionCode] = await Promise.all([
-      one('SELECT id, invite_code, created_at FROM couples WHERE id = $1', [user.couple_id]),
+      one('SELECT id, invite_code, created_at, theme_preset FROM couples WHERE id = $1', [user.couple_id]),
       one('SELECT id, display_name FROM users WHERE couple_id = $1 AND id != $2', [user.couple_id, user.id]),
       keyFingerprint(user.couple_id),
     ]);

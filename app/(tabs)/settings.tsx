@@ -168,7 +168,7 @@ export default function Settings() {
           <Section label="Appearance">
             <Card>
               <Text style={[text.caption, { marginBottom: sp.sm }]}>
-                Dress your space. This look is yours, your partner picks their own.
+                Dress your space, for both of you. Your partner wears the new look next time they open Ours.
               </Text>
               {THEME_PRESETS.map((p, i) => {
                 const pal = paletteFor(p.id);
@@ -209,7 +209,7 @@ export default function Settings() {
             </View>
             <Text style={[text.body, { color: colors.inkMuted, marginTop: sp.sm }]}>
               {encryption
-                ? 'Your memories, notes, prompts, and wishes are encrypted before they reach our database. If our systems were ever exposed, the contents would be unreadable without our keys. What you keep here stays between the two of you.'
+                ? 'Your memories, notes, prompts, and wishes are encrypted before they reach our database. If our systems were ever exposed, the contents would be unreadable without your seal code. What you keep here stays between the two of you.'
                 : 'We’re turning on encryption at rest for your private moments. Once it’s live, your memories, notes, prompts, and wishes are encrypted before they reach our database, so their contents would be unreadable if our systems were ever exposed.'}
             </Text>
             {encryption && encryptionCode && (

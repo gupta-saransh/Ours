@@ -183,6 +183,10 @@ ALTER TABLE couples ADD COLUMN IF NOT EXISTS longest_streak_days INT NOT NULL DE
 ALTER TABLE couples ADD COLUMN IF NOT EXISTS last_streak_date DATE;
 ALTER TABLE couples ADD COLUMN IF NOT EXISTS grace_used_week DATE;
 
--- v7: appearance. The id of the client theme preset the user chose (each
--- partner picks their own look; tokens live in src/theme.ts).
+-- v7: appearance, first cut (per user). Superseded by v8; column kept per the
+-- additive-only rule but no longer read or written.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_preset STRING;
+
+-- v8: appearance is shared. One look per couple; when either partner picks a
+-- preset it applies to both (the other syncs on their next app load).
+ALTER TABLE couples ADD COLUMN IF NOT EXISTS theme_preset STRING;
