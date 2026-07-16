@@ -30,6 +30,8 @@ import pushSubscribe from './_routes/push-subscribe';
 import pushVapid from './_routes/push-vapid';
 import nudge from './_routes/nudge';
 import ablyToken from './_routes/ably-token';
+import adminAuth from './_routes/admin-auth';
+import adminStats from './_routes/admin-stats';
 
 type Handler = (req: VercelRequest, res: VercelResponse) => Promise<void>;
 
@@ -76,6 +78,8 @@ const routes: Partial<Record<string, Handler>> = {
   'push/vapid-public-key': pushVapid,
   nudge,
   'ably-token': ablyToken,
+  'admin/auth': adminAuth,
+  'admin/stats': adminStats,
 };
 
 function pathSegments(req: VercelRequest): string[] {
