@@ -34,7 +34,7 @@ export default function SignUp() {
           Start alone or together. You can invite your person any time.
         </Text>
 
-        <TextField label="Your name" value={name} onChangeText={setName} placeholder="Anisha" autoCapitalize="words" />
+        <TextField label="Your name" value={name} onChangeText={setName} placeholder="Your cute name!" autoCapitalize="words" />
         <TextField
           label="Email"
           value={email}

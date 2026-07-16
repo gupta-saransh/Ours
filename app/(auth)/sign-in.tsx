@@ -36,7 +36,7 @@ export default function SignIn() {
           label="Email"
           value={email}
           onChangeText={setEmail}
-          placeholder="you@example.com"
+          placeholder="you@ours.com"
           autoCapitalize="none"
           keyboardType="email-address"
           autoComplete="email"

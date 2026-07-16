@@ -16,6 +16,7 @@ import {
   Gift,
   Image as ImageIcon,
   Plus,
+  Star,
   StickyNote,
   type LucideIcon,
 } from 'lucide-react-native';
@@ -38,17 +39,17 @@ interface Action {
   path: string;
 }
 
-// Bottom-up: index 0 sits closest to the FAB. Four actions keep the column
-// short; milestones are added from the Home screen's own flow.
+// Bottom-up: index 0 sits closest to the FAB.
 const ACTIONS: Action[] = [
+  { key: 'milestone', label: 'Add a milestone', Icon: Star, path: '/milestones' },
   { key: 'date', label: 'Propose a date', Icon: CalendarHeart, path: '/dates' },
   { key: 'wishlist', label: 'Add wishlist item', Icon: Gift, path: '/wishlist' },
   { key: 'note', label: 'Add note', Icon: StickyNote, path: '/notes' },
   { key: 'memory', label: 'Add memory', Icon: ImageIcon, path: '/memories' },
 ];
 
-// Routes that show the FAB. Hidden elsewhere (Settings, Milestones list, etc.).
-const VISIBLE_ON = new Set(['/', '/memories', '/notes', '/dates', '/wishlist']);
+// Routes that show the FAB. Hidden elsewhere (Settings, Notifications, etc.).
+const VISIBLE_ON = new Set(['/', '/memories', '/notes', '/dates', '/wishlist', '/milestones']);
 
 const FAB_SIZE = 56;
 const FAB_RIGHT = sp.xl; // gap from the screen's right edge

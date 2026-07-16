@@ -207,6 +207,9 @@ export default function Home() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const addMilestone = () =>
+    router.navigate({ pathname: '/milestones', params: { compose: String(Date.now()) } });
+
   const addBucketItem = async () => {
     const title = newItem.trim();
     if (!title) return;
@@ -258,13 +261,26 @@ export default function Home() {
                 <Text style={styles.monogramText}>{initials || '✦'}</Text>
               </View>
             )}
-            <Text style={[text.display, styles.heroDays]}>
-              {days.toLocaleString()} {days === 1 ? 'day' : 'days'} of you two
-            </Text>
-            <Text style={[text.caption, { textAlign: 'center' }]}>
-              since {formatDay(basis)}
-              {upcoming[0] ? `  ·  ${upcoming[0].title} in ${countdownTo(upcoming[0].next, now).days} days` : ''}
-            </Text>
+            {data.daysBasis ? (
+              <>
+                <Text style={[text.display, styles.heroDays]}>
+                  {days.toLocaleString()} {days === 1 ? 'day' : 'days'} of you two
+                </Text>
+                <Text style={[text.caption, { textAlign: 'center' }]}>
+                  since {formatDay(basis)}
+                  {upcoming[0] ? `  ·  ${upcoming[0].title} in ${countdownTo(upcoming[0].next, now).days} days` : ''}
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={[text.display, styles.heroDays]}>Here is to you two ♥</Text>
+                <AppPressable onPress={addMilestone} style={{ marginTop: sp.xs }}>
+                  <Text style={[text.caption, { color: colors.accent, textAlign: 'center' }]}>
+                    + Add the day it began, and we will start counting
+                  </Text>
+                </AppPressable>
+              </>
+            )}
             {data.streak && data.streak.current >= 1 && (
               <AppPressable onPress={() => router.push('/prompts')} style={styles.streakChip}>
                 <Flame size={13} color={colors.accent} strokeWidth={1.75} />
@@ -449,11 +465,22 @@ export default function Home() {
           </FadeIn>
         )}
 
-        {upcoming.length > 0 && (
-          <FadeIn delay={160}>
-            <Section label="Coming up soon">
-              <Card>
-                {upcoming.map((m, i) => {
+        <FadeIn delay={160}>
+          <Section
+            label="Coming up soon"
+            trailing={
+              <Pressable onPress={addMilestone} hitSlop={8}>
+                <Text style={[text.caption, { color: colors.accent }]}>+ Add</Text>
+              </Pressable>
+            }
+          >
+            <Card>
+              {upcoming.length === 0 ? (
+                <Text style={text.caption}>
+                  No dates marked yet. Add an anniversary or birthday to start the countdown.
+                </Text>
+              ) : (
+                upcoming.map((m, i) => {
                   const c = countdownTo(m.next, now);
                   return (
                     <AppPressable key={m.id} onPress={() => router.push('/milestones')}>
@@ -466,11 +493,11 @@ export default function Home() {
                       </View>
                     </AppPressable>
                   );
-                })}
-              </Card>
-            </Section>
-          </FadeIn>
-        )}
+                })
+              )}
+            </Card>
+          </Section>
+        </FadeIn>
 
         <FadeIn delay={200}>
           <Section label="Our list">
