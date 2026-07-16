@@ -10,7 +10,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { Lock, Smile, Sparkles, Keyboard as KeyboardIcon } from 'lucide-react-native';
+import { Lock, Pin, Smile, Sparkles, Trash2, Keyboard as KeyboardIcon } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
@@ -240,37 +240,36 @@ export default function LoveNotes() {
               name={item.author_name}
               size={22}
             />
-            <Text style={text.caption}>
+            <Text style={[text.caption, { flexShrink: 1 }]} numberOfLines={1}>
               {mine ? 'You' : item.author_name} · {relativeTime(item.created_at)}
             </Text>
           </View>
-          {mine ? (
-            lovedByPartner ? (
-              <Text style={[text.caption, { color: colors.surfaceSealed, fontWeight: '600' }]}>
-                ♥ {partner?.display_name ?? 'They'} loved this
-              </Text>
-            ) : null
-          ) : (
-            <Pressable onPress={() => toggleHeart(item)} hitSlop={8} style={styles.heartButton}>
-              <Text style={[styles.heartGlyph, item.hearted_by_me && { color: colors.surfaceSealed }]}>
-                {item.hearted_by_me ? '♥' : '♡'}
-              </Text>
+          <View style={styles.noteTools}>
+            <Pressable onPress={() => togglePin(item)} hitSlop={8}>
+              <Pin
+                size={15}
+                color={item.pinned ? colors.accent : colors.inkFaint}
+                fill={item.pinned ? colors.accent : 'none'}
+                strokeWidth={1.75}
+              />
             </Pressable>
-          )}
-        </View>
-        <View style={styles.noteActions}>
-          <Pressable onPress={() => togglePin(item)} hitSlop={8}>
-            <Text style={[text.micro, { color: colors.accent, textTransform: 'none', letterSpacing: 0.2 }]}>
-              {item.pinned ? 'Unpin' : '✦ Keep on top'}
-            </Text>
-          </Pressable>
-          {mine && (
-            <Pressable onPress={() => remove(item)} hitSlop={8}>
-              <Text style={[text.micro, { color: colors.inkFaint, textTransform: 'none', letterSpacing: 0.2 }]}>
-                Remove
-              </Text>
-            </Pressable>
-          )}
+            {mine && (
+              <Pressable onPress={() => remove(item)} hitSlop={8}>
+                <Trash2 size={15} color={colors.inkFaint} strokeWidth={1.75} />
+              </Pressable>
+            )}
+            {mine ? (
+              lovedByPartner ? (
+                <Text style={[text.caption, { color: colors.surfaceSealed, fontWeight: '600' }]}>♥ Loved</Text>
+              ) : null
+            ) : (
+              <Pressable onPress={() => toggleHeart(item)} hitSlop={8} style={styles.heartButton}>
+                <Text style={[styles.heartGlyph, item.hearted_by_me && { color: colors.surfaceSealed }]}>
+                  {item.hearted_by_me ? '♥' : '♡'}
+                </Text>
+              </Pressable>
+            )}
+          </View>
         </View>
       </Card>
     );
@@ -288,11 +287,7 @@ export default function LoveNotes() {
         keyboardVerticalOffset={90}
       >
         <ScrollView contentContainerStyle={[styles.list, wide && { maxWidth: 900 }]} keyboardShouldPersistTaps="handled">
-          <Composer
-            inputRef={inputRef}
-            partnerName={partner?.display_name ?? null}
-            onCreated={onCreated}
-          />
+          <Composer inputRef={inputRef} onCreated={onCreated} />
 
           {notes.length === 0 ? (
             <Empty line={`The wall is empty. The first note will be waiting${partner ? ` for ${partner.display_name}` : ''}.`} />
@@ -331,11 +326,9 @@ export default function LoveNotes() {
  */
 function Composer({
   inputRef,
-  partnerName,
   onCreated,
 }: {
   inputRef: React.RefObject<TextInput | null>;
-  partnerName: string | null;
   onCreated: (note: Note) => void;
 }) {
   const [draft, setDraft] = useState('');
@@ -431,10 +424,7 @@ function Composer({
         </View>
         {emojiOpen && <EmojiPicker onPick={(e) => setDraft((d) => d + e)} />}
       </Card>
-      <Text style={[text.caption, { textAlign: 'center', marginTop: sp.sm }]}>
-        {partnerName ? `It will be waiting on ${partnerName}'s wall.` : 'It will be waiting on your shared wall.'}
-      </Text>
-      <LockBadge style={{ marginTop: sp.xs, alignSelf: 'center' }} />
+      <LockBadge style={{ marginTop: sp.sm, alignSelf: 'center' }} />
     </View>
   );
 }
@@ -517,14 +507,9 @@ const styles = StyleSheet.create({
     gap: sp.md,
   },
   noteAuthor: { flexDirection: 'row', alignItems: 'center', gap: sp.sm, flex: 1 },
+  noteTools: { flexDirection: 'row', alignItems: 'center', gap: sp.base },
   heartButton: { paddingHorizontal: sp.xs },
   heartGlyph: { fontSize: 19, color: colors.inkMuted },
-  noteActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: sp.base,
-    marginTop: sp.sm,
-  },
   revealSeal: {
     fontSize: 22,
     color: colors.accent,

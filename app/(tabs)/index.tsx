@@ -12,13 +12,14 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Image } from 'expo-image';
-import { Flame, Lock } from 'lucide-react-native';
+import { ChevronDown, Flame, Lock } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useToast } from '@/lib/toast';
 import { useCoupleEvent } from '@/lib/realtime';
-import { successHaptic } from '@/lib/haptics';
+import { successHaptic, tapHaptic } from '@/lib/haptics';
+import { showHearts } from '@/components/HeartsRain';
 import {
   AppPressable,
   Card,
@@ -61,7 +62,32 @@ interface StoryState {
   title: string;
   chapterStart: number;
   nextAt: number | null;
+  counts: Record<string, number>;
 }
+
+// Client copies of the server's story tables (api/_routes/home.ts); keep in sync.
+const CHAPTERS: { at: number; title: string }[] = [
+  { at: 0, title: 'First Glance' },
+  { at: 15, title: 'Ink Still Wet' },
+  { at: 40, title: 'Turning Pages' },
+  { at: 80, title: 'Love Letters' },
+  { at: 140, title: 'Keepsakes' },
+  { at: 220, title: 'Golden Hours' },
+  { at: 320, title: 'A Shared Shelf' },
+  { at: 450, title: 'The Long Song' },
+  { at: 620, title: 'A Thousand Pages' },
+  { at: 850, title: 'Ever After' },
+];
+
+const PAGE_SOURCES: { key: string; label: string; per: number }[] = [
+  { key: 'memories', label: 'memories', per: 5 },
+  { key: 'dates_done', label: 'dates you went on', per: 5 },
+  { key: 'answers', label: 'prompt answers', per: 3 },
+  { key: 'bucket_done', label: 'list items done', per: 3 },
+  { key: 'notes', label: 'notes', per: 2 },
+  { key: 'milestones', label: 'milestones', per: 2 },
+  { key: 'comments', label: 'comments', per: 1 },
+];
 
 interface HomeData {
   couple: { id: string; invite_code: string; created_at: string } | null;
@@ -75,6 +101,7 @@ interface HomeData {
   upcomingDate: { id: string; title: string; location: string | null; proposed_for: string } | null;
   streak: StreakState;
   story: StoryState;
+  nudged?: boolean;
   isSunday: boolean;
   reflection: {
     week_start: string;
@@ -97,11 +124,30 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
   const [newItem, setNewItem] = useState('');
   const [answerOpen, setAnswerOpen] = useState(false);
+  const [storyOpen, setStoryOpen] = useState(false);
+  const [chaptersOpen, setChaptersOpen] = useState(false);
+  const [chapterReveal, setChapterReveal] = useState<StoryState | null>(null);
+  const showeredRef = React.useRef(false);
 
   const load = useCallback(async () => {
     setFailed(false);
     const home = await api<HomeData>('/api/home');
     setData(home);
+    // A nudge arrived while you were away: rain hearts, once per open.
+    if (home.nudged && !showeredRef.current) {
+      showeredRef.current = true;
+      showHearts();
+    }
+    // Crossing into a new chapter earns the couple their little ceremony. The
+    // last celebrated chapter lives client-side (web localStorage; native
+    // skips quietly), so it fires once per device.
+    try {
+      if (typeof localStorage !== 'undefined' && home.story) {
+        const prev = Number(localStorage.getItem('ours.story-chapter') || '0');
+        if (prev > 0 && home.story.chapter > prev) setChapterReveal(home.story);
+        localStorage.setItem('ours.story-chapter', String(home.story.chapter));
+      }
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -303,19 +349,33 @@ export default function Home() {
           </Section>
         </FadeIn>
 
-        {/* Story chapter: the quiet meter of everything you two keep here */}
+        {/* Story chapter: the quiet meter of everything you two keep here.
+            Tap to unfold where the pages came from; "All chapters" opens the map. */}
         {data.story && (
           <FadeIn delay={100}>
             <Section label="Your story">
-              <Card>
+              <PressableCard
+                onPress={() => {
+                  tapHaptic();
+                  setStoryOpen((o) => !o);
+                }}
+              >
                 <View style={styles.rowBetween}>
                   <View style={{ flex: 1 }}>
                     <Text style={text.micro}>Chapter {data.story.chapter}</Text>
                     <Text style={[text.subtitle, { marginTop: 2 }]}>{data.story.title}</Text>
                   </View>
-                  <Text style={text.caption}>
-                    {data.story.pages.toLocaleString()} {data.story.pages === 1 ? 'page' : 'pages'}
-                  </Text>
+                  <View style={{ alignItems: 'flex-end', gap: sp.xs }}>
+                    <Text style={text.caption}>
+                      {data.story.pages.toLocaleString()} {data.story.pages === 1 ? 'page' : 'pages'}
+                    </Text>
+                    <ChevronDown
+                      size={16}
+                      color={colors.inkFaint}
+                      strokeWidth={1.75}
+                      style={storyOpen ? { transform: [{ rotate: '180deg' }] } : undefined}
+                    />
+                  </View>
                 </View>
                 <View style={styles.storyTrack}>
                   <View style={[styles.storyFill, { flex: storyProgress(data.story) }]} />
@@ -323,10 +383,34 @@ export default function Home() {
                 </View>
                 <Text style={[text.caption, { marginTop: sp.sm }]}>
                   {data.story.nextAt !== null
-                    ? `${data.story.nextAt - data.story.pages} pages to Chapter ${data.story.chapter + 1}. Every memory, note, and answered prompt writes one.`
-                    : 'The last chapter has no ending. Keep writing.'}
+                    ? `${data.story.nextAt - data.story.pages} pages to Chapter ${data.story.chapter + 1}.`
+                    : 'The last chapter has no ending.'}
                 </Text>
-              </Card>
+                {storyOpen && (
+                  <View style={styles.storyBreakdown}>
+                    {PAGE_SOURCES.map((s) => {
+                      const n = data.story.counts[s.key] ?? 0;
+                      return (
+                        <View key={s.key} style={styles.storySourceRow}>
+                          <Text style={[text.body, n === 0 && { color: colors.inkFaint }]}>
+                            {n} {s.label}
+                          </Text>
+                          <Text style={[text.caption, n === 0 && { color: colors.inkFaint }]}>
+                            {n * s.per} {n * s.per === 1 ? 'page' : 'pages'}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                    <Pressable
+                      onPress={() => setChaptersOpen(true)}
+                      hitSlop={8}
+                      style={{ alignSelf: 'center', marginTop: sp.md }}
+                    >
+                      <Text style={[text.caption, { color: colors.accent }]}>All chapters</Text>
+                    </Pressable>
+                  </View>
+                )}
+              </PressableCard>
             </Section>
           </FadeIn>
         )}
@@ -472,8 +556,67 @@ export default function Home() {
           if (state.streak?.graceUsed) toast.show('Grace day used. Streak continues.');
         }}
       />
+
+      {/* The chapter map: where you have been, where you are, what comes next */}
+      <Sheet visible={chaptersOpen} onClose={() => setChaptersOpen(false)} title="Your story">
+        {CHAPTERS.map((c, i) => {
+          const n = i + 1;
+          const now = n === data.story.chapter;
+          const done = n < data.story.chapter;
+          return (
+            <View key={c.at} style={styles.chapterRow}>
+              <Text style={[styles.chapterNum, done && { color: colors.accent }]}>{done ? '✦' : n}</Text>
+              <Text
+                style={[
+                  now ? text.subtitle : text.body,
+                  { flex: 1 },
+                  !done && !now && { color: colors.inkFaint },
+                ]}
+              >
+                {c.title}
+              </Text>
+              <Text style={[text.caption, !done && !now && { color: colors.inkFaint }]}>
+                {now ? `${data.story.pages} pages` : done ? '' : `at ${c.at}`}
+              </Text>
+            </View>
+          );
+        })}
+        <Text style={[text.caption, { textAlign: 'center', marginTop: sp.lg }]}>
+          Memories and dates write 5 pages. Prompts and list items, 3. Notes and milestones, 2. Comments, 1.
+        </Text>
+      </Sheet>
+
+      {/* Chapter-turn ceremony: shown once when the couple crosses a threshold */}
+      <Sheet visible={!!chapterReveal} onClose={() => setChapterReveal(null)} title="A new chapter" sealed>
+        {chapterReveal && (
+          <>
+            <Text style={styles.chapterSeal}>✦ ✦</Text>
+            <Text style={[text.micro, { color: colors.onSealed, textAlign: 'center' }]}>
+              Chapter {chapterReveal.chapter}
+            </Text>
+            <Text style={styles.chapterTitle}>{chapterReveal.title}</Text>
+            <Text style={[text.caption, { color: colors.onSealed, textAlign: 'center', marginTop: sp.md }]}>
+              {chapterSummary(chapterReveal)}
+            </Text>
+            <PrimaryButton inverted title="Keep writing" onPress={() => setChapterReveal(null)} style={{ marginTop: sp.xl }} />
+          </>
+        )}
+      </Sheet>
     </Screen>
   );
+}
+
+/** "127 pages so far: 18 memories, 12 prompt answers, 9 notes." Top three sources. */
+function chapterSummary(story: StoryState): string {
+  const top = PAGE_SOURCES.map((s) => ({ ...s, n: story.counts[s.key] ?? 0 }))
+    .filter((s) => s.n > 0)
+    .sort((a, b) => b.n * b.per - a.n * a.per)
+    .slice(0, 3)
+    .map((s) => `${s.n} ${s.label}`);
+  const list = top.length > 1 ? `${top.slice(0, -1).join(', ')} and ${top[top.length - 1]}` : top[0] ?? '';
+  return list
+    ? `${story.pages} pages so far: ${list}.`
+    : `${story.pages} pages so far.`;
 }
 
 /** 0-100 progress through the current chapter; never fully empty so the bar reads as begun. */
@@ -668,6 +811,43 @@ const styles = StyleSheet.create({
   storyFill: {
     backgroundColor: colors.accent,
     borderRadius: 2,
+  },
+  storyBreakdown: {
+    marginTop: sp.base,
+    paddingTop: sp.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.hairline,
+  },
+  storySourceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: sp.xs,
+    gap: sp.md,
+  },
+  chapterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.md,
+    paddingVertical: sp.sm,
+  },
+  chapterNum: {
+    ...text.caption,
+    width: 20,
+    textAlign: 'center',
+  },
+  chapterSeal: {
+    fontSize: 22,
+    color: colors.accent,
+    textAlign: 'center',
+    letterSpacing: 12,
+    marginBottom: sp.lg,
+  },
+  chapterTitle: {
+    ...text.display,
+    color: colors.onSealed,
+    textAlign: 'center',
+    marginTop: sp.xs,
   },
   heroDays: {
     textAlign: 'center',

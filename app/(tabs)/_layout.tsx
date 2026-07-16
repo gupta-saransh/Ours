@@ -8,6 +8,7 @@ import { tapHaptic } from '@/lib/haptics';
 import { HeaderActions } from '@/components/HeaderActions';
 import { TopNav } from '@/components/TopNav';
 import { NudgeToast } from '@/components/NudgeToast';
+import { HeartsRain } from '@/components/HeartsRain';
 import { AddMenu } from '@/components/AddMenu';
 import { useSafeBottom } from '@/lib/safeArea';
 import { colors, font, text } from '@/theme';
@@ -79,6 +80,7 @@ export default function TabsLayout() {
         </Tabs>
         <AddMenu />
         <NudgeToast />
+        <HeartsRain />
       </View>
     </NotificationsProvider>
   );

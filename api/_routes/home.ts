@@ -33,7 +33,7 @@ function storyFor(counts: Record<string, number>) {
     counts.notes * 2 +
     counts.answers * 3 +
     counts.comments * 1 +
-    counts.dates_accepted * 5 +
+    counts.dates_done * 5 +
     counts.bucket_done * 3 +
     counts.milestones * 2;
   let idx = 0;
@@ -112,15 +112,20 @@ export default route(['GET'], async (req, res) => {
            (SELECT count(*)::int FROM love_notes WHERE couple_id = $1) AS notes,
            (SELECT count(*)::int FROM daily_prompt_answers WHERE couple_id = $1) AS answers,
            (SELECT count(*)::int FROM memory_comments WHERE couple_id = $1) AS comments,
-           (SELECT count(*)::int FROM date_proposals WHERE couple_id = $1 AND status = 'accepted') AS dates_accepted,
+           (SELECT count(*)::int FROM date_proposals WHERE couple_id = $1 AND status = 'accepted'
+              AND (proposed_for IS NULL OR proposed_for <= now()::DATE)) AS dates_done,
            (SELECT count(*)::int FROM bucket_items WHERE couple_id = $1 AND done = true) AS bucket_done,
            (SELECT count(*)::int FROM milestones WHERE couple_id = $1) AS milestones`,
         [cid]
       ),
     ]);
 
-  const unseenRow = await one<{ n: number }>(
-    `SELECT count(*)::int AS n FROM notifications
+  // `nudges` powers the on-open hearts shower: an unseen nudge from the last
+  // two days means your partner was thinking of you while you were away.
+  const unseenRow = await one<{ n: number; nudges: number }>(
+    `SELECT count(*)::int AS n,
+            count(*) FILTER (WHERE kind = 'nudge' AND created_at > now() - INTERVAL '48 hours')::int AS nudges
+     FROM notifications
      WHERE couple_id = $1 AND actor_id != $2 AND created_at > $3`,
     [cid, user.id, seen?.notifications_seen_at ?? new Date(0).toISOString()]
   );
@@ -176,8 +181,12 @@ export default route(['GET'], async (req, res) => {
     isSunday,
     reflection,
     streak,
-    story: storyFor(storyCounts ?? {
-      memories: 0, notes: 0, answers: 0, comments: 0, dates_accepted: 0, bucket_done: 0, milestones: 0,
-    }),
+    nudged: (unseenRow?.nudges ?? 0) > 0,
+    story: (() => {
+      const counts = storyCounts ?? {
+        memories: 0, notes: 0, answers: 0, comments: 0, dates_done: 0, bucket_done: 0, milestones: 0,
+      };
+      return { ...storyFor(counts), counts };
+    })(),
   });
 });
