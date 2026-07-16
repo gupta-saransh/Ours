@@ -65,11 +65,13 @@ export default function Prompts() {
         keyExtractor={(e) => e.prompt_date}
         contentContainerStyle={styles.body}
         ListHeaderComponent={
-          streak && streak.longest >= 2 ? (
+          streak && streak.longest >= 1 ? (
             <Text style={styles.streakLine}>
-              {streak.current >= 2
-                ? `♥ ${streak.current} days in a row · longest ${streak.longest}`
-                : `You paused. Start again whenever. Longest so far, ${streak.longest} days.`}
+              {streak.current === 1
+                ? `♥ Day 1 of your streak · longest ${streak.longest}`
+                : streak.current >= 2
+                  ? `♥ ${streak.current} days in a row · longest ${streak.longest}`
+                  : `You paused. Start again whenever. Longest so far, ${streak.longest} days.`}
             </Text>
           ) : null
         }

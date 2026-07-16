@@ -33,6 +33,7 @@ import {
   TextField,
 } from '@/components/kit';
 import { Sheet } from '@/components/Sheet';
+import { Avatar } from '@/components/Avatar';
 import { BellButton, NudgeButton, SettingsButton } from '@/components/HeaderActions';
 import { colors, radius, sp, text } from '@/theme';
 import { countdownTo, daysSince, formatDay, nextOccurrence } from '@/lib/format';
@@ -54,6 +55,14 @@ interface PromptState {
   streak?: StreakState;
 }
 
+interface StoryState {
+  pages: number;
+  chapter: number;
+  title: string;
+  chapterStart: number;
+  nextAt: number | null;
+}
+
 interface HomeData {
   couple: { id: string; invite_code: string; created_at: string } | null;
   partner: { id: string; display_name: string } | null;
@@ -65,6 +74,7 @@ interface HomeData {
   prompt: PromptState;
   upcomingDate: { id: string; title: string; location: string | null; proposed_for: string } | null;
   streak: StreakState;
+  story: StoryState;
   isSunday: boolean;
   reflection: {
     week_start: string;
@@ -76,7 +86,7 @@ interface HomeData {
 }
 
 export default function Home() {
-  const { user, encryption } = useAuth();
+  const { user, partner: authPartner, encryption } = useAuth();
   const router = useRouter();
   const toast = useToast();
   const { width } = useWindowDimensions();
@@ -187,9 +197,21 @@ export default function Home() {
 
         <FadeIn>
           <View style={styles.hero}>
-            <View style={styles.monogram}>
-              <Text style={styles.monogramText}>{initials || '✦'}</Text>
-            </View>
+            {user?.avatar || authPartner?.avatar ? (
+              <View style={styles.heroMarks}>
+                <Avatar id={user?.avatar} name={user?.display_name} size={56} />
+                {data.partner && (
+                  <>
+                    <Text style={styles.heroHeart}>♥</Text>
+                    <Avatar id={authPartner?.avatar} name={data.partner.display_name} size={56} />
+                  </>
+                )}
+              </View>
+            ) : (
+              <View style={styles.monogram}>
+                <Text style={styles.monogramText}>{initials || '✦'}</Text>
+              </View>
+            )}
             <Text style={[text.display, styles.heroDays]}>
               {days.toLocaleString()} {days === 1 ? 'day' : 'days'} of you two
             </Text>
@@ -197,11 +219,11 @@ export default function Home() {
               since {formatDay(basis)}
               {upcoming[0] ? `  ·  ${upcoming[0].title} in ${countdownTo(upcoming[0].next, now).days} days` : ''}
             </Text>
-            {data.streak && data.streak.current >= 2 && (
+            {data.streak && data.streak.current >= 1 && (
               <AppPressable onPress={() => router.push('/prompts')} style={styles.streakChip}>
                 <Flame size={13} color={colors.accent} strokeWidth={1.75} />
                 <Text style={[text.caption, { color: colors.inkMuted }]}>
-                  {data.streak.current} days in a row
+                  {data.streak.current === 1 ? 'Day 1 of your streak' : `${data.streak.current} days in a row`}
                 </Text>
               </AppPressable>
             )}
@@ -269,15 +291,45 @@ export default function Home() {
                 <View style={styles.divider} />
                 <Text style={text.micro}>{data.partner?.display_name ?? 'Them'}</Text>
                 <Text style={text.bodySerif}>{data.prompt.partnerAnswer}</Text>
-                {data.streak && data.streak.countedToday && data.streak.current >= 2 && (
+                {data.streak && data.streak.countedToday && data.streak.current >= 1 && (
                   <Text style={[text.caption, { marginTop: sp.md }]}>
-                    That makes {data.streak.current} days in a row. ♥
+                    {data.streak.current === 1
+                      ? 'Day one. Come back tomorrow to make it two. ♥'
+                      : `That makes ${data.streak.current} days in a row. ♥`}
                   </Text>
                 )}
               </Card>
             )}
           </Section>
         </FadeIn>
+
+        {/* Story chapter: the quiet meter of everything you two keep here */}
+        {data.story && (
+          <FadeIn delay={100}>
+            <Section label="Your story">
+              <Card>
+                <View style={styles.rowBetween}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={text.micro}>Chapter {data.story.chapter}</Text>
+                    <Text style={[text.subtitle, { marginTop: 2 }]}>{data.story.title}</Text>
+                  </View>
+                  <Text style={text.caption}>
+                    {data.story.pages.toLocaleString()} {data.story.pages === 1 ? 'page' : 'pages'}
+                  </Text>
+                </View>
+                <View style={styles.storyTrack}>
+                  <View style={[styles.storyFill, { flex: storyProgress(data.story) }]} />
+                  <View style={{ flex: 100 - storyProgress(data.story) }} />
+                </View>
+                <Text style={[text.caption, { marginTop: sp.sm }]}>
+                  {data.story.nextAt !== null
+                    ? `${data.story.nextAt - data.story.pages} pages to Chapter ${data.story.chapter + 1}. Every memory, note, and answered prompt writes one.`
+                    : 'The last chapter has no ending. Keep writing.'}
+                </Text>
+              </Card>
+            </Section>
+          </FadeIn>
+        )}
 
         {/* Weekly reflection, Sundays only */}
         {data.isSunday && data.reflection && (
@@ -422,6 +474,14 @@ export default function Home() {
       />
     </Screen>
   );
+}
+
+/** 0-100 progress through the current chapter; never fully empty so the bar reads as begun. */
+function storyProgress(story: StoryState): number {
+  if (story.nextAt === null) return 100;
+  const span = story.nextAt - story.chapterStart;
+  const done = story.pages - story.chapterStart;
+  return Math.min(100, Math.max(4, Math.round((done / span) * 100)));
 }
 
 function daysUntilLabel(date: string): string {
@@ -586,6 +646,28 @@ const styles = StyleSheet.create({
   monogramText: {
     ...text.subtitle,
     color: colors.surfaceSealed,
+  },
+  heroMarks: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.md,
+    marginBottom: sp.lg,
+  },
+  heroHeart: {
+    fontSize: 16,
+    color: colors.surfaceSealed,
+  },
+  storyTrack: {
+    flexDirection: 'row',
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: colors.hairline,
+    marginTop: sp.base,
+    overflow: 'hidden',
+  },
+  storyFill: {
+    backgroundColor: colors.accent,
+    borderRadius: 2,
   },
   heroDays: {
     textAlign: 'center',

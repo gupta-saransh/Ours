@@ -9,6 +9,46 @@ const RESURFACE_COLUMNS = `id, thumb_data, note, note_ct,
   COALESCE(memory_date, created_at::DATE)::STRING AS memory_date`;
 
 /**
+ * The couple's story chapter (the second retention hook beside the streak).
+ * Everything the couple keeps in the app writes "pages"; thresholds name the
+ * chapter. Computed on read from durable rows only, so it never needs its own
+ * counter column and can never drift.
+ */
+const CHAPTERS: { at: number; title: string }[] = [
+  { at: 0, title: 'First Glance' },
+  { at: 15, title: 'Ink Still Wet' },
+  { at: 40, title: 'Turning Pages' },
+  { at: 80, title: 'Love Letters' },
+  { at: 140, title: 'Keepsakes' },
+  { at: 220, title: 'Golden Hours' },
+  { at: 320, title: 'A Shared Shelf' },
+  { at: 450, title: 'The Long Song' },
+  { at: 620, title: 'A Thousand Pages' },
+  { at: 850, title: 'Ever After' },
+];
+
+function storyFor(counts: Record<string, number>) {
+  const pages =
+    counts.memories * 5 +
+    counts.notes * 2 +
+    counts.answers * 3 +
+    counts.comments * 1 +
+    counts.dates_accepted * 5 +
+    counts.bucket_done * 3 +
+    counts.milestones * 2;
+  let idx = 0;
+  for (let i = 0; i < CHAPTERS.length; i++) if (pages >= CHAPTERS[i].at) idx = i;
+  const next = CHAPTERS[idx + 1] ?? null;
+  return {
+    pages,
+    chapter: idx + 1,
+    title: CHAPTERS[idx].title,
+    chapterStart: CHAPTERS[idx].at,
+    nextAt: next ? next.at : null,
+  };
+}
+
+/**
  * One request powers the whole home screen: days-together basis, partner,
  * upcoming milestones, a resurfaced memory (a year ago today, then a month
  * ago today, then a random older one), the bucket list, the latest pinned
@@ -20,7 +60,7 @@ export default route(['GET'], async (req, res) => {
 
   const isSunday = new Date().getUTCDay() === 0;
 
-  const [couple, partner, anniversary, milestones, yearAgo, monthAgo, older, bucket, pinnedNote, seen, prompt, upcomingDate, reflection, streak] =
+  const [couple, partner, anniversary, milestones, yearAgo, monthAgo, older, bucket, pinnedNote, seen, prompt, upcomingDate, reflection, streak, storyCounts] =
     await Promise.all([
       one('SELECT id, invite_code, created_at FROM couples WHERE id = $1', [cid]),
       one('SELECT id, display_name FROM users WHERE couple_id = $1 AND id != $2', [cid, user.id]),
@@ -66,6 +106,17 @@ export default route(['GET'], async (req, res) => {
       ),
       isSunday ? computeReflection(cid) : Promise.resolve(null),
       streakStateFor(cid),
+      one<Record<string, number>>(
+        `SELECT
+           (SELECT count(*)::int FROM memories WHERE couple_id = $1) AS memories,
+           (SELECT count(*)::int FROM love_notes WHERE couple_id = $1) AS notes,
+           (SELECT count(*)::int FROM daily_prompt_answers WHERE couple_id = $1) AS answers,
+           (SELECT count(*)::int FROM memory_comments WHERE couple_id = $1) AS comments,
+           (SELECT count(*)::int FROM date_proposals WHERE couple_id = $1 AND status = 'accepted') AS dates_accepted,
+           (SELECT count(*)::int FROM bucket_items WHERE couple_id = $1 AND done = true) AS bucket_done,
+           (SELECT count(*)::int FROM milestones WHERE couple_id = $1) AS milestones`,
+        [cid]
+      ),
     ]);
 
   const unseenRow = await one<{ n: number }>(
@@ -125,5 +176,8 @@ export default route(['GET'], async (req, res) => {
     isSunday,
     reflection,
     streak,
+    story: storyFor(storyCounts ?? {
+      memories: 0, notes: 0, answers: 0, comments: 0, dates_accepted: 0, bucket_done: 0, milestones: 0,
+    }),
   });
 });

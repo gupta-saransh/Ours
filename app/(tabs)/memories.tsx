@@ -71,6 +71,9 @@ export default function Memories() {
   const [view, setView] = useState<'calendar' | 'timeline'>('timeline');
   const [composerDate, setComposerDate] = useState<string | null>(null);
   const [viewer, setViewer] = useState<Memory | null>(null);
+  // Cards with their comment thread expanded inline (Facebook-style, below the
+  // card). Tapping the photo still opens the full viewer.
+  const [openThreads, setOpenThreads] = useState<Set<string>>(new Set());
 
   // Opened from the universal add button: compose a memory dated today.
   useComposeParam(() => setComposerDate(new Date().toISOString().slice(0, 10)));
@@ -168,8 +171,31 @@ export default function Memories() {
     );
   }
 
+  const toggleThread = (id: string) => {
+    tapHaptic();
+    setOpenThreads((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const syncCount = (id: string, count: number) => {
+    setMemories((prev) => (prev ? prev.map((m) => (m.id === id ? { ...m, comments: count } : m)) : prev));
+  };
+
   const renderCard = ({ item }: { item: Memory }) => (
-    <MemoryCard memory={item} mine={item.author_id === user?.id} onOpen={() => openMemory(item)} onHeart={() => toggleHeart(item)} />
+    <MemoryCard
+      memory={item}
+      mine={item.author_id === user?.id}
+      myId={user?.id ?? ''}
+      threadOpen={openThreads.has(item.id)}
+      onToggleThread={() => toggleThread(item.id)}
+      onCountChange={(n) => syncCount(item.id, n)}
+      onOpen={() => openMemory(item)}
+      onHeart={() => toggleHeart(item)}
+    />
   );
 
   const onDeleted = (id: string) => {
@@ -253,11 +279,19 @@ export default function Memories() {
 function MemoryCard({
   memory,
   mine,
+  myId,
+  threadOpen,
+  onToggleThread,
+  onCountChange,
   onOpen,
   onHeart,
 }: {
   memory: Memory;
   mine: boolean;
+  myId: string;
+  threadOpen: boolean;
+  onToggleThread: () => void;
+  onCountChange: (count: number) => void;
   onOpen: () => void;
   onHeart: () => void;
 }) {
@@ -301,18 +335,26 @@ function MemoryCard({
         </View>
       )}
       <MemoryImage memory={memory} onPress={onOpen} />
-      <Text style={styles.note}>{memory.note}</Text>
+      <Pressable onPress={onOpen}>
+        <Text style={styles.note}>{memory.note}</Text>
+      </Pressable>
       <View style={styles.memoryFooter}>
         <Text style={text.caption}>
           {mine ? 'You' : memory.author_name} · {formatDay(memory.memory_date)}
         </Text>
         <View style={styles.footerActions}>
-          {memory.comments > 0 && (
-            <Pressable onPress={onOpen} hitSlop={8} style={styles.commentButton}>
-              <MessageCircle size={16} color={colors.inkMuted} strokeWidth={1.75} />
-              <Text style={[text.caption, { fontWeight: '600' }]}>{memory.comments}</Text>
-            </Pressable>
-          )}
+          <Pressable onPress={onToggleThread} hitSlop={8} style={styles.commentButton}>
+            <MessageCircle
+              size={16}
+              color={threadOpen ? colors.surfaceSealed : colors.inkMuted}
+              strokeWidth={1.75}
+            />
+            {memory.comments > 0 && (
+              <Text style={[text.caption, { fontWeight: '600' }, threadOpen && { color: colors.surfaceSealed }]}>
+                {memory.comments}
+              </Text>
+            )}
+          </Pressable>
           <Pressable onPress={onHeart} hitSlop={8} style={styles.heartButton}>
             <Text style={[styles.heartGlyph, memory.hearted_by_me && { color: colors.surfaceSealed }]}>
               {memory.hearted_by_me ? '♥' : '♡'}
@@ -321,6 +363,9 @@ function MemoryCard({
           </Pressable>
         </View>
       </View>
+      {threadOpen && (
+        <MemoryComments memoryId={memory.id} myId={myId} variant="light" onCountChange={onCountChange} />
+      )}
     </Card>
   );
 }

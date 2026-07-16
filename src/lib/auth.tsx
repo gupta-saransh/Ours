@@ -10,6 +10,7 @@ export interface User {
   display_name: string;
   couple_id: string | null;
   notifications_enabled: boolean;
+  avatar?: string | null; // mark id (src/components/Avatar.tsx); absent on signup/login responses
 }
 
 export interface Couple {
@@ -22,6 +23,7 @@ export interface Couple {
 export interface Partner {
   id: string;
   display_name: string;
+  avatar?: string | null;
 }
 
 type Status = 'loading' | 'signedOut' | 'signedIn';
@@ -41,7 +43,12 @@ interface AuthContextValue {
   refresh(): Promise<void>;
   createSpace(): Promise<Couple>;
   joinSpace(code: string): Promise<void>;
-  updateProfile(patch: { displayName?: string; notificationsEnabled?: boolean; themePreset?: string }): Promise<void>;
+  updateProfile(patch: {
+    displayName?: string;
+    notificationsEnabled?: boolean;
+    themePreset?: string;
+    avatar?: string | null;
+  }): Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);

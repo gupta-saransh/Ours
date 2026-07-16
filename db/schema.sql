@@ -190,3 +190,16 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS theme_preset STRING;
 -- v8: appearance is shared. One look per couple; when either partner picks a
 -- preset it applies to both (the other syncs on their next app load).
 ALTER TABLE couples ADD COLUMN IF NOT EXISTS theme_preset STRING;
+
+-- v9: avatars ("marks") + heart reactions on love notes. avatar holds one of
+-- the curated mark ids validated in api/_routes/auth-profile.ts; note_hearts
+-- mirrors memory_hearts (per-user rows, the JWT user only, never trusted from
+-- the body).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar STRING;
+
+CREATE TABLE IF NOT EXISTS note_hearts (
+  note_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (note_id, user_id)
+);

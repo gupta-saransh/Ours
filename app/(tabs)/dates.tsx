@@ -99,13 +99,15 @@ export default function Dates() {
   const waitingOnThem = proposals.filter((p) => p.status === 'open' && p.proposer_id === user?.id);
   const resolved = proposals.filter((p) => p.status !== 'open').slice(0, 20);
 
+  // Every row opens the detail sheet; what the sheet offers depends on the
+  // proposal's status and who proposed it.
   const row = (p: Proposal, last: boolean) => (
     <ListRow
       key={p.id}
       title={p.title}
       caption={[p.proposed_for ? formatDay(p.proposed_for) : null, p.location].filter(Boolean).join(' · ') || undefined}
       trailing={<Pill label={p.status} tone={STATUS_TONE[p.status]} />}
-      onPress={p.status === 'open' ? () => setSelected(p) : undefined}
+      onPress={() => setSelected(p)}
       last={last}
     />
   );
@@ -171,23 +173,116 @@ export default function Dates() {
 
       <Sheet visible={!!selected && !countering} onClose={() => setSelected(null)} title={selected?.title}>
         {selected && (
-          <>
-            <Text style={[text.caption, { marginBottom: sp.lg }]}>
-              {[selected.proposed_for ? formatDay(selected.proposed_for) : null, selected.location]
-                .filter(Boolean)
-                .join(' · ') || 'No date or place yet, just the idea.'}
-            </Text>
-            <Text style={[text.bodySerif, { marginBottom: sp.lg }]}>
-              {partner?.display_name ?? 'Your partner'} proposed this. Saying yes
-              {selected.proposed_for ? ' adds it to your milestones.' : ' settles it.'}
-            </Text>
-            <PrimaryButton title="Accept" onPress={() => act(selected.id, 'accept')} />
-            <SecondaryButton title="Counter with another idea" onPress={() => setCountering(true)} style={{ marginTop: sp.md }} />
-            <SecondaryButton title="Decline" destructive onPress={() => act(selected.id, 'decline')} style={{ marginTop: sp.md }} />
-          </>
+          <ProposalDetail
+            proposal={selected}
+            mine={selected.proposer_id === user?.id}
+            partnerName={partner?.display_name ?? 'Your partner'}
+            onAccept={() => act(selected.id, 'accept')}
+            onDecline={() => act(selected.id, 'decline')}
+            onCounter={() => setCountering(true)}
+            onProposeNew={() => {
+              setSelected(null);
+              setComposerOpen(true);
+            }}
+          />
         )}
       </Sheet>
     </Screen>
+  );
+}
+
+function daysUntil(date: string): number {
+  const target = new Date(date);
+  const today = new Date();
+  return Math.round(
+    (new Date(target.getFullYear(), target.getMonth(), target.getDate()).getTime() -
+      new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) /
+      86_400_000
+  );
+}
+
+/** Detail body of the date sheet, shaped by status and by who proposed. */
+function ProposalDetail({
+  proposal,
+  mine,
+  partnerName,
+  onAccept,
+  onDecline,
+  onCounter,
+  onProposeNew,
+}: {
+  proposal: Proposal;
+  mine: boolean;
+  partnerName: string;
+  onAccept: () => void;
+  onDecline: () => void;
+  onCounter: () => void;
+  onProposeNew: () => void;
+}) {
+  const when = [proposal.proposed_for ? formatDay(proposal.proposed_for) : null, proposal.location]
+    .filter(Boolean)
+    .join(' · ');
+
+  if (proposal.status === 'open' && !mine) {
+    return (
+      <>
+        <Text style={[text.caption, { marginBottom: sp.lg }]}>{when || 'No date or place yet, just the idea.'}</Text>
+        <Text style={[text.bodySerif, { marginBottom: sp.lg }]}>
+          {partnerName} proposed this. Saying yes
+          {proposal.proposed_for ? ' adds it to your milestones.' : ' settles it.'}
+        </Text>
+        <PrimaryButton title="Accept" onPress={onAccept} />
+        <SecondaryButton title="Counter with another idea" onPress={onCounter} style={{ marginTop: sp.md }} />
+        <SecondaryButton title="Decline" destructive onPress={onDecline} style={{ marginTop: sp.md }} />
+      </>
+    );
+  }
+
+  if (proposal.status === 'open') {
+    return (
+      <>
+        <Text style={[text.caption, { marginBottom: sp.lg }]}>{when || 'No date or place yet, just the idea.'}</Text>
+        <Text style={text.bodySerif}>
+          You proposed this. {partnerName} gets to accept it, counter it, or pass.
+        </Text>
+      </>
+    );
+  }
+
+  if (proposal.status === 'accepted') {
+    const days = proposal.proposed_for ? daysUntil(proposal.proposed_for) : null;
+    return (
+      <>
+        <Text style={[text.caption, { marginBottom: sp.lg }]}>{when || 'No date set, just the promise.'}</Text>
+        <Text style={[text.bodySerif, { marginBottom: sp.sm }]}>
+          You both said yes to this one. ♥
+        </Text>
+        {days !== null && days > 0 && (
+          <Text style={text.bodySerif}>
+            {days === 1 ? 'It is tomorrow.' : `${days} days to go.`}
+          </Text>
+        )}
+        {days !== null && days === 0 && <Text style={text.bodySerif}>It is today. Have a good one.</Text>}
+        {days !== null && days < 0 && (
+          <Text style={text.bodySerif}>It happened on {formatDay(proposal.proposed_for!)}. Worth a memory?</Text>
+        )}
+        {proposal.proposed_for && (
+          <Text style={[text.caption, { marginTop: sp.lg }]}>It also lives in your milestones.</Text>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Text style={[text.caption, { marginBottom: sp.lg }]}>{when || 'No date or place, just the idea.'}</Text>
+      <Text style={[text.bodySerif, { marginBottom: sp.lg }]}>
+        {proposal.status === 'declined'
+          ? 'This one did not land. The next idea might.'
+          : 'This one was answered with a different idea.'}
+      </Text>
+      <SecondaryButton title="Propose something new" onPress={onProposeNew} />
+    </>
   );
 }
 

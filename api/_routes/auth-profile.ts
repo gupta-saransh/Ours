@@ -6,7 +6,13 @@ import { route, requireString, HttpError } from '../_lib/respond';
 // Must match the preset ids defined in src/theme.ts.
 const THEME_PRESET_IDS = ['parchment', 'dusk', 'meadow', 'tide', 'petal'];
 
-/** PATCH /api/auth/profile — display name, notifications toggle, push token, theme. */
+// Must match AVATAR_IDS in src/components/Avatar.tsx.
+const AVATAR_IDS = [
+  'heart', 'flower', 'sun', 'moon', 'star', 'music',
+  'coffee', 'cat', 'dog', 'bird', 'leaf', 'book',
+];
+
+/** PATCH /api/auth/profile — display name, notifications toggle, push token, theme, avatar. */
 export default route(['PATCH'], async (req, res) => {
   const user = await requirePairedUser(req);
   const body = req.body ?? {};
@@ -29,7 +35,18 @@ export default route(['PATCH'], async (req, res) => {
     // The look is shared: one preset per couple, either partner may set it.
     await one(`UPDATE couples SET theme_preset = $2 WHERE id = $1`, [user.couple_id, body.themePreset]);
   }
+  if (body.avatar !== undefined) {
+    if (body.avatar !== null && (typeof body.avatar !== 'string' || !AVATAR_IDS.includes(body.avatar))) {
+      throw new HttpError(400, 'Unknown avatar');
+    }
+    await one(`UPDATE users SET avatar = $2 WHERE id = $1`, [user.id, body.avatar]);
+  }
 
   const updated = await one<SessionUser>(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [user.id]);
-  res.status(200).json({ user: updated });
+  // avatar is deliberately outside USER_COLUMNS (auth must not depend on the v9
+  // migration); the catch keeps this route working pre-migration too.
+  const avatarRow = await one<{ avatar: string | null }>(`SELECT avatar FROM users WHERE id = $1`, [user.id]).catch(
+    () => null
+  );
+  res.status(200).json({ user: { ...updated, avatar: avatarRow?.avatar ?? null } });
 });

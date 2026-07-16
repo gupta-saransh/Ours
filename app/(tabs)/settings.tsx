@@ -14,6 +14,7 @@ import {
   Section,
   TextField,
 } from '@/components/kit';
+import { Avatar, AVATARS } from '@/components/Avatar';
 import {
   colors,
   font,
@@ -69,6 +70,16 @@ export default function Settings() {
     }
   };
 
+  const chooseMark = async (id: string) => {
+    if (id === user?.avatar) return;
+    setError(null);
+    try {
+      await updateProfile({ avatar: id });
+    } catch (err: any) {
+      setError(err?.message ?? 'Something went wrong');
+    }
+  };
+
   // Presets bake into module-scope styles, so applying one is: persist the id
   // (localStorage + account) and reload the page under the new palette.
   const chooseTheme = async (id: ThemePresetId) => {
@@ -114,6 +125,27 @@ export default function Settings() {
             </View>
             <Text style={text.caption}>Email</Text>
             <Text style={text.body}>{user?.email}</Text>
+            <View style={styles.markBlock}>
+              <Text style={text.body}>Your mark</Text>
+              <Text style={[text.caption, { marginBottom: sp.md }]}>
+                A little sign that stands for you.{' '}
+                {partner ? `${partner.display_name} sees it beside everything you write.` : 'Your partner will see it beside everything you write.'}
+              </Text>
+              <View style={styles.markGrid}>
+                {AVATARS.map((a) => {
+                  const active = user?.avatar === a.id;
+                  return (
+                    <AppPressable
+                      key={a.id}
+                      onPress={() => chooseMark(a.id)}
+                      style={[styles.markCell, active && styles.markCellActive]}
+                    >
+                      <Avatar id={a.id} size={40} />
+                    </AppPressable>
+                  );
+                })}
+              </View>
+            </View>
           </Card>
         </Section>
 
@@ -121,9 +153,12 @@ export default function Settings() {
           <Card>
             <View style={styles.row}>
               <Text style={text.body}>Partner</Text>
-              <Text style={[text.body, { color: colors.inkMuted }]}>
-                {partner ? partner.display_name : 'Just you so far'}
-              </Text>
+              <View style={styles.partnerCell}>
+                {partner && <Avatar id={partner.avatar} name={partner.display_name} size={24} />}
+                <Text style={[text.body, { color: colors.inkMuted }]}>
+                  {partner ? partner.display_name : 'Just you so far'}
+                </Text>
+              </View>
             </View>
             <View style={[styles.row, styles.rowBorder]}>
               <Text style={text.body}>Invite code</Text>
@@ -259,6 +294,21 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: sp.md },
+  partnerCell: { flexDirection: 'row', alignItems: 'center', gap: sp.sm },
+  markBlock: {
+    marginTop: sp.base,
+    paddingTop: sp.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.hairline,
+  },
+  markGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: sp.sm },
+  markCell: {
+    padding: 3,
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  markCellActive: { borderColor: colors.accent },
   privacyHead: { flexDirection: 'row', alignItems: 'center', gap: sp.sm },
   saveButton: { height: 40, paddingHorizontal: sp.base, marginTop: sp.sm },
   row: {

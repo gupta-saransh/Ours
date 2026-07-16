@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Pencil, Send, Trash2 } from 'lucide-react-native';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
 import { successHaptic } from '@/lib/haptics';
+import { Avatar } from '@/components/Avatar';
 import { colors, radius, sp, text } from '@/theme';
 
 interface Comment {
@@ -16,12 +18,23 @@ interface Comment {
   edited_at: string | null;
 }
 
-// Light palette for the dark memory viewer. Kept bright: the backdrop behind
-// this thread is near-black, anything under ~0.7 alpha gets hard to read.
-const CREAM = '#F9EFDC';
-const FAINT = 'rgba(249, 239, 220, 0.72)';
-const HAIR = 'rgba(249, 239, 220, 0.22)';
-const FIELD = 'rgba(249, 239, 220, 0.08)';
+// The thread renders in two places: the near-black memory viewer ('dark') and
+// inline under a parchment card in the timeline ('light'). Same layout, two
+// ink palettes.
+const DARK = {
+  strong: '#F9EFDC',
+  faint: 'rgba(249, 239, 220, 0.72)',
+  hair: 'rgba(249, 239, 220, 0.22)',
+  field: 'rgba(249, 239, 220, 0.08)',
+  danger: '#E8A99B',
+};
+const LIGHT = {
+  strong: colors.ink,
+  faint: colors.inkMuted,
+  hair: colors.hairline,
+  field: colors.surface,
+  danger: colors.danger,
+};
 
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -36,22 +49,35 @@ function relativeTime(iso: string): string {
 }
 
 /**
- * Comment thread under a memory in its detail viewer. Both partners read and
- * write; the body is encrypted at rest server-side. Realtime events carry only
- * ids, so we refetch when the partner comments. You can edit or delete your own
- * comments, never the other's.
+ * Comment thread under a memory. Both partners read and write; the body is
+ * encrypted at rest server-side. Realtime events carry only ids, so we refetch
+ * when the partner comments. You can edit or delete your own comments, never
+ * the other's.
  */
-export function MemoryComments({ memoryId, myId }: { memoryId: string; myId: string }) {
+export function MemoryComments({
+  memoryId,
+  myId,
+  variant = 'dark',
+  onCountChange,
+}: {
+  memoryId: string;
+  myId: string;
+  variant?: 'dark' | 'light';
+  onCountChange?: (count: number) => void;
+}) {
+  const { user, partner } = useAuth();
   const [comments, setComments] = useState<Comment[] | null>(null);
   const [draft, setDraft] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const pal = variant === 'light' ? LIGHT : DARK;
 
   const load = useCallback(async () => {
     try {
       const data = await api<{ comments: Comment[] }>(`/api/comments?memoryId=${encodeURIComponent(memoryId)}`);
       setComments(data.comments);
+      onCountChange?.(data.comments.length);
     } catch {
       setComments((prev) => prev ?? []);
     }
@@ -94,7 +120,11 @@ export function MemoryComments({ memoryId, myId }: { memoryId: string; myId: str
     try {
       await api(`/api/comments/${id}`, { method: 'DELETE' });
       setConfirmId(null);
-      setComments((prev) => (prev ? prev.filter((c) => c.id !== id) : prev));
+      setComments((prev) => {
+        const next = prev ? prev.filter((c) => c.id !== id) : prev;
+        if (next) onCountChange?.(next.length);
+        return next;
+      });
     } catch {
       setConfirmId(null);
     }
@@ -106,55 +136,55 @@ export function MemoryComments({ memoryId, myId }: { memoryId: string; myId: str
     setConfirmId(null);
   };
 
+  const avatarFor = (authorId: string) => (authorId === user?.id ? user?.avatar : partner?.avatar);
+
   return (
     // Stop taps here from bubbling to the viewer backdrop (which would close it).
-    <Pressable style={styles.wrap} onPress={(e) => e.stopPropagation()}>
-      <Text style={styles.heading}>
+    <Pressable style={[styles.wrap, { borderTopColor: pal.hair }]} onPress={(e) => e.stopPropagation()}>
+      <Text style={[styles.heading, { color: pal.faint }]}>
         {comments && comments.length > 0 ? `Comments (${comments.length})` : 'Comments'}
       </Text>
 
       {comments === null ? (
-        <ActivityIndicator size="small" color={CREAM} style={{ marginVertical: sp.base }} />
+        <ActivityIndicator size="small" color={pal.strong} style={{ marginVertical: sp.base }} />
       ) : comments.length === 0 ? (
-        <Text style={styles.empty}>Be the first to say something.</Text>
+        <Text style={[styles.empty, { color: pal.faint }]}>Be the first to say something.</Text>
       ) : (
         <ScrollView style={styles.list} contentContainerStyle={{ gap: sp.base }} keyboardShouldPersistTaps="handled">
           {comments.map((c) => {
             const mine = c.author_id === myId;
             return (
               <View key={c.id} style={styles.comment}>
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>{(c.author_name || '?').slice(0, 1).toUpperCase()}</Text>
-                </View>
+                <Avatar id={avatarFor(c.author_id)} name={c.author_name} size={28} />
                 <View style={{ flex: 1 }}>
                   <View style={styles.metaRow}>
-                    <Text style={styles.author}>{c.author_name}</Text>
-                    <Text style={styles.time}>
+                    <Text style={[styles.author, { color: pal.strong }]}>{c.author_name}</Text>
+                    <Text style={[styles.time, { color: pal.faint }]}>
                       {relativeTime(c.created_at)}
                       {c.edited_at ? ' · edited' : ''}
                     </Text>
                   </View>
-                  <Text style={styles.body}>{c.body}</Text>
+                  <Text style={[styles.body, { color: pal.strong }]}>{c.body}</Text>
                   {mine && (
                     <View style={styles.actions}>
                       {confirmId === c.id ? (
                         <>
                           <Pressable onPress={() => remove(c.id)} hitSlop={6}>
-                            <Text style={styles.confirmDelete}>Delete</Text>
+                            <Text style={[styles.confirmDelete, { color: pal.danger }]}>Delete</Text>
                           </Pressable>
                           <Pressable onPress={() => setConfirmId(null)} hitSlop={6}>
-                            <Text style={styles.actionText}>Cancel</Text>
+                            <Text style={[styles.actionText, { color: pal.faint }]}>Cancel</Text>
                           </Pressable>
                         </>
                       ) : (
                         <>
                           <Pressable onPress={() => startEdit(c)} hitSlop={6} style={styles.actionBtn}>
-                            <Pencil size={13} color={FAINT} strokeWidth={1.75} />
-                            <Text style={styles.actionText}>Edit</Text>
+                            <Pencil size={13} color={pal.faint} strokeWidth={1.75} />
+                            <Text style={[styles.actionText, { color: pal.faint }]}>Edit</Text>
                           </Pressable>
                           <Pressable onPress={() => setConfirmId(c.id)} hitSlop={6} style={styles.actionBtn}>
-                            <Trash2 size={13} color={FAINT} strokeWidth={1.75} />
-                            <Text style={styles.actionText}>Delete</Text>
+                            <Trash2 size={13} color={pal.faint} strokeWidth={1.75} />
+                            <Text style={[styles.actionText, { color: pal.faint }]}>Delete</Text>
                           </Pressable>
                         </>
                       )}
@@ -172,9 +202,9 @@ export function MemoryComments({ memoryId, myId }: { memoryId: string; myId: str
           value={draft}
           onChangeText={setDraft}
           placeholder={editingId ? 'Edit your comment...' : 'Add a comment...'}
-          placeholderTextColor={FAINT}
+          placeholderTextColor={pal.faint}
           multiline
-          style={styles.input}
+          style={[styles.input, { color: pal.strong, backgroundColor: pal.field, borderColor: pal.hair }]}
         />
         {editingId && (
           <Pressable
@@ -185,11 +215,19 @@ export function MemoryComments({ memoryId, myId }: { memoryId: string; myId: str
             hitSlop={6}
             style={styles.cancelEdit}
           >
-            <Text style={styles.actionText}>Cancel</Text>
+            <Text style={[styles.actionText, { color: pal.faint }]}>Cancel</Text>
           </Pressable>
         )}
-        <Pressable onPress={submit} disabled={!draft.trim() || busy} style={[styles.send, (!draft.trim() || busy) && { opacity: 0.4 }]}>
-          {busy ? <ActivityIndicator size="small" color={CREAM} /> : <Send size={18} color={CREAM} strokeWidth={1.75} />}
+        <Pressable
+          onPress={submit}
+          disabled={!draft.trim() || busy}
+          style={[styles.send, { borderColor: pal.hair }, (!draft.trim() || busy) && { opacity: 0.4 }]}
+        >
+          {busy ? (
+            <ActivityIndicator size="small" color={pal.strong} />
+          ) : (
+            <Send size={18} color={variant === 'light' ? colors.surfaceSealed : pal.strong} strokeWidth={1.75} />
+          )}
         </Pressable>
       </View>
     </Pressable>
@@ -202,30 +240,19 @@ const styles = StyleSheet.create({
     marginTop: sp.lg,
     paddingTop: sp.base,
     borderTopWidth: 1,
-    borderTopColor: HAIR,
   },
-  heading: { ...text.micro, color: FAINT, textTransform: 'none', letterSpacing: 0.4, marginBottom: sp.sm },
-  empty: { ...text.caption, color: FAINT, fontStyle: 'italic', marginVertical: sp.sm },
+  heading: { ...text.micro, textTransform: 'none', letterSpacing: 0.4, marginBottom: sp.sm },
+  empty: { ...text.caption, fontStyle: 'italic', marginVertical: sp.sm },
   list: { maxHeight: 220 },
   comment: { flexDirection: 'row', gap: sp.sm },
-  avatar: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: HAIR,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: { ...text.caption, color: CREAM, fontWeight: '600' },
   metaRow: { flexDirection: 'row', alignItems: 'baseline', gap: sp.sm },
-  author: { ...text.caption, color: CREAM, fontWeight: '600' },
-  time: { ...text.micro, color: FAINT, textTransform: 'none', letterSpacing: 0.2 },
-  body: { ...text.bodySerif, color: CREAM, marginTop: 2 },
+  author: { ...text.caption, fontWeight: '600' },
+  time: { ...text.micro, textTransform: 'none', letterSpacing: 0.2 },
+  body: { ...text.bodySerif, marginTop: 2 },
   actions: { flexDirection: 'row', gap: sp.base, marginTop: sp.xs },
   actionBtn: { flexDirection: 'row', alignItems: 'center', gap: sp.xs },
-  actionText: { ...text.micro, color: FAINT, textTransform: 'none', letterSpacing: 0.2 },
-  confirmDelete: { ...text.micro, color: '#E8A99B', textTransform: 'none', letterSpacing: 0.2, fontWeight: '600' },
+  actionText: { ...text.micro, textTransform: 'none', letterSpacing: 0.2 },
+  confirmDelete: { ...text.micro, textTransform: 'none', letterSpacing: 0.2, fontWeight: '600' },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
@@ -237,12 +264,9 @@ const styles = StyleSheet.create({
     minHeight: 40,
     maxHeight: 100,
     ...text.body,
-    color: CREAM,
-    backgroundColor: FIELD,
     paddingVertical: sp.sm,
     paddingHorizontal: sp.md,
     borderWidth: 1,
-    borderColor: HAIR,
     borderRadius: radius.md,
   },
   cancelEdit: { paddingBottom: sp.md },
@@ -251,7 +275,6 @@ const styles = StyleSheet.create({
     height: 40,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: HAIR,
     alignItems: 'center',
     justifyContent: 'center',
   },

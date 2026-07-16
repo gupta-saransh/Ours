@@ -23,11 +23,17 @@ export default route(['GET', 'POST'], async (req, res) => {
   const user = await requirePairedUser(req);
 
   if (req.method === 'GET') {
+    // Hearts ride along per row (note_hearts, v9). $2 is user.id: adding a
+    // param means EVERY call site must pass it (CockroachDB hard-rejects
+    // arg-count mismatches; see the notes-500 postmortem in CLAUDE.md).
     const rows = await q<{ body: string; body_ct: Buffer | null; sealed: boolean; author_id: string }>(
-      `SELECT ${NOTE_COLUMNS} FROM love_notes n
+      `SELECT ${NOTE_COLUMNS},
+         (SELECT count(*)::int FROM note_hearts h WHERE h.note_id = n.id) AS hearts,
+         EXISTS(SELECT 1 FROM note_hearts h WHERE h.note_id = n.id AND h.user_id = $2) AS hearted_by_me
+       FROM love_notes n
        JOIN users u ON u.id = n.author_id
        WHERE n.couple_id = $1 ORDER BY n.pinned DESC, n.created_at DESC LIMIT 200`,
-      [user.couple_id]
+      [user.couple_id, user.id]
     );
     const notes = await Promise.all(
       rows.map(async ({ body_ct, ...n }) => {
@@ -62,6 +68,8 @@ export default route(['GET', 'POST'], async (req, res) => {
     author_name: user.display_name,
     sealed: !!sealedUntil,
     opened: false,
+    hearts: 0,
+    hearted_by_me: false,
     // never leak a sealed body over the wire to the other subscriber
     body: sealedUntil ? '' : body,
   };

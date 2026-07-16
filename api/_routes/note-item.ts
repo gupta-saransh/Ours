@@ -7,6 +7,7 @@ import { route, HttpError } from '../_lib/respond';
 
 /**
  * PATCH { pinned } toggles a pin.
+ * PATCH { hearted } sets/clears the caller's heart (per-user, JWT user only).
  * PATCH { open: true } opens a time capsule note on or after its reveal date
  * (records the first open, tells the author).
  * DELETE removes your own note.
@@ -30,9 +31,37 @@ export default route(['PATCH', 'DELETE'], async (req, res) => {
 
   if (req.method === 'DELETE') {
     if (note.author_id !== user.id) throw new HttpError(403, 'You can only remove your own notes');
+    await one('DELETE FROM note_hearts WHERE note_id = $1', [id]);
     await one('DELETE FROM love_notes WHERE id = $1', [id]);
     await publish(user.couple_id, 'note.deleted', { id });
     res.status(200).json({ ok: true });
+    return;
+  }
+
+  // Heart toggle. The heart always belongs to the JWT user; a user id in the
+  // body is ignored, mirroring the memory hearts rule.
+  if (typeof req.body?.hearted === 'boolean') {
+    if (req.body.hearted) {
+      await one(
+        `INSERT INTO note_hearts (note_id, user_id) VALUES ($1, $2)
+         ON CONFLICT (note_id, user_id) DO NOTHING`,
+        [id, user.id]
+      );
+    } else {
+      await one('DELETE FROM note_hearts WHERE note_id = $1 AND user_id = $2', [id, user.id]);
+    }
+    const counts = await one<{ hearts: number; hearted_by_me: boolean }>(
+      `SELECT (SELECT count(*)::int FROM note_hearts WHERE note_id = $1) AS hearts,
+              EXISTS(SELECT 1 FROM note_hearts WHERE note_id = $1 AND user_id = $2) AS hearted_by_me`,
+      [id, user.id]
+    );
+    await publish(user.couple_id, 'note.hearted', { id, hearts: counts?.hearts ?? 0, by: user.id });
+    if (req.body.hearted && note.author_id !== user.id) {
+      // Generic text: the note body is encrypted and must not land in the
+      // plaintext notifications table.
+      await notify(user.couple_id, user.id, 'note', `${user.display_name} loved your note ♥`);
+    }
+    res.status(200).json({ hearts: counts?.hearts ?? 0, hearted_by_me: counts?.hearted_by_me ?? false });
     return;
   }
 
