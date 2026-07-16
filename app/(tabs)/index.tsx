@@ -467,7 +467,7 @@ export default function Home() {
 
         <FadeIn delay={160}>
           <Section
-            label="Coming up soon"
+            label="Coming up soon!"
             trailing={
               <Pressable onPress={addMilestone} hitSlop={8}>
                 <Text style={[text.caption, { color: colors.accent }]}>+ Add</Text>

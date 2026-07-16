@@ -10,6 +10,7 @@ const THEME_PRESET_IDS = ['parchment', 'dusk', 'meadow', 'tide', 'petal'];
 const AVATAR_IDS = [
   'heart', 'flower', 'sun', 'moon', 'star', 'music',
   'coffee', 'cat', 'dog', 'bird', 'leaf', 'book',
+  'rabbit', 'sparkles', 'clover', 'diamond', 'feather', 'glasses', 'cookie', 'palette',
 ];
 
 /** PATCH /api/auth/profile — display name, notifications toggle, push token, theme, avatar. */
