@@ -29,11 +29,14 @@ import {
 } from '@/theme';
 
 export default function Settings() {
-  const { user, couple, partner, encryption, encryptionCode, updateProfile, signOut, deleteAccount } = useAuth();
+  const { user, couple, partner, encryption, encryptionCode, updateProfile, refresh, signOut, deleteAccount } = useAuth();
   const router = useRouter();
   const [name, setName] = useState(user?.display_name ?? '');
   const [savingName, setSavingName] = useState(false);
   const [nameSaved, setNameSaved] = useState(false);
+  const [nick, setNick] = useState(partner?.nickname ?? '');
+  const [savingNick, setSavingNick] = useState(false);
+  const [nickSaved, setNickSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -49,6 +52,22 @@ export default function Settings() {
       setError(err?.message ?? 'Something went wrong');
     } finally {
       setSavingName(false);
+    }
+  };
+
+  const saveNick = async () => {
+    setError(null);
+    setSavingNick(true);
+    try {
+      await updateProfile({ partnerNickname: nick.trim() || null });
+      // Re-resolve /api/auth/me so the partner's shown name updates everywhere.
+      await refresh();
+      setNickSaved(true);
+      setTimeout(() => setNickSaved(false), 2000);
+    } catch (err: any) {
+      setError(err?.message ?? 'Something went wrong');
+    } finally {
+      setSavingNick(false);
     }
   };
 
@@ -160,6 +179,31 @@ export default function Settings() {
                 </Text>
               </View>
             </View>
+            {partner && (
+              <View style={[styles.nickBlock, styles.rowBorder]}>
+                <View style={styles.nameRow}>
+                  <View style={{ flex: 1 }}>
+                    <TextField
+                      label={`Nickname for ${partner.realName ?? partner.display_name}`}
+                      value={nick}
+                      onChangeText={setNick}
+                      placeholder={partner.realName ?? partner.display_name}
+                      maxLength={40}
+                    />
+                  </View>
+                  <SecondaryButton
+                    title={nickSaved ? 'Saved ✓' : 'Save'}
+                    onPress={saveNick}
+                    loading={savingNick}
+                    disabled={nick.trim() === (partner.nickname ?? '')}
+                    style={styles.saveButton}
+                  />
+                </View>
+                <Text style={text.caption}>
+                  Shows across the app in place of their name. Only you see it.
+                </Text>
+              </View>
+            )}
             <View style={[styles.row, styles.rowBorder]}>
               <Text style={text.body}>Invite code</Text>
               <Text style={styles.code}>{couple?.invite_code ?? '...'}</Text>
@@ -294,6 +338,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: sp.md },
+  nickBlock: { paddingTop: sp.md },
   partnerCell: { flexDirection: 'row', alignItems: 'center', gap: sp.sm },
   markBlock: {
     marginTop: sp.base,

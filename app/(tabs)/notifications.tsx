@@ -40,9 +40,15 @@ const KIND_ROUTE: Record<string, string> = {
 };
 
 export default function Notifications() {
-  const { user } = useAuth();
+  const { user, partner } = useAuth();
   const router = useRouter();
   const { markSeen } = useNotifications();
+
+  // Notification text is generated server-side with the partner's real name.
+  // Every notification here is about the partner's action, so swap in the pet
+  // name you gave them (if any) to match the rest of the app.
+  const withNickname = (t: string) =>
+    partner?.nickname && partner.realName ? t.split(partner.realName).join(partner.nickname) : t;
   const [items, setItems] = useState<Notification[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [seenAt, setSeenAt] = useState<string>(new Date().toISOString());
@@ -109,7 +115,7 @@ export default function Notifications() {
             <PressableCard onPress={() => router.push(target as any)} style={[styles.row, fresh && styles.rowFresh]}>
               <Icon size={18} color={fresh ? colors.surfaceSealed : colors.inkFaint} strokeWidth={1.75} />
               <View style={{ flex: 1 }}>
-                <Text style={text.body}>{item.text}</Text>
+                <Text style={text.body}>{withNickname(item.text)}</Text>
                 <Text style={text.caption}>
                   {formatDay(item.created_at)}, {formatTime(item.created_at)}
                 </Text>

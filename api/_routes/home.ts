@@ -91,7 +91,7 @@ export default route(['GET'], async (req, res) => {
         [cid]
       ),
       one(
-        `SELECT n.id, n.body, n.body_ct, n.created_at, u.display_name AS author_name
+        `SELECT n.id, n.author_id, n.body, n.body_ct, n.created_at, u.display_name AS author_name
          FROM love_notes n JOIN users u ON u.id = n.author_id
          WHERE n.couple_id = $1 AND n.pinned = true ORDER BY n.created_at DESC LIMIT 1`,
         [cid]
@@ -122,14 +122,21 @@ export default route(['GET'], async (req, res) => {
     ]);
 
   // `nudges` powers the on-open hearts shower: an unseen nudge from the last
-  // two days means your partner was thinking of you while you were away.
-  const unseenRow = await one<{ n: number; nudges: number }>(
-    `SELECT count(*)::int AS n,
-            count(*) FILTER (WHERE kind = 'nudge' AND created_at > now() - INTERVAL '48 hours')::int AS nudges
-     FROM notifications
-     WHERE couple_id = $1 AND actor_id != $2 AND created_at > $3`,
-    [cid, user.id, seen?.notifications_seen_at ?? new Date(0).toISOString()]
-  );
+  // two days means your partner was thinking of you while you were away. The
+  // nickname (catch-guarded for pre-v11 deploys) resolves the pinned-note author.
+  const [unseenRow, myNick] = await Promise.all([
+    one<{ n: number; nudges: number }>(
+      `SELECT count(*)::int AS n,
+              count(*) FILTER (WHERE kind = 'nudge' AND created_at > now() - INTERVAL '48 hours')::int AS nudges
+       FROM notifications
+       WHERE couple_id = $1 AND actor_id != $2 AND created_at > $3`,
+      [cid, user.id, seen?.notifications_seen_at ?? new Date(0).toISOString()]
+    ),
+    one<{ partner_nickname: string | null }>('SELECT partner_nickname FROM users WHERE id = $1', [user.id]).catch(
+      () => null
+    ),
+  ]);
+  const partnerNickname = myNick?.partner_nickname ?? null;
 
   const picked = yearAgo
     ? { ...yearAgo, tag: 'One year ago today' }
@@ -150,7 +157,12 @@ export default route(['GET'], async (req, res) => {
   let pinnedNoteOut = null as Record<string, unknown> | null;
   if (pinnedNote) {
     const { body_ct, body, ...rest } = pinnedNote as Record<string, unknown> & { body_ct?: Buffer | null; body?: string };
-    pinnedNoteOut = { ...rest, body: (await readField(cid, body_ct, body ?? '')) ?? '' };
+    // Show the pet name if the pinned note is the partner's and one is set.
+    const authorName =
+      partnerNickname && partner && (rest as { author_id?: string }).author_id === partner.id
+        ? partnerNickname
+        : (rest as { author_name?: string }).author_name;
+    pinnedNoteOut = { ...rest, author_name: authorName, body: (await readField(cid, body_ct, body ?? '')) ?? '' };
   }
 
   let upcomingDateOut = null as Record<string, unknown> | null;

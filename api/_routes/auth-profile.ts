@@ -42,6 +42,18 @@ export default route(['PATCH'], async (req, res) => {
     }
     await one(`UPDATE users SET avatar = $2 WHERE id = $1`, [user.id, body.avatar]);
   }
+  if (body.partnerNickname !== undefined) {
+    // The pet name I use for my partner. Null or blank clears it (fall back to
+    // their real name). Stored on my own row.
+    let nickname: string | null = null;
+    if (body.partnerNickname !== null) {
+      if (typeof body.partnerNickname !== 'string') throw new HttpError(400, 'Nickname must be text');
+      const trimmed = body.partnerNickname.trim();
+      if (trimmed.length > 40) throw new HttpError(400, 'Nickname is too long');
+      nickname = trimmed.length ? trimmed : null;
+    }
+    await one(`UPDATE users SET partner_nickname = $2 WHERE id = $1`, [user.id, nickname]);
+  }
 
   const updated = await one<SessionUser>(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [user.id]);
   // avatar is deliberately outside USER_COLUMNS (auth must not depend on the v9

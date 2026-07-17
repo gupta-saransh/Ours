@@ -220,3 +220,10 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS messages_by_couple ON messages (couple_id, created_at DESC);
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_seen_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+-- v11: partner nicknames. partner_nickname is "the name THIS user calls their
+-- partner" (a pet name). It lives on the viewer's own row, so each partner sets
+-- their own independently, and is resolved into the partner's shown name at
+-- /api/auth/me. If null, the partner's real display_name is used. Plaintext by
+-- design (a term of endearment, not private free text).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_nickname STRING;

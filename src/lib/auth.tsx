@@ -22,7 +22,11 @@ export interface Couple {
 
 export interface Partner {
   id: string;
+  /** The name to show for the partner: their nickname if you set one, else their real name. */
   display_name: string;
+  realName?: string;
+  /** The pet name you gave them (null if none). Only you see it. */
+  nickname?: string | null;
   avatar?: string | null;
 }
 
@@ -48,6 +52,7 @@ interface AuthContextValue {
     notificationsEnabled?: boolean;
     themePreset?: string;
     avatar?: string | null;
+    partnerNickname?: string | null;
   }): Promise<void>;
 }
 
