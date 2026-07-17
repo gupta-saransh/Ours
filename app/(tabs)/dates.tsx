@@ -423,7 +423,6 @@ function ProposalDetail({
         )}
         {days !== null && days === 0 && <Text style={text.bodySerif}>It is today. Have a good one.</Text>}
         <Text style={[text.caption, { marginTop: sp.lg }]}>
-          If notifications are on, we will nudge you 24 hours, 6 hours, and 1 hour before.
         </Text>
       </>
     );
