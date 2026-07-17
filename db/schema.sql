@@ -203,3 +203,20 @@ CREATE TABLE IF NOT EXISTS note_hearts (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (note_id, user_id)
 );
+
+-- v10: partner chat. Direct messages inside a couple; body is encrypted at rest
+-- like every other free text (body_ct beside a plaintext fallback). chat_seen_at
+-- is the per-user read cursor for the chat unread badge (mirrors
+-- notifications_seen_at). Chat deliberately does NOT write notification rows (it
+-- would flood the bell); the away partner gets a Web Push instead.
+CREATE TABLE IF NOT EXISTS messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  couple_id UUID NOT NULL,
+  sender_id UUID NOT NULL,
+  body STRING NOT NULL DEFAULT '',
+  body_ct BYTEA,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS messages_by_couple ON messages (couple_id, created_at DESC);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_seen_at TIMESTAMPTZ NOT NULL DEFAULT now();

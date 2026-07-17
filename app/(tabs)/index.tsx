@@ -57,29 +57,30 @@ interface PromptState {
 }
 
 interface StoryState {
-  pages: number;
-  chapter: number;
-  title: string;
-  chapterStart: number;
+  points: number;
+  level: number;
+  levelTitle: string;
+  levelStart: number;
   nextAt: number | null;
   counts: Record<string, number>;
 }
 
-// Client copies of the server's story tables (api/_routes/home.ts); keep in sync.
-const CHAPTERS: { at: number; title: string }[] = [
+// Client copies of the server's levels + point sources (api/_routes/home.ts);
+// keep in sync.
+const LEVELS: { at: number; title: string }[] = [
   { at: 0, title: 'First Glance' },
-  { at: 15, title: 'Ink Still Wet' },
-  { at: 40, title: 'Turning Pages' },
+  { at: 15, title: 'Getting Closer' },
+  { at: 40, title: 'Finding Our Rhythm' },
   { at: 80, title: 'Love Letters' },
   { at: 140, title: 'Keepsakes' },
   { at: 220, title: 'Golden Hours' },
-  { at: 320, title: 'A Shared Shelf' },
+  { at: 320, title: 'Building a Life' },
   { at: 450, title: 'The Long Song' },
-  { at: 620, title: 'A Thousand Pages' },
+  { at: 620, title: 'A Thousand Days' },
   { at: 850, title: 'Ever After' },
 ];
 
-const PAGE_SOURCES: { key: string; label: string; per: number }[] = [
+const POINT_SOURCES: { key: string; label: string; per: number }[] = [
   { key: 'memories', label: 'memories', per: 5 },
   { key: 'dates_done', label: 'dates you went on', per: 5 },
   { key: 'answers', label: 'prompt answers', per: 3 },
@@ -125,8 +126,8 @@ export default function Home() {
   const [newItem, setNewItem] = useState('');
   const [answerOpen, setAnswerOpen] = useState(false);
   const [storyOpen, setStoryOpen] = useState(false);
-  const [chaptersOpen, setChaptersOpen] = useState(false);
-  const [chapterReveal, setChapterReveal] = useState<StoryState | null>(null);
+  const [levelsOpen, setLevelsOpen] = useState(false);
+  const [levelReveal, setLevelReveal] = useState<StoryState | null>(null);
   const showeredRef = React.useRef(false);
 
   const load = useCallback(async () => {
@@ -138,14 +139,14 @@ export default function Home() {
       showeredRef.current = true;
       showHearts();
     }
-    // Crossing into a new chapter earns the couple their little ceremony. The
-    // last celebrated chapter lives client-side (web localStorage; native
-    // skips quietly), so it fires once per device.
+    // Reaching a new level earns the couple their little ceremony. The last
+    // celebrated level lives client-side (web localStorage; native skips
+    // quietly), so it fires once per device.
     try {
       if (typeof localStorage !== 'undefined' && home.story) {
         const prev = Number(localStorage.getItem('ours.story-chapter') || '0');
-        if (prev > 0 && home.story.chapter > prev) setChapterReveal(home.story);
-        localStorage.setItem('ours.story-chapter', String(home.story.chapter));
+        if (prev > 0 && home.story.level > prev) setLevelReveal(home.story);
+        localStorage.setItem('ours.story-chapter', String(home.story.level));
       }
     } catch {}
   }, []);
@@ -325,14 +326,14 @@ export default function Home() {
                   </Text>
                 )}
                 <PrimaryButton inverted title="Answer" onPress={() => setAnswerOpen(true)} />
-                {data.streak?.atRisk && data.streak.current >= 2 && (
+                {data.streak?.atRisk && data.streak.current >= 1 && (
                   <Text style={[text.caption, { color: colors.onSealed, textAlign: 'center', marginTop: sp.md }]}>
                     Answer today to keep your {data.streak.current} day streak going.
                   </Text>
                 )}
                 {data.streak && data.streak.current === 0 && data.streak.longest >= 3 && (
                   <Text style={[text.caption, { color: colors.onSealed, textAlign: 'center', marginTop: sp.md }]}>
-                    You paused. Start again whenever.
+                    You paused. Answer together to start again.
                   </Text>
                 )}
               </Card>
@@ -365,11 +366,11 @@ export default function Home() {
           </Section>
         </FadeIn>
 
-        {/* Story chapter: the quiet meter of everything you two keep here.
-            Tap to unfold where the pages came from; "All chapters" opens the map. */}
+        {/* Relationship points: a gentle meter of everything you two build here.
+            Tap to unfold where the points came from; "All levels" opens the map. */}
         {data.story && (
           <FadeIn delay={100}>
-            <Section label="Your story">
+            <Section label="Your journey">
               <PressableCard
                 onPress={() => {
                   tapHaptic();
@@ -378,33 +379,40 @@ export default function Home() {
               >
                 <View style={styles.rowBetween}>
                   <View style={{ flex: 1 }}>
-                    <Text style={text.micro}>Chapter {data.story.chapter}</Text>
-                    <Text style={[text.subtitle, { marginTop: 2 }]}>{data.story.title}</Text>
+                    <Text style={text.micro}>Level {data.story.level}</Text>
+                    <Text style={[text.subtitle, { marginTop: 2 }]}>{data.story.levelTitle}</Text>
                   </View>
                   <View style={{ alignItems: 'flex-end', gap: sp.xs }}>
-                    <Text style={text.caption}>
-                      {data.story.pages.toLocaleString()} {data.story.pages === 1 ? 'page' : 'pages'}
+                    <Text style={[text.subtitle, { color: colors.accent }]}>
+                      {data.story.points.toLocaleString()}
                     </Text>
-                    <ChevronDown
-                      size={16}
-                      color={colors.inkFaint}
-                      strokeWidth={1.75}
-                      style={storyOpen ? { transform: [{ rotate: '180deg' }] } : undefined}
-                    />
+                    <Text style={text.micro}>points</Text>
                   </View>
                 </View>
                 <View style={styles.storyTrack}>
                   <View style={[styles.storyFill, { flex: storyProgress(data.story) }]} />
                   <View style={{ flex: 100 - storyProgress(data.story) }} />
                 </View>
-                <Text style={[text.caption, { marginTop: sp.sm }]}>
-                  {data.story.nextAt !== null
-                    ? `${data.story.nextAt - data.story.pages} pages to Chapter ${data.story.chapter + 1}.`
-                    : 'The last chapter has no ending.'}
-                </Text>
+                <View style={[styles.rowBetween, { marginTop: sp.sm }]}>
+                  <Text style={text.caption}>
+                    {data.story.nextAt !== null
+                      ? `${data.story.nextAt - data.story.points} points to Level ${data.story.level + 1}`
+                      : 'You have reached the final level. ♥'}
+                  </Text>
+                  <ChevronDown
+                    size={16}
+                    color={colors.inkFaint}
+                    strokeWidth={1.75}
+                    style={storyOpen ? { transform: [{ rotate: '180deg' }] } : undefined}
+                  />
+                </View>
                 {storyOpen && (
                   <View style={styles.storyBreakdown}>
-                    {PAGE_SOURCES.map((s) => {
+                    <Text style={[text.caption, { marginBottom: sp.md }]}>
+                      Every memory, note, date, prompt, and milestone you two make earns points. They add up into
+                      levels, a keepsake of all you are building together. Nothing to chase, just yours to grow.
+                    </Text>
+                    {POINT_SOURCES.map((s) => {
                       const n = data.story.counts[s.key] ?? 0;
                       return (
                         <View key={s.key} style={styles.storySourceRow}>
@@ -412,17 +420,17 @@ export default function Home() {
                             {n} {s.label}
                           </Text>
                           <Text style={[text.caption, n === 0 && { color: colors.inkFaint }]}>
-                            {n * s.per} {n * s.per === 1 ? 'page' : 'pages'}
+                            {n * s.per} {n * s.per === 1 ? 'point' : 'points'}
                           </Text>
                         </View>
                       );
                     })}
                     <Pressable
-                      onPress={() => setChaptersOpen(true)}
+                      onPress={() => setLevelsOpen(true)}
                       hitSlop={8}
                       style={{ alignSelf: 'center', marginTop: sp.md }}
                     >
-                      <Text style={[text.caption, { color: colors.accent }]}>All chapters</Text>
+                      <Text style={[text.caption, { color: colors.accent }]}>All levels</Text>
                     </Pressable>
                   </View>
                 )}
@@ -500,10 +508,17 @@ export default function Home() {
         </FadeIn>
 
         <FadeIn delay={200}>
-          <Section label="Our list">
+          <Section
+            label="Our list"
+            trailing={
+              <Pressable onPress={() => router.push('/list')} hitSlop={8}>
+                <Text style={[text.caption, { color: colors.accent }]}>See all</Text>
+              </Pressable>
+            }
+          >
             <Card>
               {data.bucket.length === 0 && (
-                <Text style={[text.caption, { marginBottom: sp.sm }]}>Your bucket list is empty.</Text>
+                <Text style={[text.caption, { marginBottom: sp.sm }]}>Your list is empty. Add the first thing below.</Text>
               )}
               {data.bucket.map((item) => (
                 <AppPressable key={item.id} onPress={() => toggleBucketItem(item.id)}>
@@ -584,12 +599,16 @@ export default function Home() {
         }}
       />
 
-      {/* The chapter map: where you have been, where you are, what comes next */}
-      <Sheet visible={chaptersOpen} onClose={() => setChaptersOpen(false)} title="Your story">
-        {CHAPTERS.map((c, i) => {
+      {/* The level map: where you have been, where you are, what comes next */}
+      <Sheet visible={levelsOpen} onClose={() => setLevelsOpen(false)} title="Your levels">
+        <Text style={[text.caption, { marginBottom: sp.lg }]}>
+          Everything you two make together earns points, and points carry you through these levels. It is not a
+          score to win, just a quiet measure of how much you are building.
+        </Text>
+        {LEVELS.map((c, i) => {
           const n = i + 1;
-          const now = n === data.story.chapter;
-          const done = n < data.story.chapter;
+          const now = n === data.story.level;
+          const done = n < data.story.level;
           return (
             <View key={c.at} style={styles.chapterRow}>
               <Text style={[styles.chapterNum, done && { color: colors.accent }]}>{done ? '✦' : n}</Text>
@@ -603,29 +622,29 @@ export default function Home() {
                 {c.title}
               </Text>
               <Text style={[text.caption, !done && !now && { color: colors.inkFaint }]}>
-                {now ? `${data.story.pages} pages` : done ? '' : `at ${c.at}`}
+                {now ? `${data.story.points} pts` : done ? '' : `${c.at} pts`}
               </Text>
             </View>
           );
         })}
         <Text style={[text.caption, { textAlign: 'center', marginTop: sp.lg }]}>
-          Memories and dates write 5 pages. Prompts and list items, 3. Notes and milestones, 2. Comments, 1.
+          Memories and dates earn 5 points. Prompts and list items, 3. Notes and milestones, 2. Comments, 1.
         </Text>
       </Sheet>
 
-      {/* Chapter-turn ceremony: shown once when the couple crosses a threshold */}
-      <Sheet visible={!!chapterReveal} onClose={() => setChapterReveal(null)} title="A new chapter" sealed>
-        {chapterReveal && (
+      {/* Level-up ceremony: shown once when the couple reaches a new level */}
+      <Sheet visible={!!levelReveal} onClose={() => setLevelReveal(null)} title="A new level" sealed>
+        {levelReveal && (
           <>
             <Text style={styles.chapterSeal}>✦ ✦</Text>
             <Text style={[text.micro, { color: colors.onSealed, textAlign: 'center' }]}>
-              Chapter {chapterReveal.chapter}
+              Level {levelReveal.level}
             </Text>
-            <Text style={styles.chapterTitle}>{chapterReveal.title}</Text>
+            <Text style={styles.chapterTitle}>{levelReveal.levelTitle}</Text>
             <Text style={[text.caption, { color: colors.onSealed, textAlign: 'center', marginTop: sp.md }]}>
-              {chapterSummary(chapterReveal)}
+              {pointsSummary(levelReveal)}
             </Text>
-            <PrimaryButton inverted title="Keep writing" onPress={() => setChapterReveal(null)} style={{ marginTop: sp.xl }} />
+            <PrimaryButton inverted title="Keep going" onPress={() => setLevelReveal(null)} style={{ marginTop: sp.xl }} />
           </>
         )}
       </Sheet>
@@ -633,24 +652,24 @@ export default function Home() {
   );
 }
 
-/** "127 pages so far: 18 memories, 12 prompt answers, 9 notes." Top three sources. */
-function chapterSummary(story: StoryState): string {
-  const top = PAGE_SOURCES.map((s) => ({ ...s, n: story.counts[s.key] ?? 0 }))
+/** "127 points so far: 18 memories, 12 prompt answers, 9 notes." Top three sources. */
+function pointsSummary(story: StoryState): string {
+  const top = POINT_SOURCES.map((s) => ({ ...s, n: story.counts[s.key] ?? 0 }))
     .filter((s) => s.n > 0)
     .sort((a, b) => b.n * b.per - a.n * a.per)
     .slice(0, 3)
     .map((s) => `${s.n} ${s.label}`);
   const list = top.length > 1 ? `${top.slice(0, -1).join(', ')} and ${top[top.length - 1]}` : top[0] ?? '';
   return list
-    ? `${story.pages} pages so far: ${list}.`
-    : `${story.pages} pages so far.`;
+    ? `${story.points} points so far: ${list}.`
+    : `${story.points} points so far.`;
 }
 
-/** 0-100 progress through the current chapter; never fully empty so the bar reads as begun. */
+/** 0-100 progress through the current level; never fully empty so the bar reads as begun. */
 function storyProgress(story: StoryState): number {
   if (story.nextAt === null) return 100;
-  const span = story.nextAt - story.chapterStart;
-  const done = story.pages - story.chapterStart;
+  const span = story.nextAt - story.levelStart;
+  const done = story.points - story.levelStart;
   return Math.min(100, Math.max(4, Math.round((done / span) * 100)));
 }
 

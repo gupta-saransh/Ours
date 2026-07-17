@@ -1,8 +1,10 @@
 import { one } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
-import { route, HttpError } from '../_lib/respond';
+import { route, requireString, HttpError } from '../_lib/respond';
 
-/** PATCH { done } toggles an item; DELETE removes it. */
+const RETURNING = 'id, author_id, title, done, created_at';
+
+/** PATCH { done } toggles an item, or { title } renames it; DELETE removes it. */
 export default route(['PATCH', 'DELETE'], async (req, res) => {
   const user = await requirePairedUser(req);
   const id = String(req.query.id ?? '');
@@ -19,11 +21,16 @@ export default route(['PATCH', 'DELETE'], async (req, res) => {
     return;
   }
 
+  // Rename (either partner may edit a shared list item).
+  if (req.body?.title !== undefined) {
+    const title = requireString(req.body.title, 'Title', 200);
+    const updated = await one(`UPDATE bucket_items SET title = $2 WHERE id = $1 RETURNING ${RETURNING}`, [id, title]);
+    res.status(200).json({ item: updated });
+    return;
+  }
+
   const done = req.body?.done;
   if (typeof done !== 'boolean') throw new HttpError(400, 'done must be a boolean');
-  const updated = await one(
-    'UPDATE bucket_items SET done = $2 WHERE id = $1 RETURNING id, author_id, title, done, created_at',
-    [id, done]
-  );
+  const updated = await one(`UPDATE bucket_items SET done = $2 WHERE id = $1 RETURNING ${RETURNING}`, [id, done]);
   res.status(200).json({ item: updated });
 });

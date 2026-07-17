@@ -4,6 +4,7 @@ import { publish } from '../_lib/ably';
 import { notify } from '../_lib/notify';
 import { encryptField, readField } from '../_lib/envelope';
 import { route, requireString, HttpError } from '../_lib/respond';
+import { computeStreak, type StreakState } from '../_lib/streak';
 
 /**
  * Daily prompt with mutual reveal. One question per day; answers stay private
@@ -134,89 +135,50 @@ export async function todaysPrompt(): Promise<{ prompt_date: string; text: strin
 }
 
 // ---------------------------------------------------------------------------
-// Streak. A day counts when BOTH partners answered (the reveal moment). Days
-// are UTC, matching the prompt's own day boundary. One grace day per
-// Monday-to-Sunday week (the same weeks reflections use): a single missed day
-// keeps the streak alive; a longer gap, or a second miss in the same week,
-// starts over at one. The peak lives on in longest_streak_days.
+// Streak. A day counts when BOTH partners answered that day's prompt. Rather
+// than keep a running counter (which drifted), we recompute the whole streak
+// from the mutual-day history every read; the math lives in ../_lib/streak.ts
+// and is unit-tested there. Days are UTC. One grace day per Monday-to-Sunday
+// week keeps a single slip alive. The couples.* streak columns are now just a
+// cache for admin analytics, refreshed on each reveal.
 
-export interface StreakState {
-  current: number;
-  longest: number;
-  countedToday: boolean;
-  atRisk: boolean; // alive, but today has not been counted yet
-  graceUsed?: boolean;
+export type { StreakState };
+
+function todayUTC(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
-function addDays(dateStr: string, n: number): string {
-  const d = new Date(`${dateStr}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-}
-
-function mondayOf(dateStr: string): string {
-  const d = new Date(`${dateStr}T00:00:00Z`);
-  return addDays(dateStr, -((d.getUTCDay() + 6) % 7));
-}
-
-interface StreakRow {
-  current_streak_days: number;
-  longest_streak_days: number;
-  last_streak_date: string | null;
-  grace_used_week: string | null;
-}
-
-const STREAK_COLUMNS = `current_streak_days, longest_streak_days,
-  last_streak_date::STRING AS last_streak_date, grace_used_week::STRING AS grace_used_week`;
-
-/**
- * Advance the streak for a revealed day. Idempotent per day, and the UPDATE's
- * WHERE guard makes the both-answers-land-together race a harmless no-op.
- */
-export async function advanceStreak(coupleId: string, today: string): Promise<StreakState | null> {
-  const row = await one<StreakRow>(`SELECT ${STREAK_COLUMNS} FROM couples WHERE id = $1`, [coupleId]);
-  if (!row || row.last_streak_date === today) return null;
-  const week = mondayOf(today);
-  const graceFree = !row.grace_used_week || row.grace_used_week < week;
-  let graceUsed = false;
-  let current = 1;
-  if (row.last_streak_date === addDays(today, -1)) {
-    current = row.current_streak_days + 1;
-  } else if (row.last_streak_date === addDays(today, -2) && graceFree) {
-    current = row.current_streak_days + 1;
-    graceUsed = true;
-  }
-  const longest = Math.max(current, row.longest_streak_days);
-  await one(
-    `UPDATE couples SET current_streak_days = $2, longest_streak_days = $3, last_streak_date = $4,
-       grace_used_week = COALESCE($5, grace_used_week)
-     WHERE id = $1 AND (last_streak_date IS NULL OR last_streak_date < $4)`,
-    [coupleId, current, longest, today, graceUsed ? week : null]
+/** Every UTC day on which BOTH partners answered, ascending. The source of truth. */
+async function mutualDays(coupleId: string): Promise<string[]> {
+  const rows = await q<{ d: string }>(
+    `SELECT prompt_date::STRING AS d FROM daily_prompt_answers
+     WHERE couple_id = $1
+     GROUP BY prompt_date HAVING count(*) >= 2
+     ORDER BY prompt_date ASC`,
+    [coupleId]
   );
-  return { current, longest, countedToday: true, atRisk: false, graceUsed };
+  return rows.map((r) => r.d);
+}
+
+/** Read-only streak view, derived from the answer history. */
+export async function streakStateFor(coupleId: string): Promise<StreakState> {
+  return computeStreak(await mutualDays(coupleId), todayUTC());
 }
 
 /**
- * Read-only streak view. A lapsed streak displays as 0 without waiting for the
- * next reveal to write the reset; the stored row is corrected lazily then.
+ * Recompute after a reveal and refresh the cached counters on the couple row
+ * (admin analytics read those columns directly). Returns the fresh state.
  */
-export async function streakStateFor(coupleId: string): Promise<StreakState> {
-  const row = await one<StreakRow>(`SELECT ${STREAK_COLUMNS} FROM couples WHERE id = $1`, [coupleId]);
-  if (!row || !row.last_streak_date || row.current_streak_days === 0) {
-    return { current: 0, longest: row?.longest_streak_days ?? 0, countedToday: false, atRisk: false };
-  }
-  const today = new Date().toISOString().slice(0, 10);
-  const graceFree = !row.grace_used_week || row.grace_used_week < mondayOf(today);
-  const alive =
-    row.last_streak_date === today ||
-    row.last_streak_date === addDays(today, -1) ||
-    (row.last_streak_date === addDays(today, -2) && graceFree);
-  return {
-    current: alive ? row.current_streak_days : 0,
-    longest: row.longest_streak_days,
-    countedToday: row.last_streak_date === today,
-    atRisk: alive && row.last_streak_date !== today,
-  };
+export async function advanceStreak(coupleId: string, today: string): Promise<StreakState> {
+  const days = await mutualDays(coupleId);
+  const state = computeStreak(days, today);
+  const last = days.length ? days[days.length - 1] : null;
+  await one(
+    `UPDATE couples SET current_streak_days = $2, longest_streak_days = $3, last_streak_date = $4
+     WHERE id = $1`,
+    [coupleId, state.current, state.longest, last]
+  );
+  return state;
 }
 
 interface Answer {

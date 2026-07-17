@@ -65,15 +65,24 @@ export default function Prompts() {
         keyExtractor={(e) => e.prompt_date}
         contentContainerStyle={styles.body}
         ListHeaderComponent={
-          streak && streak.longest >= 1 ? (
-            <Text style={styles.streakLine}>
-              {streak.current === 1
-                ? `♥ Day 1 of your streak · longest ${streak.longest}`
-                : streak.current >= 2
-                  ? `♥ ${streak.current} days in a row · longest ${streak.longest}`
-                  : `You paused. Start again whenever. Longest so far, ${streak.longest} days.`}
+          <View style={styles.header}>
+            {streak && (
+              <Text style={styles.streakLine}>
+                {streak.current >= 1
+                  ? `♥ ${streak.current === 1 ? 'Day 1 of your streak' : `${streak.current} days in a row`}${
+                      streak.longest > streak.current ? ` · longest ${streak.longest}` : ''
+                    }`
+                  : streak.longest >= 1
+                    ? `Your streak paused. Answer today to begin again. Longest so far, ${streak.longest} ${
+                        streak.longest === 1 ? 'day' : 'days'
+                      }.`
+                    : ''}
+              </Text>
+            )}
+            <Text style={styles.streakHow}>
+              Your streak grows by one each day you both answer the prompt. Miss a day and a weekly grace keeps it alive.
             </Text>
-          ) : null
+          </View>
         }
         ListEmptyComponent={<Empty line="No prompts answered together yet." />}
         renderItem={({ item }) => {
@@ -117,9 +126,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.hairline,
     marginVertical: sp.md,
   },
+  header: {
+    marginBottom: sp.lg,
+  },
   streakLine: {
     ...text.caption,
     textAlign: 'center',
-    marginBottom: sp.lg,
+    marginBottom: sp.sm,
+  },
+  streakHow: {
+    ...text.caption,
+    color: colors.inkFaint,
+    textAlign: 'center',
   },
 });

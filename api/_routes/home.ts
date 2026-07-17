@@ -9,26 +9,27 @@ const RESURFACE_COLUMNS = `id, thumb_data, note, note_ct,
   COALESCE(memory_date, created_at::DATE)::STRING AS memory_date`;
 
 /**
- * The couple's story chapter (the second retention hook beside the streak).
- * Everything the couple keeps in the app writes "pages"; thresholds name the
- * chapter. Computed on read from durable rows only, so it never needs its own
- * counter column and can never drift.
+ * Relationship points and levels (the second retention hook beside the streak).
+ * Everything the couple keeps in the app earns points; thresholds name the
+ * level. Computed on read from durable rows only, so it never needs its own
+ * counter column and can never drift. Kept in sync with the LEVELS/POINT_SOURCES
+ * copies in app/(tabs)/index.tsx.
  */
-const CHAPTERS: { at: number; title: string }[] = [
+const LEVELS: { at: number; title: string }[] = [
   { at: 0, title: 'First Glance' },
-  { at: 15, title: 'Ink Still Wet' },
-  { at: 40, title: 'Turning Pages' },
+  { at: 15, title: 'Getting Closer' },
+  { at: 40, title: 'Finding Our Rhythm' },
   { at: 80, title: 'Love Letters' },
   { at: 140, title: 'Keepsakes' },
   { at: 220, title: 'Golden Hours' },
-  { at: 320, title: 'A Shared Shelf' },
+  { at: 320, title: 'Building a Life' },
   { at: 450, title: 'The Long Song' },
-  { at: 620, title: 'A Thousand Pages' },
+  { at: 620, title: 'A Thousand Days' },
   { at: 850, title: 'Ever After' },
 ];
 
 function storyFor(counts: Record<string, number>) {
-  const pages =
+  const points =
     counts.memories * 5 +
     counts.notes * 2 +
     counts.answers * 3 +
@@ -37,13 +38,13 @@ function storyFor(counts: Record<string, number>) {
     counts.bucket_done * 3 +
     counts.milestones * 2;
   let idx = 0;
-  for (let i = 0; i < CHAPTERS.length; i++) if (pages >= CHAPTERS[i].at) idx = i;
-  const next = CHAPTERS[idx + 1] ?? null;
+  for (let i = 0; i < LEVELS.length; i++) if (points >= LEVELS[i].at) idx = i;
+  const next = LEVELS[idx + 1] ?? null;
   return {
-    pages,
-    chapter: idx + 1,
-    title: CHAPTERS[idx].title,
-    chapterStart: CHAPTERS[idx].at,
+    points,
+    level: idx + 1,
+    levelTitle: LEVELS[idx].title,
+    levelStart: LEVELS[idx].at,
     nextAt: next ? next.at : null,
   };
 }

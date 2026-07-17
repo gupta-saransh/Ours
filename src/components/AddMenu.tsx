@@ -22,6 +22,7 @@ import {
 } from 'lucide-react-native';
 import { tapHaptic } from '@/lib/haptics';
 import { useSafeBottom } from '@/lib/safeArea';
+import { setFabMenuOpen } from '@/lib/fabMenu';
 import { colors, motion, radius, sp, text } from '@/theme';
 
 /**
@@ -68,6 +69,7 @@ export function AddMenu() {
   const anim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    setFabMenuOpen(open); // let the chat button (above the FAB) step aside
     if (open) {
       setMounted(true);
       Animated.timing(anim, {

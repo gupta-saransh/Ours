@@ -32,6 +32,7 @@ import nudge from './_routes/nudge';
 import ablyToken from './_routes/ably-token';
 import adminAuth from './_routes/admin-auth';
 import adminStats from './_routes/admin-stats';
+import messages from './_routes/messages';
 
 type Handler = (req: VercelRequest, res: VercelResponse) => Promise<void>;
 
@@ -80,6 +81,9 @@ const routes: Partial<Record<string, Handler>> = {
   'ably-token': ablyToken,
   'admin/auth': adminAuth,
   'admin/stats': adminStats,
+  messages,
+  'messages/seen': messages,
+  'messages/unread': messages,
 };
 
 function pathSegments(req: VercelRequest): string[] {

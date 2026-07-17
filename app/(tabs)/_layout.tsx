@@ -10,6 +10,7 @@ import { TopNav } from '@/components/TopNav';
 import { NudgeToast } from '@/components/NudgeToast';
 import { HeartsRain } from '@/components/HeartsRain';
 import { AddMenu } from '@/components/AddMenu';
+import { ChatButton } from '@/components/ChatButton';
 import { useSafeBottom } from '@/lib/safeArea';
 import { colors, font, text } from '@/theme';
 
@@ -73,11 +74,13 @@ export default function TabsLayout() {
           <Tabs.Screen name="dates" options={{ title: 'Dates', tabBarIcon: icon(CalendarHeart) }} />
           <Tabs.Screen name="wishlist" options={{ title: 'Wishlist', tabBarIcon: icon(Gift) }} />
           <Tabs.Screen name="milestones" options={{ title: 'Milestones', href: null }} />
+          <Tabs.Screen name="list" options={{ title: 'Our list', href: null }} />
           <Tabs.Screen name="settings" options={{ title: 'Settings', href: null }} />
           <Tabs.Screen name="notifications" options={{ title: 'Activity', href: null }} />
           <Tabs.Screen name="prompts" options={{ title: 'Prompts', href: null }} />
           <Tabs.Screen name="reflections" options={{ title: 'Reflections', href: null }} />
         </Tabs>
+        <ChatButton />
         <AddMenu />
         <NudgeToast />
         <HeartsRain />
