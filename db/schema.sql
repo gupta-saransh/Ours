@@ -50,7 +50,8 @@ CREATE INDEX IF NOT EXISTS milestones_by_couple ON milestones (couple_id, date A
 -- v2: calendar memories, thumbnails, notifications, hearts, bucket list
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS memory_date DATE;
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS thumb_data STRING;
-UPDATE memories SET memory_date = created_at::DATE WHERE memory_date IS NULL;
+-- NOTE: Commented out to prevent CockroachDB async backfill error (42P10)
+-- UPDATE memories SET memory_date = created_at::DATE WHERE memory_date IS NULL;
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS notifications_seen_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
@@ -227,3 +228,60 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_seen_at TIMESTAMPTZ NOT NULL DEF
 -- /api/auth/me. If null, the partner's real display_name is used. Plaintext by
 -- design (a term of endearment, not private free text).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS partner_nickname STRING;
+
+-- v12: the "Wishes" tab. The shared bucket list ("Ours") and the two wishlists
+-- ("Mine"/"Theirs") now live under one tab. Bucket items gain a category
+-- (experience|item) and keep a completed_at stamp so a finished item stays on
+-- the list, dated, instead of vanishing. Wishlist items gain the same category
+-- so the whole tab can read in Experiences vs Things. category is plaintext
+-- (a coarse tag, not private free text).
+ALTER TABLE bucket_items ADD COLUMN IF NOT EXISTS category STRING NOT NULL DEFAULT 'experience';
+ALTER TABLE bucket_items ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+-- NOTE: Commented out to prevent CockroachDB async backfill error (42P10)
+-- UPDATE bucket_items SET completed_at = created_at WHERE done = true AND completed_at IS NULL;
+ALTER TABLE wishlist_items ADD COLUMN IF NOT EXISTS category STRING NOT NULL DEFAULT 'item';
+
+-- v13: the full date flow. A proposal gains an optional time (so the 24h/6h/1h
+-- reminders have something to count down to), a post-date rating + reflection
+-- (encrypted like other free text) + a linked timeline memory, a completed_at
+-- stamp, and one boolean per reminder threshold so each fires at most once.
+-- date_ideas is the couple's rotating pool of date ideas saved from dates they
+-- loved; the "surprise them" suggestion draws from it plus a built-in list.
+ALTER TABLE date_proposals ADD COLUMN IF NOT EXISTS proposed_time STRING;      -- 'HH:MM', optional
+ALTER TABLE date_proposals ADD COLUMN IF NOT EXISTS rating INT;                -- 1..5, after it happens
+ALTER TABLE date_proposals ADD COLUMN IF NOT EXISTS reflection STRING;         -- post-date note (plaintext fallback)
+ALTER TABLE date_proposals ADD COLUMN IF NOT EXISTS reflection_ct BYTEA;       -- encrypted post-date note
+ALTER TABLE date_proposals ADD COLUMN IF NOT EXISTS memory_id UUID;            -- timeline photo/memory of the date
+ALTER TABLE date_proposals ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;  -- marked done / rated
+ALTER TABLE date_proposals ADD COLUMN IF NOT EXISTS reminded_24 BOOL NOT NULL DEFAULT false;
+ALTER TABLE date_proposals ADD COLUMN IF NOT EXISTS reminded_6 BOOL NOT NULL DEFAULT false;
+ALTER TABLE date_proposals ADD COLUMN IF NOT EXISTS reminded_1 BOOL NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS date_ideas (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  couple_id UUID NOT NULL,
+  title STRING NOT NULL DEFAULT '',
+  title_ct BYTEA,
+  location STRING,
+  location_ct BYTEA,
+  created_by UUID NOT NULL,
+  times_used INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS date_ideas_by_couple ON date_ideas (couple_id, created_at DESC);
+
+-- v14: week-in-review keepsakes. The saved weekly reflection now freezes a
+-- little snapshot of that week (a few photo thumbnails + note excerpts) into a
+-- JSONB blob, so the saved card stays a cute keepsake even if the underlying
+-- memories change later. Decrypted at compute time; the thumbnails are the same
+-- ~15KB list-size images used everywhere else (no full photos).
+ALTER TABLE weekly_reflections ADD COLUMN IF NOT EXISTS snapshot JSONB;
+
+-- v15: chat media + read receipts. A message can carry an image: a thumbnail
+-- (image_thumb, ~480px, shown inline and in the list) and the full image
+-- (image_data, fetched only when tapped, like memories). Images are plaintext
+-- base64 like memory photos (photos are not among the encrypted fields). The
+-- per-user chat_seen_at cursor (v10) already exists; the partner's is now
+-- surfaced so the sender can see a "Seen" receipt.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_thumb STRING;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_data STRING;

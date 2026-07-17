@@ -137,6 +137,10 @@ export function MemoryComments({
   };
 
   const avatarFor = (authorId: string) => (authorId === user?.id ? user?.avatar : partner?.avatar);
+  // Show the pet name for the partner's comments (partner.display_name already
+  // resolves to the nickname); your own comments keep your real name.
+  const nameFor = (c: Comment) =>
+    c.author_id === partner?.id ? partner?.display_name ?? c.author_name : c.author_name;
 
   return (
     // Stop taps here from bubbling to the viewer backdrop (which would close it).
@@ -158,7 +162,7 @@ export function MemoryComments({
                 <Avatar id={avatarFor(c.author_id)} name={c.author_name} size={28} />
                 <View style={{ flex: 1 }}>
                   <View style={styles.metaRow}>
-                    <Text style={[styles.author, { color: pal.strong }]}>{c.author_name}</Text>
+                    <Text style={[styles.author, { color: pal.strong }]}>{nameFor(c)}</Text>
                     <Text style={[styles.time, { color: pal.faint }]}>
                       {relativeTime(c.created_at)}
                       {c.edited_at ? ' · edited' : ''}

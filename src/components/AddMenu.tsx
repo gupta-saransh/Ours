@@ -44,7 +44,7 @@ interface Action {
 const ACTIONS: Action[] = [
   { key: 'milestone', label: 'Add a milestone', Icon: Star, path: '/milestones' },
   { key: 'date', label: 'Propose a date', Icon: CalendarHeart, path: '/dates' },
-  { key: 'wishlist', label: 'Add wishlist item', Icon: Gift, path: '/wishlist' },
+  { key: 'wishlist', label: 'Add a wish', Icon: Gift, path: '/wishlist' },
   { key: 'note', label: 'Add note', Icon: StickyNote, path: '/notes' },
   { key: 'memory', label: 'Add memory', Icon: ImageIcon, path: '/memories' },
 ];

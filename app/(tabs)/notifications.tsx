@@ -31,7 +31,7 @@ const KIND_ROUTE: Record<string, string> = {
   note: '/notes',
   milestone: '/milestones',
   partner: '/',
-  bucket: '/',
+  bucket: '/wishlist',
   prompt: '/prompts',
   capsule: '/memories',
   date: '/dates',

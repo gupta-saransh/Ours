@@ -8,7 +8,9 @@ import { route, requireString, HttpError } from '../_lib/respond';
 // title/url/notes are encrypted at rest (envelope.ts): each has a _ct column,
 // resolved to plaintext in JS after the query.
 const ITEM_COLUMNS =
-  'id, owner_id, added_by, title, title_ct, url, url_ct, notes, notes_ct, secret, gotten, gotten_by, created_at';
+  'id, owner_id, added_by, title, title_ct, url, url_ct, notes, notes_ct, category, secret, gotten, gotten_by, created_at';
+
+const CATEGORIES = ['experience', 'item'];
 
 async function decodeItem(coupleId: string, row: Record<string, any>) {
   const { title_ct, url_ct, notes_ct, ...rest } = row;
@@ -59,6 +61,14 @@ export default route(['GET', 'POST'], async (req, res) => {
   const notes = req.body?.notes ? requireString(req.body.notes, 'Notes', 500) : null;
   const ownerId = typeof req.body?.ownerId === 'string' ? req.body.ownerId : user.id;
   const secret = req.body?.secret === true;
+  const category =
+    req.body?.category === undefined || req.body?.category === null
+      ? 'item'
+      : typeof req.body.category === 'string' && CATEGORIES.includes(req.body.category)
+        ? req.body.category
+        : (() => {
+            throw new HttpError(400, 'Unknown category');
+          })();
 
   const owner = await one<{ id: string }>('SELECT id FROM users WHERE id = $1 AND couple_id = $2', [
     ownerId,
@@ -71,9 +81,9 @@ export default route(['GET', 'POST'], async (req, res) => {
   const urlCt = url ? await encryptField(user.couple_id, url) : null;
   const notesCt = notes ? await encryptField(user.couple_id, notes) : null;
   const created = await one(
-    `INSERT INTO wishlist_items (couple_id, owner_id, added_by, title, title_ct, url, url_ct, notes, notes_ct, secret)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-     RETURNING id, owner_id, added_by, secret, gotten, gotten_by, created_at`,
+    `INSERT INTO wishlist_items (couple_id, owner_id, added_by, title, title_ct, url, url_ct, notes, notes_ct, category, secret)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     RETURNING id, owner_id, added_by, category, secret, gotten, gotten_by, created_at`,
     [
       user.couple_id,
       ownerId,
@@ -84,6 +94,7 @@ export default route(['GET', 'POST'], async (req, res) => {
       urlCt,
       notesCt ? null : notes,
       notesCt,
+      category,
       secret,
     ]
   );

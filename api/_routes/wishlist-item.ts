@@ -3,7 +3,7 @@ import { requirePairedUser } from '../_lib/auth';
 import { publish } from '../_lib/ably';
 import { route, requireString, HttpError } from '../_lib/respond';
 
-const ITEM_COLUMNS = 'id, owner_id, added_by, title, url, notes, secret, gotten, gotten_by, created_at';
+const ITEM_COLUMNS = 'id, owner_id, added_by, title, url, notes, category, secret, gotten, gotten_by, created_at';
 
 /**
  * PATCH: owner edits their own non-secret rows; the partner can toggle

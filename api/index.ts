@@ -33,6 +33,7 @@ import ablyToken from './_routes/ably-token';
 import adminAuth from './_routes/admin-auth';
 import adminStats from './_routes/admin-stats';
 import messages from './_routes/messages';
+import cronReminders from './_routes/cron-reminders';
 
 type Handler = (req: VercelRequest, res: VercelResponse) => Promise<void>;
 
@@ -84,6 +85,8 @@ const routes: Partial<Record<string, Handler>> = {
   messages,
   'messages/seen': messages,
   'messages/unread': messages,
+  'messages/:id': messages,
+  'cron/reminders': cronReminders,
 };
 
 function pathSegments(req: VercelRequest): string[] {

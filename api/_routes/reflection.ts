@@ -1,6 +1,7 @@
 import { one, q } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
 import { publish } from '../_lib/ably';
+import { readField } from '../_lib/envelope';
 import { route } from '../_lib/respond';
 
 export interface ReflectionPayload {
@@ -15,6 +16,10 @@ export interface ReflectionPayload {
     nudges: number;
   };
   highlight: { id: string; thumb_data: string | null; note: string } | null;
+  // A little snapshot of the week: a few memory thumbnails with their notes,
+  // and a couple of love-note excerpts. Decrypted here (envelope.ts).
+  gallery: { id: string; thumb_data: string | null; note: string }[];
+  noteHighlights: string[];
   saved: boolean;
 }
 
@@ -32,44 +37,74 @@ export async function computeReflection(coupleId: string): Promise<ReflectionPay
   const we = range!.we;
   const win = `created_at >= $2::DATE AND created_at < $3::DATE`;
 
-  const [memories, notes, prompts, hearts, bucket, nudges, highlightTop, highlightNew, saved] = await Promise.all([
-    one<{ n: number }>(`SELECT count(*)::int AS n FROM memories WHERE couple_id = $1 AND ${win}`, [coupleId, ws, we]),
-    one<{ n: number }>(`SELECT count(*)::int AS n FROM love_notes WHERE couple_id = $1 AND ${win}`, [coupleId, ws, we]),
-    one<{ n: number }>(
-      `SELECT count(*)::int AS n FROM (
-         SELECT prompt_date FROM daily_prompt_answers
-         WHERE couple_id = $1 AND prompt_date >= $2::DATE AND prompt_date < $3::DATE
-         GROUP BY prompt_date HAVING count(*) = 2
-       )`,
-      [coupleId, ws, we]
-    ),
-    one<{ n: number }>(
-      `SELECT count(*)::int AS n FROM memory_hearts h JOIN memories m ON m.id = h.memory_id
-       WHERE m.couple_id = $1 AND h.created_at >= $2::DATE AND h.created_at < $3::DATE`,
-      [coupleId, ws, we]
-    ),
-    one<{ n: number }>(`SELECT count(*)::int AS n FROM bucket_items WHERE couple_id = $1 AND ${win}`, [coupleId, ws, we]),
-    one<{ n: number }>(
-      `SELECT count(*)::int AS n FROM notifications WHERE couple_id = $1 AND kind = 'nudge' AND ${win}`,
-      [coupleId, ws, we]
-    ),
-    // Highlight: most-hearted memory of the week, else the newest one.
-    one(
-      `SELECT m.id, m.thumb_data, m.note,
-         (SELECT count(*) FROM memory_hearts h WHERE h.memory_id = m.id) AS hn
-       FROM memories m WHERE m.couple_id = $1 AND m.${win}
-       ORDER BY hn DESC, m.created_at DESC LIMIT 1`,
-      [coupleId, ws, we]
-    ),
-    one(
-      `SELECT id, thumb_data, note FROM memories
-       WHERE couple_id = $1 AND ${win} ORDER BY created_at DESC LIMIT 1`,
-      [coupleId, ws, we]
-    ),
-    one(`SELECT id FROM weekly_reflections WHERE couple_id = $1 AND week_start = $2::DATE`, [coupleId, ws]),
-  ]);
+  const [memories, notes, prompts, hearts, bucket, nudges, highlightRow, galleryRows, noteRows, saved] =
+    await Promise.all([
+      one<{ n: number }>(`SELECT count(*)::int AS n FROM memories WHERE couple_id = $1 AND ${win}`, [coupleId, ws, we]),
+      one<{ n: number }>(`SELECT count(*)::int AS n FROM love_notes WHERE couple_id = $1 AND ${win}`, [coupleId, ws, we]),
+      one<{ n: number }>(
+        `SELECT count(*)::int AS n FROM (
+           SELECT prompt_date FROM daily_prompt_answers
+           WHERE couple_id = $1 AND prompt_date >= $2::DATE AND prompt_date < $3::DATE
+           GROUP BY prompt_date HAVING count(*) = 2
+         )`,
+        [coupleId, ws, we]
+      ),
+      one<{ n: number }>(
+        `SELECT count(*)::int AS n FROM memory_hearts h JOIN memories m ON m.id = h.memory_id
+         WHERE m.couple_id = $1 AND h.created_at >= $2::DATE AND h.created_at < $3::DATE`,
+        [coupleId, ws, we]
+      ),
+      one<{ n: number }>(`SELECT count(*)::int AS n FROM bucket_items WHERE couple_id = $1 AND ${win}`, [coupleId, ws, we]),
+      one<{ n: number }>(
+        `SELECT count(*)::int AS n FROM notifications WHERE couple_id = $1 AND kind = 'nudge' AND ${win}`,
+        [coupleId, ws, we]
+      ),
+      // Highlight: most-hearted memory of the week, else the newest one.
+      one<{ id: string; thumb_data: string | null; note: string; note_ct: Buffer | null }>(
+        `SELECT m.id, m.thumb_data, m.note, m.note_ct,
+           (SELECT count(*) FROM memory_hearts h WHERE h.memory_id = m.id) AS hn
+         FROM memories m WHERE m.couple_id = $1 AND m.${win} AND m.sealed_until IS NULL
+         ORDER BY hn DESC, m.created_at DESC LIMIT 1`,
+        [coupleId, ws, we]
+      ),
+      // Gallery: a handful of the week's memories, photos first.
+      q<{ id: string; thumb_data: string | null; note: string; note_ct: Buffer | null }>(
+        `SELECT id, thumb_data, note, note_ct FROM memories
+         WHERE couple_id = $1 AND ${win} AND sealed_until IS NULL
+         ORDER BY (thumb_data IS NOT NULL) DESC, created_at DESC LIMIT 4`,
+        [coupleId, ws, we]
+      ),
+      // A couple of note excerpts from the week.
+      q<{ body: string; body_ct: Buffer | null }>(
+        `SELECT body, body_ct FROM love_notes
+         WHERE couple_id = $1 AND ${win} AND sealed_until IS NULL
+         ORDER BY created_at DESC LIMIT 3`,
+        [coupleId, ws, we]
+      ),
+      one(`SELECT id FROM weekly_reflections WHERE couple_id = $1 AND week_start = $2::DATE`, [coupleId, ws]),
+    ]);
 
-  const highlightRow: any = highlightTop ?? highlightNew ?? null;
+  const gallery = await Promise.all(
+    galleryRows.map(async (m) => ({
+      id: m.id,
+      thumb_data: m.thumb_data,
+      note: (await readField(coupleId, m.note_ct, m.note)) ?? '',
+    }))
+  );
+  const noteHighlights = (
+    await Promise.all(noteRows.map((n) => readField(coupleId, n.body_ct, n.body)))
+  )
+    .map((b) => (b ?? '').trim())
+    .filter(Boolean);
+
+  const highlight = highlightRow
+    ? {
+        id: highlightRow.id,
+        thumb_data: highlightRow.thumb_data,
+        note: (await readField(coupleId, highlightRow.note_ct, highlightRow.note)) ?? '',
+      }
+    : null;
+
   return {
     week_start: ws,
     week_end: we,
@@ -81,7 +116,9 @@ export async function computeReflection(coupleId: string): Promise<ReflectionPay
       bucket_added: bucket?.n ?? 0,
       nudges: nudges?.n ?? 0,
     },
-    highlight: highlightRow ? { id: highlightRow.id, thumb_data: highlightRow.thumb_data, note: highlightRow.note } : null,
+    highlight,
+    gallery,
+    noteHighlights,
     saved: !!saved,
   };
 }
@@ -93,7 +130,7 @@ export default route(['GET', 'POST'], async (req, res) => {
 
   if (isHistory) {
     const reflections = await q(
-      `SELECT id, week_start::STRING AS week_start, counts, highlight_memory_id, created_at
+      `SELECT id, week_start::STRING AS week_start, counts, snapshot, highlight_memory_id, created_at
        FROM weekly_reflections WHERE couple_id = $1 ORDER BY week_start DESC LIMIT 60`,
       [user.couple_id]
     );
@@ -104,11 +141,21 @@ export default route(['GET', 'POST'], async (req, res) => {
   const payload = await computeReflection(user.couple_id);
 
   if (req.method === 'POST') {
+    // Freeze the week's snapshot (thumbnails + note excerpts) so the keepsake
+    // survives later edits to the underlying memories.
+    const snapshot = { gallery: payload.gallery, notes: payload.noteHighlights };
     await one(
-      `INSERT INTO weekly_reflections (couple_id, week_start, counts, highlight_memory_id, saved_by)
-       VALUES ($1, $2::DATE, $3, $4, $5)
-       ON CONFLICT (couple_id, week_start) DO NOTHING`,
-      [user.couple_id, payload.week_start, JSON.stringify(payload.counts), payload.highlight?.id ?? null, user.id]
+      `INSERT INTO weekly_reflections (couple_id, week_start, counts, snapshot, highlight_memory_id, saved_by)
+       VALUES ($1, $2::DATE, $3, $4, $5, $6)
+       ON CONFLICT (couple_id, week_start) DO UPDATE SET snapshot = EXCLUDED.snapshot, counts = EXCLUDED.counts`,
+      [
+        user.couple_id,
+        payload.week_start,
+        JSON.stringify(payload.counts),
+        JSON.stringify(snapshot),
+        payload.highlight?.id ?? null,
+        user.id,
+      ]
     );
     await publish(user.couple_id, 'reflection.saved', { week_start: payload.week_start });
     res.status(200).json({ ...payload, saved: true });

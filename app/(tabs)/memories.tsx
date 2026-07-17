@@ -63,7 +63,10 @@ const pad = (n: number) => String(n).padStart(2, '0');
 const dayKey = (y: number, m: number, d: number) => `${y}-${pad(m + 1)}-${pad(d)}`;
 
 export default function Memories() {
-  const { user } = useAuth();
+  const { user, partner } = useAuth();
+  // Any author who is not you is your partner, so their nickname (already baked
+  // into partner.display_name at /api/auth/me) is the name to show on their rows.
+  const partnerName = partner?.display_name ?? null;
   const { width } = useWindowDimensions();
   const wide = Platform.OS === 'web' && width >= 900;
   const [memories, setMemories] = useState<Memory[] | null>(null);
@@ -190,6 +193,7 @@ export default function Memories() {
       memory={item}
       mine={item.author_id === user?.id}
       myId={user?.id ?? ''}
+      partnerName={partnerName}
       threadOpen={openThreads.has(item.id)}
       onToggleThread={() => toggleThread(item.id)}
       onCountChange={(n) => syncCount(item.id, n)}
@@ -206,7 +210,7 @@ export default function Memories() {
   const overlays = (
     <>
       <MemoryComposer date={composerDate} onClose={() => setComposerDate(null)} onCreated={onCreated} />
-      <RevealViewer memory={viewer} myId={user?.id ?? ''} onClose={() => setViewer(null)} onDeleted={onDeleted} />
+      <RevealViewer memory={viewer} myId={user?.id ?? ''} partnerName={partnerName} onClose={() => setViewer(null)} onDeleted={onDeleted} />
     </>
   );
 
@@ -280,6 +284,7 @@ function MemoryCard({
   memory,
   mine,
   myId,
+  partnerName,
   threadOpen,
   onToggleThread,
   onCountChange,
@@ -289,6 +294,7 @@ function MemoryCard({
   memory: Memory;
   mine: boolean;
   myId: string;
+  partnerName: string | null;
   threadOpen: boolean;
   onToggleThread: () => void;
   onCountChange: (count: number) => void;
@@ -304,7 +310,7 @@ function MemoryCard({
           Sealed until {formatDay(memory.sealed_until!)}
         </Text>
         <Text style={[text.caption, { color: colors.onSealed, textAlign: 'center', marginTop: sp.xs }]}>
-          Written by {memory.author_name}, {formatDay(memory.created_at)}
+          Written by {partnerName ?? memory.author_name}, {formatDay(memory.created_at)}
         </Text>
       </Card>
     );
@@ -340,7 +346,7 @@ function MemoryCard({
       </Pressable>
       <View style={styles.memoryFooter}>
         <Text style={text.caption}>
-          {mine ? 'You' : memory.author_name} · {formatDay(memory.memory_date)}
+          {mine ? 'You' : partnerName ?? memory.author_name} · {formatDay(memory.memory_date)}
         </Text>
         <View style={styles.footerActions}>
           <Pressable onPress={onToggleThread} hitSlop={8} style={styles.commentButton}>
@@ -606,11 +612,13 @@ function MemoryComposer({
 function RevealViewer({
   memory,
   myId,
+  partnerName,
   onClose,
   onDeleted,
 }: {
   memory: Memory | null;
   myId: string;
+  partnerName: string | null;
   onClose: () => void;
   onDeleted: (id: string) => void;
 }) {
@@ -697,7 +705,7 @@ function RevealViewer({
             ) : null}
             <Text style={styles.viewerNote}>{memory.note}</Text>
             <Text style={styles.viewerMeta}>
-              {memory.author_name} · {formatDay(memory.memory_date)}
+              {memory.author_id === myId ? memory.author_name : partnerName ?? memory.author_name} · {formatDay(memory.memory_date)}
               {memory.sealed_until ? ` · sealed ${formatDay(memory.created_at)}` : ''}
             </Text>
             <MemoryComments memoryId={memory.id} myId={myId} />

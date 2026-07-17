@@ -6,7 +6,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -109,6 +108,8 @@ interface HomeData {
     week_end: string;
     counts: Record<string, number>;
     highlight: { id: string; thumb_data: string | null; note: string } | null;
+    gallery: { id: string; thumb_data: string | null; note: string }[];
+    noteHighlights: string[];
     saved: boolean;
   } | null;
 }
@@ -123,14 +124,16 @@ export default function Home() {
   const [failed, setFailed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [newItem, setNewItem] = useState('');
   const [answerOpen, setAnswerOpen] = useState(false);
   const [storyOpen, setStoryOpen] = useState(false);
   const [levelsOpen, setLevelsOpen] = useState(false);
   const [levelReveal, setLevelReveal] = useState<StoryState | null>(null);
   const showeredRef = React.useRef(false);
+  // The prompt date we last celebrated for, so the streak hearts shower fires
+  // exactly once the day both partners answer (never twice, never on reopen).
+  const celebratedDateRef = React.useRef<string | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<HomeData> => {
     setFailed(false);
     const home = await api<HomeData>('/api/home');
     setData(home);
@@ -149,6 +152,19 @@ export default function Home() {
         localStorage.setItem('ours.story-chapter', String(home.story.level));
       }
     } catch {}
+    return home;
+  }, []);
+
+  // A streak "extends" the moment a day becomes mutual (both answered). Reward
+  // it with the hearts shower, once per prompt day, whichever partner completes
+  // it: the submit response covers the second answerer, the reveal event covers
+  // the first.
+  const celebrateStreak = useCallback((streak: StreakState | undefined, promptDate: string | undefined) => {
+    if (!streak?.countedToday || !promptDate) return;
+    if (celebratedDateRef.current === promptDate) return;
+    celebratedDateRef.current = promptDate;
+    successHaptic();
+    showHearts();
   }, []);
 
   useEffect(() => {
@@ -157,7 +173,11 @@ export default function Home() {
 
   useCoupleEvent('partner.joined', () => load().catch(() => {}));
   useCoupleEvent('prompt.answered', () => load().catch(() => {}));
-  useCoupleEvent('prompt.revealed', () => load().catch(() => {}));
+  useCoupleEvent('prompt.revealed', () => {
+    load()
+      .then((home) => celebrateStreak(home.streak, home.prompt.prompt.prompt_date))
+      .catch(() => {});
+  });
   useCoupleEvent('date.updated', () => load().catch(() => {}));
 
   const refresh = async () => {
@@ -210,24 +230,6 @@ export default function Home() {
 
   const addMilestone = () =>
     router.navigate({ pathname: '/milestones', params: { compose: String(Date.now()) } });
-
-  const addBucketItem = async () => {
-    const title = newItem.trim();
-    if (!title) return;
-    setNewItem('');
-    try {
-      const res = await api<{ item: HomeData['bucket'][0] }>('/api/bucket', { method: 'POST', body: { title } });
-      setData((d) => (d ? { ...d, bucket: [res.item, ...d.bucket].slice(0, 5) } : d));
-    } catch {
-      setNewItem(title);
-    }
-  };
-
-  const toggleBucketItem = async (id: string) => {
-    successHaptic();
-    setData((d) => (d ? { ...d, bucket: d.bucket.filter((b) => b.id !== id) } : d));
-    await api(`/api/bucket/${id}`, { method: 'PATCH', body: { done: true } }).catch(() => load().catch(() => {}));
-  };
 
   return (
     <Screen>
@@ -507,44 +509,6 @@ export default function Home() {
           </Section>
         </FadeIn>
 
-        <FadeIn delay={200}>
-          <Section
-            label="Our list"
-            trailing={
-              <Pressable onPress={() => router.push('/list')} hitSlop={8}>
-                <Text style={[text.caption, { color: colors.accent }]}>See all</Text>
-              </Pressable>
-            }
-          >
-            <Card>
-              {data.bucket.length === 0 && (
-                <Text style={[text.caption, { marginBottom: sp.sm }]}>Your list is empty. Add the first thing below.</Text>
-              )}
-              {data.bucket.map((item) => (
-                <AppPressable key={item.id} onPress={() => toggleBucketItem(item.id)}>
-                  <View style={styles.bucketRow}>
-                    <View style={styles.checkbox} />
-                    <Text style={[text.body, { flex: 1 }]}>{item.title}</Text>
-                  </View>
-                </AppPressable>
-              ))}
-              <View style={styles.bucketComposer}>
-                <TextInput
-                  value={newItem}
-                  onChangeText={setNewItem}
-                  placeholder="Someday, together we will..."
-                  placeholderTextColor={colors.inkFaint}
-                  style={styles.bucketInput}
-                  onSubmitEditing={addBucketItem}
-                />
-                <AppPressable onPress={addBucketItem} disabled={!newItem.trim()} style={[styles.bucketAdd, !newItem.trim() && { opacity: 0.4 }]}>
-                  <Text style={{ color: colors.onSealed, fontSize: 18, lineHeight: 20 }}>＋</Text>
-                </AppPressable>
-              </View>
-            </Card>
-          </Section>
-        </FadeIn>
-
         {data.pinnedNote && (
           <FadeIn delay={240}>
             <Section label="Pinned on your wall">
@@ -596,6 +560,8 @@ export default function Home() {
           setAnswerOpen(false);
           setData((d) => (d ? { ...d, prompt: state, streak: state.streak ?? d.streak } : d));
           if (state.streak?.graceUsed) toast.show('Grace day used. Streak continues.');
+          // Second answerer completes the day: reward the extended streak now.
+          celebrateStreak(state.streak, state.prompt.prompt_date);
         }}
       />
 
@@ -768,33 +734,47 @@ function ReflectionCard({
     }
   };
 
+  const photos = reflection.gallery?.filter((g) => g.thumb_data) ?? [];
+  const noteExcerpt = reflection.noteHighlights?.[0];
+
   return (
     <Card>
       <View style={styles.reflectionRule} />
       <Text style={[text.title, { marginBottom: sp.base }]}>
         {formatDay(reflection.week_start)} to {formatDay(reflection.week_end)}
       </Text>
-      <View style={{ flexDirection: 'row', gap: sp.base }}>
-        <View style={styles.reflectionGrid}>
-          {Object.entries(labels).map(([key, label]) => (
-            <View key={key} style={styles.reflectionStat}>
-              <Text style={[text.title, { color: colors.surfaceSealed }]}>
-                {(reflection.counts[key] ?? 0).toLocaleString()}
-              </Text>
-              <Text style={text.caption}>{label}</Text>
-            </View>
+
+      {photos.length > 0 && (
+        <View style={styles.reflectionStrip}>
+          {photos.map((g) => (
+            <Image key={g.id} source={{ uri: g.thumb_data! }} style={styles.reflectionStripPhoto} contentFit="cover" />
           ))}
         </View>
-        {reflection.highlight?.thumb_data && (
-          <Image source={{ uri: reflection.highlight.thumb_data }} style={styles.reflectionHighlight} contentFit="cover" />
-        )}
+      )}
+
+      {noteExcerpt ? (
+        <Text style={styles.reflectionQuote} numberOfLines={3}>
+          &ldquo;{noteExcerpt}&rdquo;
+        </Text>
+      ) : null}
+
+      <View style={styles.reflectionGrid}>
+        {Object.entries(labels).map(([key, label]) => (
+          <View key={key} style={styles.reflectionStat}>
+            <Text style={[text.title, { color: colors.surfaceSealed }]}>
+              {(reflection.counts[key] ?? 0).toLocaleString()}
+            </Text>
+            <Text style={text.caption}>{label}</Text>
+          </View>
+        ))}
       </View>
+
       <View style={[styles.rowBetween, { marginTop: sp.lg }]}>
         <Pressable onPress={onOpenHistory} hitSlop={8}>
-          <Text style={[text.caption, { color: colors.accent }]}>Past weeks</Text>
+          <Text style={[text.caption, { color: colors.accent }]}>Saved weeks</Text>
         </Pressable>
         <SecondaryButton
-          title={reflection.saved ? 'Saved ✓' : 'Save this week'}
+          title={reflection.saved ? 'Saved ✓' : 'Keep this week'}
           onPress={save}
           loading={saving}
           disabled={reflection.saved}
@@ -1002,19 +982,30 @@ const styles = StyleSheet.create({
     marginBottom: sp.base,
   },
   reflectionGrid: {
-    flex: 1,
     flexDirection: 'row',
     flexWrap: 'wrap',
+    marginTop: sp.md,
   },
   reflectionStat: {
     width: '33.3%',
     marginBottom: sp.md,
   },
-  reflectionHighlight: {
-    width: 88,
-    height: 88,
+  reflectionStrip: {
+    flexDirection: 'row',
+    gap: sp.sm,
+    marginBottom: sp.md,
+  },
+  reflectionStripPhoto: {
+    flex: 1,
+    aspectRatio: 1,
     borderRadius: radius.sm,
     backgroundColor: colors.blushSoft,
+  },
+  reflectionQuote: {
+    ...text.bodySerif,
+    fontStyle: 'italic',
+    color: colors.inkMuted,
+    marginBottom: sp.sm,
   },
   lockLine: {
     flexDirection: 'row',

@@ -33,6 +33,7 @@ interface Totals {
   comments: number;
   dates: number;
   wishlist: number;
+  messages: number;
   bucket_total: number;
   bucket_done: number;
 }
@@ -45,12 +46,39 @@ interface Streaks {
   longest_ever: number;
   avg_current: number;
 }
+interface ActivityDay {
+  day: string;
+  memories: number;
+  notes: number;
+  prompts: number;
+  comments: number;
+  dates: number;
+  messages: number;
+  total: number;
+}
+interface CoupleRow {
+  id: string;
+  created_at: string;
+  members: number;
+  memories: number;
+  notes: number;
+  messages: number;
+  dates: number;
+  prompts: number;
+  comments: number;
+  bucket: number;
+  wishlist: number;
+  last_active: string | null;
+  total: number;
+}
 interface Stats {
   totals: Totals;
   membership: Membership;
   streaks: Streaks;
   activeCouples: number;
   signups: { day: string; n: number }[];
+  activity: ActivityDay[];
+  couples: CoupleRow[];
 }
 
 async function adminFetch<T>(
@@ -120,6 +148,7 @@ export default function AdminDashboard() {
   const contentItems = [
     { label: 'Memories', value: stats.totals.memories },
     { label: 'Notes', value: stats.totals.notes },
+    { label: 'Chat messages', value: stats.totals.messages },
     { label: 'Milestones', value: stats.totals.milestones },
     { label: 'Prompt answers', value: stats.totals.prompt_answers },
     { label: 'Comments', value: stats.totals.comments },
@@ -167,11 +196,121 @@ export default function AdminDashboard() {
           <SignupsChart series={stats.signups} />
         </Section>
 
+        <Section label="Activity over time">
+          <ActivityChart series={stats.activity ?? []} />
+        </Section>
+
         <Section label="Content">
           <ContentBars items={contentItems} bucketDone={stats.totals.bucket_done} bucketTotal={stats.totals.bucket_total} />
         </Section>
+
+        <Section label="By couple">
+          <CoupleList couples={stats.couples ?? []} />
+        </Section>
       </ScrollView>
     </Screen>
+  );
+}
+
+/** Total content the couples made each day, over 30 days. Toggle between the
+ * daily count and the running (cumulative) total to read the trend. */
+function ActivityChart({ series }: { series: ActivityDay[] }) {
+  const [cumulative, setCumulative] = useState(false);
+  const [selected, setSelected] = useState<number | null>(null);
+  if (series.length === 0) {
+    return (
+      <Card>
+        <Text style={text.caption}>No activity yet.</Text>
+      </Card>
+    );
+  }
+
+  let running = 0;
+  const points = series.map((d) => {
+    running += d.total;
+    return { day: d.day, value: cumulative ? running : d.total };
+  });
+  const max = Math.max(1, ...points.map((p) => p.value));
+  const peakIdx = cumulative ? points.length - 1 : points.reduce((best, p, i) => (p.value > points[best].value ? i : best), 0);
+  const shown = selected ?? peakIdx;
+  const shownEntry = points[shown];
+  const grandTotal = series.reduce((s, d) => s + d.total, 0);
+
+  return (
+    <Card>
+      <View style={styles.chartHeader}>
+        <Text style={text.subtitle}>{cumulative ? 'Everything made, running total' : 'Made each day'}</Text>
+        <Pressable onPress={() => setCumulative((c) => !c)} hitSlop={8}>
+          <Text style={[text.caption, { color: colors.accent }]}>{cumulative ? 'Show daily' : 'Show cumulative'}</Text>
+        </Pressable>
+      </View>
+      <View style={styles.barsRow}>
+        {points.map((p, i) => {
+          const h = Math.max(2, Math.round((p.value / max) * CHART_HEIGHT));
+          const isShown = i === shown;
+          return (
+            <Pressable key={p.day} onPress={() => setSelected(i)} style={styles.barCol}>
+              <View style={[styles.bar, { height: h, backgroundColor: isShown ? colors.surfaceSealed : colors.inkFaint }]} />
+            </Pressable>
+          );
+        })}
+      </View>
+      <View style={styles.axisLine} />
+      <Text style={[text.caption, { marginTop: sp.sm, textAlign: 'center' }]}>
+        {formatDay(shownEntry.day)} · {shownEntry.value.toLocaleString()} {cumulative ? 'made so far' : 'that day'}
+      </Text>
+      <Text style={[text.caption, { marginTop: sp.xs, textAlign: 'center', color: colors.inkFaint }]}>
+        {grandTotal.toLocaleString()} things made in 30 days
+      </Text>
+    </Card>
+  );
+}
+
+/** Per-couple data volume, biggest first. Counts only, no content. */
+function CoupleList({ couples }: { couples: CoupleRow[] }) {
+  const [showAll, setShowAll] = useState(false);
+  if (couples.length === 0) {
+    return (
+      <Card>
+        <Text style={text.caption}>No couples yet.</Text>
+      </Card>
+    );
+  }
+  const shown = showAll ? couples : couples.slice(0, 12);
+  const maxTotal = Math.max(1, ...couples.map((c) => c.total));
+
+  return (
+    <Card>
+      <Text style={[text.subtitle, { marginBottom: sp.base }]}>Who is building the most</Text>
+      {shown.map((c, i) => (
+        <View key={c.id} style={[styles.coupleRow, i > 0 && styles.coupleBorder]}>
+          <View style={styles.coupleHead}>
+            <Text style={[text.body, { fontVariant: ['tabular-nums'] }]}>
+              {c.id}
+              <Text style={text.caption}>{c.members === 2 ? '  paired' : '  solo'}</Text>
+            </Text>
+            <Text style={[text.subtitle, { color: colors.surfaceSealed }]}>{c.total.toLocaleString()}</Text>
+          </View>
+          <View style={styles.coupleTrack}>
+            <View style={[styles.coupleFill, { width: `${Math.max(2, (c.total / maxTotal) * 100)}%` }]} />
+          </View>
+          <Text style={[text.caption, { marginTop: sp.xs }]} numberOfLines={1}>
+            {c.memories}m · {c.notes} notes · {c.messages} msgs · {c.dates} dates · {c.prompts} prompts
+          </Text>
+          <Text style={[text.micro, { color: colors.inkFaint, marginTop: 2 }]}>
+            joined {formatDay(c.created_at)}
+            {c.last_active ? ` · last active ${formatDay(c.last_active)}` : ' · no activity yet'}
+          </Text>
+        </View>
+      ))}
+      {couples.length > 12 && (
+        <Pressable onPress={() => setShowAll((s) => !s)} hitSlop={8} style={{ marginTop: sp.md, alignSelf: 'center' }}>
+          <Text style={[text.caption, { color: colors.accent }]}>
+            {showAll ? 'Show fewer' : `Show all ${couples.length}`}
+          </Text>
+        </Pressable>
+      )}
+    </Card>
   );
 }
 
@@ -391,5 +530,30 @@ const styles = StyleSheet.create({
   barValue: {
     width: 40,
     textAlign: 'right',
+  },
+  coupleRow: {
+    paddingVertical: sp.md,
+  },
+  coupleBorder: {
+    borderTopWidth: 1,
+    borderTopColor: colors.hairline,
+  },
+  coupleHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: sp.xs,
+  },
+  coupleTrack: {
+    height: 8,
+    borderRadius: radius.hairline,
+    backgroundColor: colors.hairline,
+    overflow: 'hidden',
+  },
+  coupleFill: {
+    height: '100%',
+    backgroundColor: colors.surfaceSealed,
+    borderTopRightRadius: radius.hairline,
+    borderBottomRightRadius: radius.hairline,
   },
 });

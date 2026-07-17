@@ -195,7 +195,7 @@ export default function LoveNotes() {
             Sealed until {formatDay(item.sealed_until!)}
           </Text>
           <Text style={[text.caption, { color: colors.onSealed, textAlign: 'center', marginTop: sp.xs }]}>
-            Written by {item.author_name}, {formatDay(item.created_at)}
+            Written by {partner?.display_name ?? item.author_name}, {formatDay(item.created_at)}
           </Text>
         </Card>
       );
@@ -241,7 +241,7 @@ export default function LoveNotes() {
               size={22}
             />
             <Text style={[text.caption, { flexShrink: 1 }]} numberOfLines={1}>
-              {mine ? 'You' : item.author_name} · {relativeTime(item.created_at)}
+              {mine ? 'You' : partner?.display_name ?? item.author_name} · {relativeTime(item.created_at)}
             </Text>
           </View>
           <View style={styles.noteTools}>
@@ -310,7 +310,7 @@ export default function LoveNotes() {
               {reveal.body}
             </Text>
             <Text style={[text.caption, { color: 'rgba(249, 239, 220, 0.65)', textAlign: 'center', marginTop: sp.lg }]}>
-              {reveal.author_name} sealed this on {formatDay(reveal.created_at)}
+              {partner?.display_name ?? reveal.author_name} sealed this on {formatDay(reveal.created_at)}
             </Text>
           </>
         )}

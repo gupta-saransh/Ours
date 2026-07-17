@@ -11,7 +11,7 @@ const ROUTES: Record<NotificationKind, string> = {
   note: '/notes',
   milestone: '/milestones',
   partner: '/',
-  bucket: '/',
+  bucket: '/wishlist',
   prompt: '/prompts',
   capsule: '/memories',
   date: '/dates',

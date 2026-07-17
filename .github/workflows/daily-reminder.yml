@@ -1,0 +1,36 @@
+name: Daily reminder
+
+# A PWA cannot schedule its own notifications, so this scheduled job pings the
+# app once a day. The endpoint nudges (over Web Push) both partners of any couple
+# that added no memory and no note that day. See api/_routes/cron-reminders.ts.
+#
+# Setup (one time):
+#   1. In the app's Vercel project, set the env var CRON_SECRET to a long random
+#      string (and add it to your local .env).
+#   2. In this GitHub repo: Settings -> Secrets and variables -> Actions, add
+#      - CRON_SECRET  (the SAME value as in Vercel)
+#      - APP_URL      (your deployed origin, e.g. https://ours.vercel.app)
+#   3. Adjust the cron time below to your evening. GitHub cron is UTC. Example:
+#      21:00 in New York (UTC-4 in summer) is '0 1 * * *' (01:00 UTC next day).
+
+on:
+  schedule:
+    # 01:00 UTC daily. Change to land in your own evening.
+    - cron: '0 1 * * *'
+  workflow_dispatch: {} # lets you run it by hand from the Actions tab to test
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping end-of-day reminder
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "APP_URL or CRON_SECRET secret is not set; skipping."
+            exit 0
+          fi
+          curl -fsS -X POST "$APP_URL/api/cron/reminders?kind=daily" \
+            -H "Authorization: Bearer $CRON_SECRET"
