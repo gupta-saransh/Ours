@@ -536,8 +536,15 @@ const styles = StyleSheet.create({
     marginBottom: sp.xxl,
   },
   backBtn: { width: 44, height: 32, justifyContent: 'center' },
-  skipBtn: { width: 44, height: 32, alignItems: 'flex-end', justifyContent: 'center' },
-  skipText: { ...text.caption, color: colors.inkFaint },
+  skipBtn: { minWidth: 44, height: 32, alignItems: 'flex-end', justifyContent: 'center' },
+  // Gold and underlined, like every other quiet link in the app. It was
+  // inkFaint before, which read as disabled text rather than something to tap.
+  skipText: {
+    ...text.caption,
+    color: colors.accent,
+    textDecorationLine: 'underline',
+    fontWeight: '600',
+  },
   progress: { flexDirection: 'row', gap: sp.xs, alignItems: 'center' },
   progressDot: {
     width: 20,
