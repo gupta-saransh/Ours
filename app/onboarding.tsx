@@ -8,6 +8,8 @@ import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
 import { successHaptic, tapHaptic } from '@/lib/haptics';
 import { enableWebPush, webPushNeedsInstall, webPushSupported } from '@/lib/push-web';
+import { isStandalone, shouldOfferInstall } from '@/lib/install';
+import { AddToHomeScreen } from '@/components/AddToHomeScreen';
 import { logEvent } from '@/lib/log';
 import { markPushAskDeclined } from '@/lib/pushAsk';
 import { nextStep, stepPosition, stepsFor, type OnboardingStep } from '@/lib/onboardingSteps';
@@ -73,9 +75,9 @@ export default function Onboarding() {
         (m) => m.kind === 'birthday' && (m.person_id ?? m.author_id) === user?.id
       ),
       hasNickname: !!partner?.nickname,
-      // An iPhone in a Safari tab cannot subscribe yet, but it CAN be told how
-      // (add to home screen). Hiding the step there is why it never appeared.
       canNotify: Platform.OS === 'web' && (webPushSupported() || webPushNeedsInstall()),
+      offerInstall: shouldOfferInstall(),
+      needsInstallFirst: webPushNeedsInstall(),
     });
   }, [paired, partner?.nickname, user?.id]);
 
@@ -142,7 +144,7 @@ export default function Onboarding() {
 
   const skip = () => {
     logEvent('onboarding.skipped', { step: current ?? 'unknown' });
-    if (current === 'notifications') markPushAskDeclined(false);
+    if (current === 'notifications') markPushAskDeclined(false, isStandalone());
     advance();
   };
 
@@ -199,6 +201,7 @@ export default function Onboarding() {
             onDone={advance}
           />
         )}
+        {current === 'install' && <AddToHomeScreen onDone={advance} onSkip={skip} />}
         {current === 'notifications' && (
           <NotificationsStep
             partnerName={partner?.display_name ?? null}
@@ -464,18 +467,8 @@ function NotificationsStep({
     );
   }
 
-  // iPhone in a Safari tab: subscribing is impossible until Ours is on the home
-  // screen. Say that plainly instead of offering a button that cannot work.
-  if (webPushNeedsInstall()) {
-    return (
-      <StepFrame
-        title="Add Ours to your home screen"
-        line="iPhone only lets apps on your home screen send notifications. Tap the share button in Safari, choose Add to Home Screen, then open Ours from there. We will ask again once you do."
-      >
-        <PrimaryButton title="Got it" onPress={onDone} />
-      </StepFrame>
-    );
-  }
+  // An uninstalled iPhone never reaches this step: the install step comes
+  // first and this ask returns once they reopen Ours from the home screen.
 
   const turnOn = async () => {
     setBusy(true);
@@ -483,7 +476,7 @@ function NotificationsStep({
     try {
       if (!user?.notifications_enabled) await updateProfile({ notificationsEnabled: true });
       await enableWebPush();
-      markPushAskDeclined(true);
+      markPushAskDeclined(true, isStandalone());
       successHaptic();
       logEvent('onboarding.notifications_granted');
       onDone();
@@ -491,7 +484,7 @@ function NotificationsStep({
       // The browser prompt was dismissed or is blocked. Only browser settings
       // can undo that, so stop the resurfacing schedule too.
       setBlocked(err?.message ?? 'Your browser would not allow it.');
-      markPushAskDeclined(true);
+      markPushAskDeclined(true, isStandalone());
       logEvent('onboarding.notifications_denied');
     } finally {
       setBusy(false);

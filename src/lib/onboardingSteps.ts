@@ -10,7 +10,13 @@
  * decides what is worth showing in the first place.
  */
 
-export type OnboardingStep = 'partner' | 'anniversary' | 'birthday' | 'nickname' | 'notifications';
+export type OnboardingStep =
+  | 'partner'
+  | 'anniversary'
+  | 'birthday'
+  | 'nickname'
+  | 'install'
+  | 'notifications';
 
 /** The canonical order. `done` is not a step, it is the end of the flow. */
 export const STEP_ORDER: OnboardingStep[] = [
@@ -18,6 +24,9 @@ export const STEP_ORDER: OnboardingStep[] = [
   'anniversary',
   'birthday',
   'nickname',
+  // Install comes before the notification ask: on iPhone the ask cannot even
+  // work until Ours is on the home screen.
+  'install',
   'notifications',
 ];
 
@@ -42,6 +51,18 @@ export interface StepContext {
    * vanished. The step now always shows and picks its own wording.
    */
   canNotify: boolean;
+  /**
+   * Should we offer to put Ours on the home screen? True on an iPhone that is
+   * not installed yet (where notifications genuinely depend on it), and on
+   * Android only when the browser has handed us a real install prompt.
+   */
+  offerInstall: boolean;
+  /**
+   * True when this browser cannot subscribe to push until Ours is installed
+   * (an iPhone outside the home-screen app). The notification ask is pointless
+   * until then.
+   */
+  needsInstallFirst: boolean;
 }
 
 /**
@@ -62,8 +83,13 @@ export function stepsFor(ctx: StepContext): OnboardingStep[] {
       case 'nickname':
         // Only meaningful once there is a partner to name.
         return ctx.paired && !ctx.hasNickname;
+      case 'install':
+        return ctx.offerInstall;
       case 'notifications':
-        return ctx.canNotify;
+        // On an uninstalled iPhone the browser cannot subscribe at all, so the
+        // install step carries the story instead; the ask returns by itself
+        // once they reopen Ours from the home screen and the flow resumes.
+        return ctx.canNotify && !ctx.needsInstallFirst;
       default:
         return false;
     }

@@ -7,6 +7,7 @@ import { useToast } from '@/lib/toast';
 import { successHaptic } from '@/lib/haptics';
 import { logEvent } from '@/lib/log';
 import { enableWebPush, webPushNeedsInstall, webPushSupported } from '@/lib/push-web';
+import { isStandalone } from '@/lib/install';
 import { askIsDue, readPushAsk, writePushAsk, type AskRecord } from '@/lib/pushAsk';
 import { PrimaryButton } from '@/components/kit';
 import { colors, font, radius, sp, text } from '@/theme';
@@ -61,8 +62,15 @@ export function NotificationsInvite() {
   const open = useCallback(
     (v: Variant, record: AskRecord) => {
       setVariant(v);
-      writePushAsk({ ...record, n: record.n + 1, at: new Date().toISOString() });
-      logEvent('push.invite_shown', { variant: v, ask_number: record.n + 1 });
+      writePushAsk({
+        ...record,
+        n: record.n + 1,
+        at: new Date().toISOString(),
+        // Remember whether this ask happened from the installed app, so an
+        // install later can still earn a fresh one.
+        askedStandalone: isStandalone(),
+      });
+      logEvent('push.invite_shown', { variant: v, ask_number: record.n + 1, standalone: isStandalone() });
     },
     []
   );
@@ -86,7 +94,8 @@ export function NotificationsInvite() {
       if (await isSubscribed()) return;
       // Spacing and the three-ask cap live in pushAsk.ts, shared with the
       // onboarding step so a skip there counts toward the same schedule.
-      if (!askIsDue(record)) return;
+      // Being installed overrides the cooldown once (see askIsDue).
+      if (!askIsDue(record, isStandalone())) return;
 
       open(needsInstall ? 'install' : partner ? 'paired' : 'solo', record);
     }, SHOW_DELAY_MS);

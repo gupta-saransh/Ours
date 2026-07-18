@@ -22,6 +22,13 @@ export interface AskRecord {
   pairedAsked?: boolean;
   /** They granted, or the browser blocked us. Either way, stop asking. */
   done?: boolean;
+  /**
+   * Was the last ask made from the installed app? A "maybe later" given in a
+   * browser tab is not a refusal of notifications: on an iPhone that tab could
+   * not have subscribed at all. Installing changes the answer, so it earns one
+   * fresh ask.
+   */
+  askedStandalone?: boolean;
 }
 
 export function readPushAsk(): AskRecord {
@@ -46,12 +53,13 @@ export function writePushAsk(next: AskRecord): void {
  * Onboarding calls this so a skip there feeds the same schedule the invite card
  * reads, instead of asking again the moment they reach Home.
  */
-export function markPushAskDeclined(final: boolean): void {
+export function markPushAskDeclined(final: boolean, standalone = false): void {
   const record = readPushAsk();
   writePushAsk({
     ...record,
     n: record.n + 1,
     at: new Date().toISOString(),
+    askedStandalone: standalone,
     ...(final ? { done: true } : {}),
   });
 }
@@ -63,9 +71,21 @@ export function daysSince(iso: string): number {
   return (Date.now() - then) / 86_400_000;
 }
 
-/** Is another ask due right now, given the record? */
-export function askIsDue(record: AskRecord): boolean {
+/**
+ * Is another ask due right now?
+ *
+ * `standalone` is whether we are running from the home screen. Adding Ours to
+ * the home screen is the one event that earns a fresh ask no matter what the
+ * schedule says: every earlier "maybe later" was answered in a browser tab,
+ * which on an iPhone could not have subscribed even if they had said yes, and
+ * on Android shares this same storage so the cooldown would otherwise follow
+ * them into the installed app. Someone who installed to get notifications must
+ * not be met with silence. Only a definitive answer (`done`, meaning they
+ * granted or the browser blocked us) still stops it.
+ */
+export function askIsDue(record: AskRecord, standalone = false): boolean {
   if (record.done) return false;
+  if (standalone && record.n > 0 && !record.askedStandalone) return true;
   if (record.n >= WAIT_DAYS.length) return false;
   return daysSince(record.at) >= WAIT_DAYS[record.n];
 }

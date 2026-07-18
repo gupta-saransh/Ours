@@ -14,6 +14,7 @@ import { RealtimeProvider } from '@/lib/realtime';
 import { ToastProvider } from '@/lib/toast';
 import { registerServiceWorker } from '@/lib/push-web';
 import { installGlobalLogging } from '@/lib/log';
+import { captureInstallPrompt } from '@/lib/install';
 import { colors } from '@/theme';
 
 export default function RootLayout() {
@@ -29,6 +30,8 @@ export default function RootLayout() {
   // registration itself is recorded.
   useEffect(() => {
     installGlobalLogging();
+    // Must be early: the browser's install offer fires soon after load, once.
+    captureInstallPrompt();
     registerServiceWorker();
   }, []);
 

@@ -14,7 +14,12 @@ const fresh: StepContext = {
   hasOwnBirthday: false,
   hasNickname: false,
   canNotify: true,
+  offerInstall: false,
+  needsInstallFirst: false,
 };
+
+/** An iPhone in a Safari tab: can be installed, cannot subscribe until it is. */
+const iphoneInTab: StepContext = { ...fresh, offerInstall: true, needsInstallFirst: true };
 
 describe('stepsFor', () => {
   it('asks a brand new solo signup for everything except the nickname', () => {
@@ -57,18 +62,19 @@ describe('stepsFor', () => {
   it('leaves only the notifications step when everything else is set', () => {
     expect(
       stepsFor({
+        ...fresh,
         paired: true,
         hasAnniversary: true,
         hasOwnBirthday: true,
         hasNickname: true,
-        canNotify: true,
       })
     ).toEqual(['notifications']);
   });
 
-  it('returns nothing to do when the platform cannot notify either', () => {
+  it('returns nothing to do when the platform cannot notify or install', () => {
     expect(
       stepsFor({
+        ...fresh,
         paired: true,
         hasAnniversary: true,
         hasOwnBirthday: true,
@@ -76,6 +82,37 @@ describe('stepsFor', () => {
         canNotify: false,
       })
     ).toEqual([]);
+  });
+});
+
+describe('the install step', () => {
+  it('appears when the platform can be offered an install', () => {
+    expect(stepsFor({ ...fresh, offerInstall: true })).toContain('install');
+  });
+
+  it('is absent when there is nothing to install (desktop, or already installed)', () => {
+    expect(stepsFor(fresh)).not.toContain('install');
+  });
+
+  it('replaces the notification ask on an iPhone that is not installed yet', () => {
+    // The ask cannot work in an iOS tab, so the install step carries it; the
+    // ask returns on its own once they reopen from the home screen.
+    const steps = stepsFor(iphoneInTab);
+    expect(steps).toContain('install');
+    expect(steps).not.toContain('notifications');
+  });
+
+  it('sits before the notification ask when both apply (Android with a prompt)', () => {
+    const steps = stepsFor({ ...fresh, offerInstall: true });
+    expect(steps.indexOf('install')).toBeLessThan(steps.indexOf('notifications'));
+  });
+
+  it('is gone once installed, leaving the ask behind', () => {
+    // Reopened from the home screen: standalone, so nothing to install and the
+    // browser can finally subscribe.
+    const steps = stepsFor({ ...iphoneInTab, offerInstall: false, needsInstallFirst: false });
+    expect(steps).not.toContain('install');
+    expect(steps).toContain('notifications');
   });
 });
 
