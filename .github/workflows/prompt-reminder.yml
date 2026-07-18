@@ -27,7 +27,7 @@ jobs:
           # Print the endpoint's report (who was skipped and why), fail the job
           # on a non-2xx, and warn when nothing was delivered.
           response=$(curl -sS -w '\n%{http_code}' -X POST \
-            "$APP_URL/api/cron/reminders/?kind=prompt" \
+            "$APP_URL/api/cron/reminders?kind=prompt" \
             -H "Authorization: Bearer $CRON_SECRET")
           status=$(echo "$response" | tail -n1)
           body=$(echo "$response" | sed '$d')

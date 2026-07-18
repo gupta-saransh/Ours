@@ -14,7 +14,9 @@
       "PowerShell(npx vitest run 2>&1)",
       "PowerShell(npx expo export --platform web 2>&1)",
       "Bash(npx vitest *)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(npm run *)",
+      "Bash(npm test *)"
     ],
     "additionalDirectories": [
       "d:\\Coding\\NewProjects\\RelationshipHQ\\api"
