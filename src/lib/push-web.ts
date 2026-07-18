@@ -78,6 +78,43 @@ function messageOf(err: unknown): string {
   return String((err as Error)?.message ?? err ?? 'unknown').slice(0, 200);
 }
 
+/**
+ * Repair a missing subscription without ever prompting.
+ *
+ * Called on every signed-in app load. If permission is ALREADY granted but the
+ * browser has no subscription (or has one the server never stored), subscribe
+ * and store it. This covers the cases that silently break delivery: an endpoint
+ * the push service rotated, a subscription the server dropped after a 410, and
+ * accounts whose notifications_enabled says "yes" while push_token is null.
+ *
+ * Does nothing when permission is 'default' or 'denied': asking is the Settings
+ * toggle's job, and a silent prompt on load would be hostile.
+ */
+export async function ensureWebPushSubscribed(): Promise<void> {
+  if (!webPushSupported()) return;
+  if (Notification.permission !== 'granted') return;
+  try {
+    const reg = (await navigator.serviceWorker.getRegistration()) ?? (await navigator.serviceWorker.register(SW_URL));
+    await navigator.serviceWorker.ready;
+
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { key } = await api<{ key: string | null }>('/api/push/vapid-public-key');
+      if (!key) return;
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(key),
+      });
+      logEvent('push.resubscribed', { endpoint_host: hostOf(sub.endpoint) });
+    }
+    // Always re-POST: the server's copy may be missing or stale even when the
+    // browser's is fine.
+    await api('/api/push/subscribe', { method: 'POST', body: { subscription: sub.toJSON() } });
+  } catch (err) {
+    logClientError('push.ensure_failed', { message: messageOf(err) });
+  }
+}
+
 /** True if a Web Push subscription is currently active. */
 export async function isWebPushSubscribed(): Promise<boolean> {
   if (!webPushSupported()) return false;

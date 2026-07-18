@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Platform, useWindowDimensions, View } from 'react-native';
 import { Redirect, Tabs } from 'expo-router';
 import { CalendarHeart, Gift, Home, Image as ImageIcon, StickyNote } from 'lucide-react-native';
@@ -11,6 +11,8 @@ import { NudgeToast } from '@/components/NudgeToast';
 import { HeartsRain } from '@/components/HeartsRain';
 import { AddMenu } from '@/components/AddMenu';
 import { ChatButton } from '@/components/ChatButton';
+import { NotificationsInvite } from '@/components/NotificationsInvite';
+import { ensureWebPushSubscribed } from '@/lib/push-web';
 import { useSafeBottom } from '@/lib/safeArea';
 import { colors, font, text } from '@/theme';
 
@@ -20,10 +22,18 @@ import { colors, font, text } from '@/theme';
 const TAB_BAR_CONTENT_HEIGHT = 58;
 
 export default function TabsLayout() {
-  const { status } = useAuth();
+  const { status, user } = useAuth();
   const { width } = useWindowDimensions();
   const safeBottom = useSafeBottom();
   const wide = Platform.OS === 'web' && width >= 900;
+
+  // Signed in and notifications are meant to be on: make sure the server
+  // actually holds a live subscription. Silent (never prompts), and it fixes
+  // accounts whose push_token went missing or was never stored.
+  const notificationsOn = user?.notifications_enabled;
+  useEffect(() => {
+    if (status === 'signedIn' && notificationsOn) ensureWebPushSubscribed();
+  }, [status, notificationsOn]);
 
   if (status === 'loading') return null;
   if (status === 'signedOut') return <Redirect href="/welcome" />;
@@ -83,6 +93,7 @@ export default function TabsLayout() {
         <AddMenu />
         <NudgeToast />
         <HeartsRain />
+        <NotificationsInvite />
       </View>
     </NotificationsProvider>
   );

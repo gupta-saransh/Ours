@@ -123,6 +123,16 @@ export default function Settings() {
     }
   };
 
+  // The switch must show DELIVERY, not intent. notifications_enabled defaults
+  // to true for every new account, so binding the switch to it alone showed
+  // "on" to people the server could never reach. On web it is only really on
+  // when a subscription is stored too. (Native has its own flow, so intent is
+  // all we have there.)
+  const notificationsOn =
+    Platform.OS === 'web' && pushStatus
+      ? pushStatus.notificationsEnabled && pushStatus.hasSubscription
+      : user?.notifications_enabled ?? true;
+
   // What to say before a test is run, from the server's own view of things.
   const pushLine =
     pushResult ??
@@ -133,7 +143,7 @@ export default function Settings() {
         : !pushStatus.notificationsEnabled
           ? 'Turn the switch on to start getting them.'
           : !pushStatus.hasSubscription
-            ? 'This device has not signed up yet. Turn the switch off, then on again.'
+            ? 'This device is not signed up yet. Turn the switch on, and allow notifications when your browser asks.'
             : 'This device is signed up. Send one to be sure.');
 
   const saveName = async () => {
@@ -168,6 +178,7 @@ export default function Settings() {
 
   const toggleNotifications = async (value: boolean) => {
     setError(null);
+    setPushResult(null);
     try {
       await updateProfile({ notificationsEnabled: value });
       // On web, enabling also asks the browser to allow push and subscribes.
@@ -181,6 +192,10 @@ export default function Settings() {
       }
     } catch (err: any) {
       setError(err?.message ?? 'Something went wrong');
+    } finally {
+      // Re-read the server's view so the switch settles on the truth, whether
+      // the browser prompt was granted, dismissed, or blocked.
+      loadPushStatus();
     }
   };
 
@@ -327,10 +342,10 @@ export default function Settings() {
                 </Text>
               </View>
               <Switch
-                value={user?.notifications_enabled ?? true}
+                value={notificationsOn}
                 onValueChange={toggleNotifications}
                 trackColor={{ true: colors.blush, false: colors.hairline }}
-                thumbColor={user?.notifications_enabled ? colors.surfaceSealed : '#FFFFFF'}
+                thumbColor={notificationsOn ? colors.surfaceSealed : '#FFFFFF'}
               />
             </View>
             {/* Delivery has several moving parts (server keys, browser
