@@ -18,6 +18,18 @@ export default route(['POST'], async (req, res) => {
     `INSERT INTO users (email, password_hash, display_name) VALUES ($1, $2, $3) RETURNING ${USER_COLUMNS}`,
     [email, hashPassword(password), displayName]
   );
+
+  // Friend referral: /sign-up?ref=CODE passes the code through. Best-effort and
+  // catch-guarded (pre-v16 schema, bogus code) so it can never block a signup.
+  const ref = typeof req.body?.ref === 'string' ? req.body.ref.trim().toUpperCase() : '';
+  if (ref && /^[A-Z2-9]{4,12}$/.test(ref)) {
+    await one(
+      `UPDATE users SET referred_by = (SELECT id FROM users WHERE referral_code = $2 LIMIT 1)
+       WHERE id = $1 AND EXISTS (SELECT 1 FROM users WHERE referral_code = $2)`,
+      [user!.id, ref]
+    ).catch(() => {});
+  }
+
   // Everyone gets a space of their own right away; pairing is optional.
   const couple = await createCoupleForUser(user!.id);
   user!.couple_id = couple.id;

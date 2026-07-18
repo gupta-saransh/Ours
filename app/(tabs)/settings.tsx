@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import { Check, Lock } from 'lucide-react-native';
 import { useAuth } from '@/lib/auth';
+import { api } from '@/lib/api';
 import { disableWebPush, enableWebPush } from '@/lib/push-web';
 import {
   AppPressable,
@@ -28,6 +30,34 @@ import {
   type ThemePresetId,
 } from '@/theme';
 
+/** What the server can see about this account's notification delivery. */
+interface PushStatus {
+  serverConfigured: boolean;
+  notificationsEnabled: boolean;
+  hasSubscription: boolean;
+  endpointHost: string | null;
+}
+
+/** Turn the server's machine-readable failure into something a person can act on. */
+function reasonCopy(reason?: string): string {
+  switch (reason) {
+    case 'notifications-off':
+      return 'Notifications are turned off for your account.';
+    case 'no-subscription':
+      return 'This device has not signed up yet. Turn the switch off, then on again.';
+    case 'vapid-not-configured':
+      return 'The server is missing its notification keys.';
+    case 'subscription-expired':
+      return 'This device signed up a while ago and it has lapsed. Turn the switch off, then on again.';
+    case 'send-failed':
+      return 'The notification service turned it away. The logs have the details.';
+    case 'native-not-provisioned':
+      return 'This build cannot receive them. Use Ours from your home screen.';
+    default:
+      return 'Could not send it.';
+  }
+}
+
 export default function Settings() {
   const { user, couple, partner, encryption, encryptionCode, updateProfile, refresh, signOut, deleteAccount } = useAuth();
   const router = useRouter();
@@ -40,6 +70,71 @@ export default function Settings() {
   const [error, setError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [pushStatus, setPushStatus] = useState<PushStatus | null>(null);
+  const [pushResult, setPushResult] = useState<string | null>(null);
+  const [testingPush, setTestingPush] = useState(false);
+  const [referral, setReferral] = useState<{ code: string | null; joined: number } | null>(null);
+  const [referralCopied, setReferralCopied] = useState(false);
+
+  useEffect(() => {
+    api<{ code: string | null; joined: number }>('/api/referral')
+      .then(setReferral)
+      .catch(() => setReferral(null));
+  }, []);
+
+  // The share link. On web this is the real deployed origin; native builds fall
+  // back to the code alone, which signup also accepts typed by hand.
+  const referralLink = (code: string) =>
+    Platform.OS === 'web' && typeof window !== 'undefined'
+      ? `${window.location.origin}/sign-up?ref=${code}`
+      : `Join us on Ours with code ${code}`;
+
+  const copyReferral = async () => {
+    if (!referral?.code) return;
+    await Clipboard.setStringAsync(referralLink(referral.code));
+    setReferralCopied(true);
+    setTimeout(() => setReferralCopied(false), 2000);
+  };
+
+  // Ask the server what it can see about this account's notifications.
+  const loadPushStatus = useCallback(() => {
+    api<PushStatus>('/api/push/subscribe')
+      .then(setPushStatus)
+      .catch(() => setPushStatus(null));
+  }, []);
+  useEffect(loadPushStatus, [loadPushStatus]);
+
+  const sendTestPush = async () => {
+    setPushResult(null);
+    setTestingPush(true);
+    try {
+      const result = await api<{ delivered: boolean; reason?: string }>('/api/push/subscribe', {
+        method: 'POST',
+        body: { test: true },
+      });
+      setPushResult(
+        result.delivered ? 'Sent. It should arrive in a moment.' : reasonCopy(result.reason)
+      );
+    } catch (err: any) {
+      setPushResult(err?.message ?? 'Could not send it.');
+    } finally {
+      setTestingPush(false);
+      loadPushStatus();
+    }
+  };
+
+  // What to say before a test is run, from the server's own view of things.
+  const pushLine =
+    pushResult ??
+    (pushStatus === null
+      ? 'Checking this device.'
+      : !pushStatus.serverConfigured
+        ? 'Notifications are not set up on the server yet.'
+        : !pushStatus.notificationsEnabled
+          ? 'Turn the switch on to start getting them.'
+          : !pushStatus.hasSubscription
+            ? 'This device has not signed up yet. Turn the switch off, then on again.'
+            : 'This device is signed up. Send one to be sure.');
 
   const saveName = async () => {
     setError(null);
@@ -238,6 +333,35 @@ export default function Settings() {
                 thumbColor={user?.notifications_enabled ? colors.surfaceSealed : '#FFFFFF'}
               />
             </View>
+            {/* Delivery has several moving parts (server keys, browser
+                permission, a subscription that can quietly expire). This asks
+                the server what it sees, and can send a real one to prove it. */}
+            <View style={[styles.row, styles.rowBorder, styles.testRow]}>
+              <View style={{ flex: 1, paddingRight: sp.base }}>
+                <Text style={text.body}>Check they are working</Text>
+                <Text style={text.caption}>{pushLine}</Text>
+              </View>
+              <SecondaryButton title="Send a test" onPress={sendTestPush} loading={testingPush} />
+            </View>
+          </Card>
+        </Section>
+
+        <Section label="Share Ours">
+          <Card>
+            <Text style={[text.caption, { marginBottom: sp.md }]}>
+              Know another pair who would love a little home like this? Send them your link.
+            </Text>
+            <AppPressable onPress={copyReferral} style={styles.referralChip} disabled={!referral?.code}>
+              <Text style={styles.referralLink} numberOfLines={1}>
+                {referral?.code ? referralLink(referral.code) : 'Getting your link...'}
+              </Text>
+              <Text style={text.caption}>{referralCopied ? 'Copied ✓' : 'Tap to copy'}</Text>
+            </AppPressable>
+            {referral && referral.joined > 0 && (
+              <Text style={[text.caption, { marginTop: sp.sm, textAlign: 'center' }]}>
+                {referral.joined === 1 ? 'One friend joined through you ♥' : `${referral.joined} friends joined through you ♥`}
+              </Text>
+            )}
           </Card>
         </Section>
 
@@ -364,6 +488,22 @@ const styles = StyleSheet.create({
     gap: sp.md,
   },
   rowBorder: { borderTopWidth: 1, borderTopColor: colors.hairline },
+  testRow: { alignItems: 'flex-start' },
+  referralChip: {
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    paddingVertical: sp.md,
+    paddingHorizontal: sp.base,
+    alignItems: 'center',
+    gap: sp.xs,
+  },
+  referralLink: {
+    ...text.caption,
+    color: colors.ink,
+    fontWeight: '600',
+  },
   themeRow: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -40,7 +40,8 @@ interface AuthContextValue {
   token: string | null;
   encryption: boolean; // server confirms envelope encryption at rest is active
   encryptionCode: string | null; // "seal code": same for both partners, derived from the couple's key
-  signUp(email: string, password: string, displayName: string): Promise<void>;
+  /** `ref` is a friend-referral code from a /sign-up?ref= link, if any. */
+  signUp(email: string, password: string, displayName: string, ref?: string | null): Promise<void>;
   signIn(email: string, password: string): Promise<void>;
   signOut(): Promise<void>;
   deleteAccount(): Promise<void>;
@@ -138,10 +139,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       token,
       encryption,
       encryptionCode,
-      async signUp(email, password, displayName) {
+      async signUp(email, password, displayName, ref) {
         const data = await api<{ token: string; user: User }>('/api/auth/signup', {
           method: 'POST',
-          body: { email, password, displayName },
+          body: { email, password, displayName, ref: ref || undefined },
         });
         await applySession(data.token, data.user);
       },

@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
+import { flushLogs, log } from './_lib/log';
 import authSignup from './_routes/auth-signup';
 import authLogin from './_routes/auth-login';
 import authMe from './_routes/auth-me';
@@ -34,6 +35,9 @@ import adminAuth from './_routes/admin-auth';
 import adminStats from './_routes/admin-stats';
 import messages from './_routes/messages';
 import cronReminders from './_routes/cron-reminders';
+import clientLogs from './_routes/logs';
+import game from './_routes/game';
+import referral from './_routes/referral';
 
 type Handler = (req: VercelRequest, res: VercelResponse) => Promise<void>;
 
@@ -87,6 +91,9 @@ const routes: Partial<Record<string, Handler>> = {
   'messages/unread': messages,
   'messages/:id': messages,
   'cron/reminders': cronReminders,
+  logs: clientLogs,
+  'game/today': game,
+  referral,
 };
 
 function pathSegments(req: VercelRequest): string[] {
@@ -114,6 +121,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!match) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.status(404).json({ error: `No API route for "${path}"` });
+    // route() never runs for an unknown path, so log (and ship) it here.
+    log('warn', 'http.no_route', { method: req.method, path: `/api/${path}`, status: 404 });
+    await flushLogs();
     return;
   }
   await match(req, res);

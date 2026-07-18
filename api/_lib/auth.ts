@@ -3,7 +3,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import type { VercelRequest } from '@vercel/node';
 import { one } from './db';
-import { HttpError } from './respond';
+import { HttpError, logContext } from './respond';
 
 const SCRYPT_KEYLEN = 64;
 
@@ -54,6 +54,8 @@ export async function requireUser(req: VercelRequest): Promise<SessionUser> {
   }
   const user = await one<SessionUser>(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [userId]);
   if (!user) throw new HttpError(401, 'Account no longer exists');
+  // Every subsequent log line for this request carries who it was for.
+  logContext(req, { user_id: user.id, couple_id: user.couple_id ?? undefined });
   return user;
 }
 

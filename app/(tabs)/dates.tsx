@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -97,7 +98,13 @@ export default function Dates() {
   const [countering, setCountering] = useState(false);
   const [reflectFor, setReflectFor] = useState<Proposal | null>(null);
 
-  useComposeParam(() => setComposerOpen(true));
+  // A wish pulled down from the Wishes night sky arrives as ?wish=<title>; the
+  // propose sheet opens prefilled so the wish becomes a date in one step.
+  const { wish } = useLocalSearchParams<{ wish?: string }>();
+  useComposeParam(() => {
+    if (typeof wish === 'string' && wish.trim()) setPrefill({ title: wish.trim(), location: '' });
+    setComposerOpen(true);
+  });
 
   const load = useCallback(async () => {
     setFailed(false);

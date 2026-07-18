@@ -9,7 +9,7 @@ const LINKS = [
   { href: '/memories', label: 'Memories' },
   { href: '/notes', label: 'Notes' },
   { href: '/dates', label: 'Dates' },
-  { href: '/wishlist', label: 'Wishlist' },
+  { href: '/wishlist', label: 'Wishes' },
 ] as const;
 
 /** Top navigation bar, shown on wide (web) layouts instead of bottom tabs. */

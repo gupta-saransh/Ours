@@ -13,6 +13,7 @@ import { AuthProvider } from '@/lib/auth';
 import { RealtimeProvider } from '@/lib/realtime';
 import { ToastProvider } from '@/lib/toast';
 import { registerServiceWorker } from '@/lib/push-web';
+import { installGlobalLogging } from '@/lib/log';
 import { colors } from '@/theme';
 
 export default function RootLayout() {
@@ -23,8 +24,11 @@ export default function RootLayout() {
     Fraunces_600SemiBold,
   });
 
-  // Register the Web Push service worker on web (no-op on native, no prompt).
+  // Catch uncaught errors app-wide, then register the Web Push service worker on
+  // web (no-op on native, no prompt). Logging goes first so a failure in the
+  // registration itself is recorded.
   useEffect(() => {
+    installGlobalLogging();
     registerServiceWorker();
   }, []);
 

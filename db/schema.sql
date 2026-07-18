@@ -285,3 +285,38 @@ ALTER TABLE weekly_reflections ADD COLUMN IF NOT EXISTS snapshot JSONB;
 -- surfaced so the sender can see a "Seen" receipt.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_thumb STRING;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_data STRING;
+-- v16: engagement pass. Four additive pieces:
+--   comment_hearts     like a comment under a memory (mirrors note_hearts).
+--   messages.reply_to_id  a chat message can quote an earlier one.
+--   users.referral_code/referred_by  the friend-referral link in Settings.
+--   daily_game_answers  the This-or-That daily game: each partner picks one of
+--     two options AND guesses their partner's pick; answers stay private until
+--     both are in (same mutual-reveal shape as daily prompts). pick/guess are
+--     'a' | 'b'; the option text itself is a static pool keyed by date, never
+--     stored. Correct guesses feed the relationship points.
+-- (Reminder: never UPDATE a column added above in this same file; migrate runs
+-- the whole file as one query and CockroachDB rejects mid-backfill writes.)
+CREATE TABLE IF NOT EXISTS comment_hearts (
+  comment_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (comment_id, user_id)
+);
+
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id UUID;
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code STRING;
+CREATE UNIQUE INDEX IF NOT EXISTS users_referral_code ON users (referral_code) WHERE referral_code IS NOT NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by UUID;
+
+CREATE TABLE IF NOT EXISTS daily_game_answers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  couple_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  game_date DATE NOT NULL,
+  pick STRING NOT NULL,
+  guess STRING NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (couple_id, user_id, game_date)
+);
+CREATE INDEX IF NOT EXISTS game_answers_by_couple ON daily_game_answers (couple_id, game_date DESC);

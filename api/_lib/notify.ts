@@ -2,6 +2,7 @@ import { one, q } from './db';
 import { publish } from './ably';
 import { sendPush } from './push';
 import { routeForKind } from './notification-routes';
+import { errorFields, log } from './log';
 
 export type NotificationKind =
   | 'nudge'
@@ -14,7 +15,8 @@ export type NotificationKind =
   | 'capsule'
   | 'date'
   | 'wishlist'
-  | 'comment';
+  | 'comment'
+  | 'game';
 
 /**
  * The notification service: every meaningful action lands in the
@@ -42,10 +44,21 @@ export async function notify(
       [coupleId, actorId]
     );
     const url = routeForKind(kind);
+    let delivered = 0;
     for (const o of others) {
-      await sendPush(o.id, { title: 'Ours', body: text, url });
+      const result = await sendPush(o.id, { title: 'Ours', body: text, url }, `notify:${kind}`);
+      if (result.delivered) delivered += 1;
     }
+    // The notification text itself is never logged: it names people and can echo
+    // couple content. Kind + counts are enough to trace a delivery.
+    log('info', 'notify.sent', {
+      couple_id: coupleId,
+      actor_id: actorId,
+      kind,
+      recipients: others.length,
+      pushes_delivered: delivered,
+    });
   } catch (err) {
-    console.error('notify failed', err);
+    log('error', 'notify.failed', { couple_id: coupleId, actor_id: actorId, kind, ...errorFields(err) });
   }
 }

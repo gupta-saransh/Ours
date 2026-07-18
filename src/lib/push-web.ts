@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import { api } from './api';
+import { logClientError, logEvent } from './log';
 
 /**
  * Web Push (browser / installed PWA) client. Native builds use expo-notifications
@@ -38,19 +39,43 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
  */
 export async function registerServiceWorker(): Promise<void> {
   if (Platform.OS !== 'web') return;
-  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
+    logEvent('push.sw_unavailable', { supported: false });
+    return;
+  }
   try {
     const reg = await navigator.serviceWorker.register(SW_URL);
     const existing = await reg.pushManager.getSubscription().catch(() => null);
+    // The single most useful line when notifications "don't come": it says
+    // whether this device is subscribed at all and what permission it holds.
+    logEvent('push.sw_registered', {
+      permission: typeof Notification !== 'undefined' ? Notification.permission : 'unavailable',
+      subscribed: !!existing,
+      endpoint_host: existing ? hostOf(existing.endpoint) : undefined,
+    });
     if (existing) {
+      // Re-POST so the server's copy cannot drift from the browser's.
       await api('/api/push/subscribe', {
         method: 'POST',
         body: { subscription: existing.toJSON() },
       }).catch(() => {});
     }
-  } catch {
+  } catch (err) {
     // Service workers are unavailable (private mode, unsupported browser). Fine.
+    logClientError('push.sw_register_failed', { message: messageOf(err) });
   }
+}
+
+function hostOf(endpoint: string): string | undefined {
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return undefined;
+  }
+}
+
+function messageOf(err: unknown): string {
+  return String((err as Error)?.message ?? err ?? 'unknown').slice(0, 200);
 }
 
 /** True if a Web Push subscription is currently active. */
@@ -72,6 +97,7 @@ export async function isWebPushSubscribed(): Promise<boolean> {
  */
 export async function enableWebPush(): Promise<boolean> {
   if (!webPushSupported()) {
+    logClientError('push.enable_failed', { step: 'unsupported' });
     throw new Error('This browser cannot show notifications. Try adding Ours to your home screen first.');
   }
   const reg =
@@ -79,21 +105,33 @@ export async function enableWebPush(): Promise<boolean> {
   await navigator.serviceWorker.ready;
 
   const permission = await Notification.requestPermission();
+  logEvent('push.permission_requested', { permission });
   if (permission !== 'granted') {
     throw new Error('Notifications are blocked. Turn them on for this site in your browser settings.');
   }
 
   const { key } = await api<{ key: string | null }>('/api/push/vapid-public-key');
-  if (!key) throw new Error('Notifications are not set up on the server yet.');
+  if (!key) {
+    logClientError('push.enable_failed', { step: 'no-server-key' });
+    throw new Error('Notifications are not set up on the server yet.');
+  }
 
   let sub = await reg.pushManager.getSubscription();
   if (!sub) {
-    sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(key),
-    });
+    try {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(key),
+      });
+    } catch (err) {
+      // Usually a VAPID key mismatch with an older subscription, or a browser
+      // that granted permission but refuses the push service.
+      logClientError('push.subscribe_failed', { message: messageOf(err) });
+      throw err;
+    }
   }
   await api('/api/push/subscribe', { method: 'POST', body: { subscription: sub.toJSON() } });
+  logEvent('push.enabled', { endpoint_host: hostOf(sub.endpoint) });
   return true;
 }
 
@@ -108,4 +146,5 @@ export async function disableWebPush(): Promise<void> {
     // ignore
   }
   await api('/api/auth/profile', { method: 'PATCH', body: { pushToken: null } }).catch(() => {});
+  logEvent('push.disabled');
 }

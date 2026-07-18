@@ -16,6 +16,8 @@ interface Comment {
   body: string;
   created_at: string;
   edited_at: string | null;
+  hearts: number;
+  hearted_by_me: boolean;
 }
 
 // The thread renders in two places: the near-black memory viewer ('dark') and
@@ -95,6 +97,44 @@ export function MemoryComments({
     if (data?.memory_id === memoryId) load().catch(() => {});
   });
 
+  // The partner hearting one of these comments, live. The event carries the
+  // settled count, so update in place instead of refetching the thread.
+  useCoupleEvent('comment.hearted', (data) => {
+    if (data?.memory_id !== memoryId || data?.by === myId) return;
+    setComments((prev) =>
+      prev ? prev.map((c) => (c.id === data.id ? { ...c, hearts: data.hearts ?? c.hearts } : c)) : prev
+    );
+  });
+
+  // Heart your partner's comment; settle on the server's response like the
+  // note and memory hearts do.
+  const toggleHeart = async (c: Comment) => {
+    const next = !c.hearted_by_me;
+    setComments((prev) =>
+      prev
+        ? prev.map((x) =>
+            x.id === c.id ? { ...x, hearted_by_me: next, hearts: Math.max(0, x.hearts + (next ? 1 : -1)) } : x
+          )
+        : prev
+    );
+    if (next) successHaptic();
+    try {
+      const settled = await api<{ id: string; hearts: number; hearted_by_me: boolean }>(`/api/comments/${c.id}`, {
+        method: 'PATCH',
+        body: { hearted: next },
+      });
+      setComments((prev) =>
+        prev
+          ? prev.map((x) =>
+              x.id === c.id ? { ...x, hearts: settled.hearts, hearted_by_me: settled.hearted_by_me } : x
+            )
+          : prev
+      );
+    } catch {
+      await load();
+    }
+  };
+
   const submit = async () => {
     const body = draft.trim();
     if (!body || busy) return;
@@ -169,6 +209,25 @@ export function MemoryComments({
                     </Text>
                   </View>
                   <Text style={[styles.body, { color: pal.strong }]}>{c.body}</Text>
+                  {!mine && (
+                    <View style={styles.actions}>
+                      <Pressable onPress={() => toggleHeart(c)} hitSlop={8} style={styles.actionBtn}>
+                        <Text
+                          style={[
+                            styles.heart,
+                            { color: c.hearted_by_me ? colors.surfaceSealed : pal.faint },
+                            variant === 'dark' && c.hearted_by_me && { color: DARK.danger },
+                          ]}
+                        >
+                          {c.hearted_by_me ? '♥' : '♡'}
+                          {c.hearts > 0 ? ` ${c.hearts}` : ''}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  )}
+                  {mine && c.hearts > 0 && confirmId !== c.id && (
+                    <Text style={[styles.loved, { color: pal.faint }]}>♥ Loved</Text>
+                  )}
                   {mine && (
                     <View style={styles.actions}>
                       {confirmId === c.id ? (
@@ -254,6 +313,8 @@ const styles = StyleSheet.create({
   time: { ...text.micro, textTransform: 'none', letterSpacing: 0.2 },
   body: { ...text.bodySerif, marginTop: 2 },
   actions: { flexDirection: 'row', gap: sp.base, marginTop: sp.xs },
+  heart: { fontSize: 14, lineHeight: 18 },
+  loved: { ...text.micro, textTransform: 'none', letterSpacing: 0.2, marginTop: sp.xs },
   actionBtn: { flexDirection: 'row', alignItems: 'center', gap: sp.xs },
   actionText: { ...text.micro, textTransform: 'none', letterSpacing: 0.2 },
   confirmDelete: { ...text.micro, textTransform: 'none', letterSpacing: 0.2, fontWeight: '600' },

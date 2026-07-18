@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Bell, CalendarHeart, Gift, Heart, Hourglass, Image as ImageIcon, ListChecks, MessageCircle, Sparkles, StickyNote } from 'lucide-react-native';
+import { Bell, CalendarHeart, Dices, Gift, Heart, Hourglass, Image as ImageIcon, ListChecks, MessageCircle, Sparkles, StickyNote } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useCoupleEvent } from '@/lib/realtime';
 import { useNotifications, type Notification } from '@/lib/notifications';
@@ -22,6 +22,7 @@ const KIND_ICON: Record<string, React.ComponentType<{ size?: number; color?: str
   date: CalendarHeart,
   wishlist: Gift,
   comment: MessageCircle,
+  game: Dices,
 };
 
 // Where each notification deep-links on tap (mirrors api/_lib/notification-routes.ts).
@@ -37,6 +38,7 @@ const KIND_ROUTE: Record<string, string> = {
   date: '/dates',
   wishlist: '/wishlist',
   comment: '/memories',
+  game: '/',
 };
 
 export default function Notifications() {

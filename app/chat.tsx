@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -16,7 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { ChevronLeft, ImagePlus, ImageDown, Send, X } from 'lucide-react-native';
+import { ChevronLeft, ImagePlus, ImageDown, Reply, Send, X } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
@@ -33,8 +34,51 @@ interface Message {
   body: string;
   image_thumb?: string | null;
   has_image?: boolean;
+  reply_to_id?: string | null;
   created_at: string;
   pending?: boolean;
+}
+
+// Matches http(s) links and bare www. ones; trailing punctuation is not part
+// of the link ("check https://a.co/x!" should not include the bang).
+const URL_RE = /((?:https?:\/\/|www\.)[^\s]+)/gi;
+
+function trimUrl(raw: string): { url: string; trailing: string } {
+  const m = raw.match(/[.,;:!?)\]]+$/);
+  const trailing = m ? m[0] : '';
+  return { url: raw.slice(0, raw.length - trailing.length), trailing };
+}
+
+/**
+ * Message text with URLs rendered as tappable links. Long tokens still wrap
+ * (see bubbleText's web word-break), so a pasted URL flows onto new lines
+ * instead of pushing the bubble off screen.
+ */
+function LinkedText({ body, style, linkColor }: { body: string; style: any; linkColor: string }) {
+  const parts = body.split(URL_RE);
+  if (parts.length === 1) return <Text style={style}>{body}</Text>;
+  return (
+    <Text style={style}>
+      {parts.map((part, i) => {
+        // A fresh non-global test: .test() on a /g/ regex is stateful.
+        if (!/^(?:https?:\/\/|www\.)/i.test(part)) return <Text key={i}>{part}</Text>;
+        const { url, trailing } = trimUrl(part);
+        const href = url.startsWith('www.') ? `https://${url}` : url;
+        return (
+          <Text key={i}>
+            <Text
+              style={{ color: linkColor, textDecorationLine: 'underline' }}
+              onPress={() => Linking.openURL(href).catch(() => {})}
+              suppressHighlighting
+            >
+              {url}
+            </Text>
+            {trailing}
+          </Text>
+        );
+      })}
+    </Text>
+  );
 }
 
 export default function Chat() {
@@ -50,6 +94,8 @@ export default function Chat() {
   const [partnerSeen, setPartnerSeen] = useState<string | null>(null);
   const [addedIds, setAddedIds] = useState<Set<string>>(new Set());
   const [viewer, setViewer] = useState<{ id: string; thumb: string | null } | null>(null);
+  // The message being quoted by the next send (long-press a bubble to set it).
+  const [replyTo, setReplyTo] = useState<Message | null>(null);
 
   const markSeen = useCallback(() => {
     api('/api/messages/seen', { method: 'POST' }).catch(() => {});
@@ -100,13 +146,16 @@ export default function Chat() {
   const sendMessage = async (opts: { body?: string; imageData?: string; imageThumb?: string }) => {
     const bodyText = (opts.body ?? '').trim();
     if (!bodyText && !opts.imageData) return;
+    const quoted = replyTo;
     setInput('');
+    setReplyTo(null);
     const temp: Message = {
       id: `temp-${Date.now()}`,
       sender_id: user!.id,
       body: bodyText,
       image_thumb: opts.imageThumb ?? null,
       has_image: !!opts.imageData,
+      reply_to_id: quoted?.id ?? null,
       created_at: new Date().toISOString(),
       pending: true,
     };
@@ -114,13 +163,19 @@ export default function Chat() {
     try {
       const { message } = await api<{ message: Message }>('/api/messages', {
         method: 'POST',
-        body: { body: bodyText || undefined, imageData: opts.imageData, imageThumb: opts.imageThumb },
+        body: {
+          body: bodyText || undefined,
+          imageData: opts.imageData,
+          imageThumb: opts.imageThumb,
+          replyToId: quoted && !quoted.id.startsWith('temp-') ? quoted.id : undefined,
+        },
       });
       successHaptic();
       setMsgs((prev) => prev.map((x) => (x.id === temp.id ? message : x)));
     } catch {
       setMsgs((prev) => prev.filter((x) => x.id !== temp.id));
       if (bodyText) setInput(bodyText);
+      if (quoted) setReplyTo(quoted);
     }
   };
 
@@ -222,12 +277,31 @@ export default function Chat() {
                   grouped={!!grouped}
                   seen={item.id === seenReceiptId}
                   added={addedIds.has(item.id)}
+                  quoted={item.reply_to_id ? msgs.find((x) => x.id === item.reply_to_id) ?? null : null}
+                  quotedName={(sid) => (sid === user?.id ? 'You' : partner?.display_name ?? 'Them')}
                   onOpenImage={() => item.image_thumb && setViewer({ id: item.id, thumb: item.image_thumb })}
                   onAddToTimeline={() => addToTimeline(item)}
+                  onReply={() => setReplyTo(item)}
                 />
               );
             }}
           />
+          {replyTo && (
+            <View style={styles.replyBar}>
+              <Reply size={15} color={colors.accent} strokeWidth={1.75} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.replyBarName}>
+                  Replying to {replyTo.sender_id === user?.id ? 'yourself' : partner?.display_name ?? 'them'}
+                </Text>
+                <Text style={styles.replyBarBody} numberOfLines={1}>
+                  {replyTo.body || 'Photo'}
+                </Text>
+              </View>
+              <Pressable onPress={() => setReplyTo(null)} hitSlop={8}>
+                <X size={16} color={colors.inkFaint} strokeWidth={1.75} />
+              </Pressable>
+            </View>
+          )}
           <View style={styles.composer}>
             <Pressable onPress={pickImage} hitSlop={8} style={styles.imageBtn}>
               <ImagePlus size={22} color={colors.accent} strokeWidth={1.75} />
@@ -264,36 +338,61 @@ function Bubble({
   grouped,
   seen,
   added,
+  quoted,
+  quotedName,
   onOpenImage,
   onAddToTimeline,
+  onReply,
 }: {
   message: Message;
   mine: boolean;
   grouped: boolean;
   seen: boolean;
   added: boolean;
+  /** The message this one replies to, if it is loaded in the thread. */
+  quoted: Message | null;
+  quotedName: (senderId: string) => string;
   onOpenImage: () => void;
   onAddToTimeline: () => void;
+  onReply: () => void;
 }) {
   const hasImage = !!message.image_thumb;
   return (
     <View style={[styles.bubbleRow, mine ? styles.rowMine : styles.rowTheirs, { marginTop: grouped ? 2 : sp.md }]}>
-      <View style={{ maxWidth: '80%', alignItems: mine ? 'flex-end' : 'flex-start' }}>
-        <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs, hasImage && styles.bubbleWithImage]}>
+      {/* flexShrink keeps the bubble inside its 80% cap even when a long
+          unbroken token (a URL) would otherwise push it off screen. */}
+      <View style={{ maxWidth: '80%', flexShrink: 1, alignItems: mine ? 'flex-end' : 'flex-start' }}>
+        <Pressable
+          onLongPress={onReply}
+          delayLongPress={250}
+          style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs, hasImage && styles.bubbleWithImage]}
+        >
+          {message.reply_to_id ? (
+            <View style={[styles.quote, mine ? styles.quoteMine : styles.quoteTheirs]}>
+              <Text style={[styles.quoteName, mine && { color: colors.onSealed }]} numberOfLines={1}>
+                {quoted ? quotedName(quoted.sender_id) : 'Earlier'}
+              </Text>
+              <Text style={[styles.quoteBody, mine && { color: colors.onSealed, opacity: 0.75 }]} numberOfLines={1}>
+                {quoted ? quoted.body || 'Photo' : 'An earlier message'}
+              </Text>
+            </View>
+          ) : null}
           {hasImage && (
             <Pressable onPress={onOpenImage}>
               <Image source={{ uri: message.image_thumb! }} style={styles.bubbleImage} contentFit="cover" transition={120} />
             </Pressable>
           )}
           {message.body ? (
-            <Text style={[styles.bubbleText, hasImage && { marginTop: sp.sm }, mine && { color: colors.onSealed }]}>
-              {message.body}
-            </Text>
+            <LinkedText
+              body={message.body}
+              style={[styles.bubbleText, hasImage && { marginTop: sp.sm }, mine && { color: colors.onSealed }]}
+              linkColor={mine ? colors.onSealed : colors.accent}
+            />
           ) : null}
           <Text style={[styles.time, mine ? { color: colors.onSealed } : { color: colors.inkFaint }]}>
             {message.pending ? 'Sending…' : formatTime(message.created_at)}
           </Text>
-        </View>
+        </Pressable>
         {hasImage && !message.pending && (
           <Pressable onPress={onAddToTimeline} hitSlop={6} style={styles.addRow} disabled={added}>
             <ImageDown size={13} color={added ? colors.positive : colors.inkMuted} strokeWidth={1.75} />
@@ -423,6 +522,55 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 22,
     paddingHorizontal: sp.xs,
+    // Long unbroken tokens (URLs) must wrap inside the bubble. 'anywhere'
+    // affects min-content sizing, which plain break-word does not, so without
+    // it a pasted URL stretches the bubble past the screen edge.
+    ...(Platform.OS === 'web' ? ({ wordBreak: 'break-word', overflowWrap: 'anywhere' } as any) : null),
+  },
+  quote: {
+    borderLeftWidth: 2,
+    paddingLeft: sp.sm,
+    paddingVertical: 2,
+    marginBottom: sp.xs,
+    marginHorizontal: sp.xs,
+    opacity: 0.92,
+  },
+  quoteMine: { borderLeftColor: 'rgba(249, 239, 220, 0.55)' },
+  quoteTheirs: { borderLeftColor: colors.accent },
+  quoteName: {
+    ...text.micro,
+    textTransform: 'none',
+    letterSpacing: 0.2,
+    fontWeight: '600',
+    color: colors.inkMuted,
+  },
+  quoteBody: {
+    ...text.caption,
+    color: colors.inkMuted,
+  },
+  replyBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.sm,
+    paddingHorizontal: sp.base,
+    paddingVertical: sp.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.hairline,
+    backgroundColor: colors.surfaceRaised,
+    width: '100%',
+    maxWidth: 680,
+    alignSelf: 'center',
+  },
+  replyBarName: {
+    ...text.micro,
+    textTransform: 'none',
+    letterSpacing: 0.2,
+    fontWeight: '600',
+    color: colors.ink,
+  },
+  replyBarBody: {
+    ...text.caption,
+    color: colors.inkMuted,
   },
   time: {
     ...text.micro,

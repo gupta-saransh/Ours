@@ -4,6 +4,7 @@ import { readField } from '../_lib/envelope';
 import { route } from '../_lib/respond';
 import { promptStateFor, streakStateFor } from './prompts';
 import { computeReflection } from './reflection';
+import { gameStateFor } from './game';
 
 const RESURFACE_COLUMNS = `id, thumb_data, note, note_ct,
   COALESCE(memory_date, created_at::DATE)::STRING AS memory_date`;
@@ -20,7 +21,7 @@ const LEVELS: { at: number; title: string }[] = [
   { at: 15, title: 'Getting Closer' },
   { at: 40, title: 'Finding Our Rhythm' },
   { at: 80, title: 'Love Letters' },
-  { at: 140, title: 'Keepsakes' },
+  { at: 140, title: 'Slow Dances' },
   { at: 220, title: 'Golden Hours' },
   { at: 320, title: 'Building a Life' },
   { at: 450, title: 'The Long Song' },
@@ -28,15 +29,21 @@ const LEVELS: { at: number; title: string }[] = [
   { at: 850, title: 'Ever After' },
 ];
 
+/** Points each durable thing earns. Kept in sync with the client copy. */
+const POINTS: Record<string, number> = {
+  memories: 5,
+  dates_done: 5,
+  answers: 3,
+  bucket_done: 3,
+  notes: 2,
+  milestones: 2,
+  guesses: 2,
+  comments: 1,
+};
+
 function storyFor(counts: Record<string, number>) {
-  const points =
-    counts.memories * 5 +
-    counts.notes * 2 +
-    counts.answers * 3 +
-    counts.comments * 1 +
-    counts.dates_done * 5 +
-    counts.bucket_done * 3 +
-    counts.milestones * 2;
+  let points = 0;
+  for (const [key, per] of Object.entries(POINTS)) points += (counts[key] ?? 0) * per;
   let idx = 0;
   for (let i = 0; i < LEVELS.length; i++) if (points >= LEVELS[i].at) idx = i;
   const next = LEVELS[idx + 1] ?? null;
@@ -48,6 +55,18 @@ function storyFor(counts: Record<string, number>) {
     nextAt: next ? next.at : null,
   };
 }
+
+/** Maps a `recent` row's source to the counts key whose points it earns. */
+const RECENT_KIND_TO_POINTS: Record<string, string> = {
+  memory: 'memories',
+  note: 'notes',
+  answer: 'answers',
+  comment: 'comments',
+  milestone: 'milestones',
+  bucket: 'bucket_done',
+  date: 'dates_done',
+  guess: 'guesses',
+};
 
 /**
  * One request powers the whole home screen: days-together basis, partner,
@@ -61,7 +80,7 @@ export default route(['GET'], async (req, res) => {
 
   const isSunday = new Date().getUTCDay() === 0;
 
-  const [couple, partner, anniversary, milestones, yearAgo, monthAgo, older, bucket, pinnedNote, seen, prompt, upcomingDate, reflection, streak, storyCounts] =
+  const [couple, partner, anniversary, milestones, yearAgo, monthAgo, older, bucket, pinnedNote, seen, prompt, upcomingDate, reflection, streak, storyCounts, guessRow, recentRows, game] =
     await Promise.all([
       one('SELECT id, invite_code, created_at FROM couples WHERE id = $1', [cid]),
       one('SELECT id, display_name FROM users WHERE couple_id = $1 AND id != $2', [cid, user.id]),
@@ -119,6 +138,32 @@ export default route(['GET'], async (req, res) => {
            (SELECT count(*)::int FROM milestones WHERE couple_id = $1) AS milestones`,
         [cid]
       ),
+      // Correct This-or-That guesses: my guess matched their pick that day.
+      // Catch-guarded: the table is v16 and a pre-migration deploy must degrade.
+      one<{ n: number }>(
+        `SELECT count(*)::int AS n
+         FROM daily_game_answers a
+         JOIN daily_game_answers b
+           ON b.couple_id = a.couple_id AND b.game_date = a.game_date AND b.user_id != a.user_id
+         WHERE a.couple_id = $1 AND a.guess = b.pick`,
+        [cid]
+      ).catch(() => null),
+      // The last few point-earning moments, for the journey card's activity list.
+      q<{ kind: string; created_at: string }>(
+        `SELECT kind, created_at::STRING AS created_at FROM (
+           SELECT 'memory' AS kind, created_at FROM memories WHERE couple_id = $1
+           UNION ALL SELECT 'note', created_at FROM love_notes WHERE couple_id = $1
+           UNION ALL SELECT 'answer', created_at FROM daily_prompt_answers WHERE couple_id = $1
+           UNION ALL SELECT 'comment', created_at FROM memory_comments WHERE couple_id = $1
+           UNION ALL SELECT 'milestone', created_at FROM milestones WHERE couple_id = $1
+           UNION ALL SELECT 'bucket', completed_at FROM bucket_items
+             WHERE couple_id = $1 AND done = true AND completed_at IS NOT NULL
+           UNION ALL SELECT 'date', completed_at FROM date_proposals
+             WHERE couple_id = $1 AND completed_at IS NOT NULL
+         ) t ORDER BY created_at DESC LIMIT 5`,
+        [cid]
+      ).catch(() => [] as { kind: string; created_at: string }[]),
+      gameStateFor(cid, user.id),
     ]);
 
   // `nudges` powers the on-open hearts shower: an unseen nudge from the last
@@ -195,11 +240,22 @@ export default route(['GET'], async (req, res) => {
     reflection,
     streak,
     nudged: (unseenRow?.nudges ?? 0) > 0,
+    game,
     story: (() => {
-      const counts = storyCounts ?? {
-        memories: 0, notes: 0, answers: 0, comments: 0, dates_done: 0, bucket_done: 0, milestones: 0,
+      const counts = {
+        ...(storyCounts ?? {
+          memories: 0, notes: 0, answers: 0, comments: 0, dates_done: 0, bucket_done: 0, milestones: 0,
+        }),
+        guesses: guessRow?.n ?? 0,
       };
-      return { ...storyFor(counts), counts };
+      // Each recent moment carries the points it earned, so the card can show
+      // "+5 · A memory · Jul 12" without the client re-deriving the values.
+      const recent = (recentRows ?? []).map((r) => ({
+        kind: r.kind,
+        points: POINTS[RECENT_KIND_TO_POINTS[r.kind] ?? ''] ?? 0,
+        created_at: r.created_at,
+      }));
+      return { ...storyFor(counts), counts, recent };
     })(),
   });
 });

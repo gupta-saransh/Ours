@@ -24,11 +24,13 @@ export default route(['GET', 'POST'], async (req, res) => {
 
     const rows = await q<Record<string, any>>(
       `SELECT c.id, c.memory_id, c.author_id, c.body, c.body_ct, c.created_at, c.edited_at,
-              u.display_name AS author_name
+              u.display_name AS author_name,
+              (SELECT count(*) FROM comment_hearts h WHERE h.comment_id = c.id)::INT AS hearts,
+              EXISTS (SELECT 1 FROM comment_hearts h WHERE h.comment_id = c.id AND h.user_id = $3) AS hearted_by_me
        FROM memory_comments c JOIN users u ON u.id = c.author_id
        WHERE c.memory_id = $1 AND c.couple_id = $2
        ORDER BY c.created_at ASC LIMIT 500`,
-      [memoryId, user.couple_id]
+      [memoryId, user.couple_id, user.id]
     );
     const comments = await Promise.all(
       rows.map(async ({ body_ct, ...c }) => ({ ...c, body: (await readField(user.couple_id, body_ct, c.body)) ?? '' }))
@@ -50,7 +52,7 @@ export default route(['GET', 'POST'], async (req, res) => {
      RETURNING id, memory_id, author_id, created_at, edited_at`,
     [memoryId, user.couple_id, user.id, bodyCt ? '' : body, bodyCt]
   );
-  const comment = { ...created, body, author_name: user.display_name };
+  const comment = { ...created, body, author_name: user.display_name, hearts: 0, hearted_by_me: false };
   // `created` lets list views bump their comment count without refetching
   // (edits publish the same event without it).
   await publish(user.couple_id, 'memory.commented', { memory_id: memoryId, id: comment.id, by: user.id, created: true });

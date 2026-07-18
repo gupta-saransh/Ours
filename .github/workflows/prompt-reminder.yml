@@ -1,0 +1,42 @@
+name: Daily prompt reminder
+
+# Morning nudge for the daily question: anyone who has not answered today's
+# prompt yet gets a Web Push pointing at it. Same setup as daily-reminder.yml
+# (repo secrets APP_URL + CRON_SECRET, matching CRON_SECRET in Vercel).
+#
+# GitHub cron is UTC. 02:30 UTC = 8:00 AM IST. Adjust to your own morning.
+
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch: {} # lets you run it by hand from the Actions tab to test
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping morning prompt reminder
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "APP_URL or CRON_SECRET secret is not set; skipping."
+            exit 0
+          fi
+          # Print the endpoint's report (who was skipped and why), fail the job
+          # on a non-2xx, and warn when nothing was delivered.
+          response=$(curl -sS -w '\n%{http_code}' -X POST \
+            "$APP_URL/api/cron/reminders?kind=prompt" \
+            -H "Authorization: Bearer $CRON_SECRET")
+          status=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "HTTP $status"
+          echo "$body"
+          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+            echo "::error::Reminder endpoint returned $status"
+            exit 1
+          fi
+          if echo "$body" | grep -q '"sent":0'; then
+            echo "::warning::No pushes were delivered. Check the skipped/failed counts above."
+          fi

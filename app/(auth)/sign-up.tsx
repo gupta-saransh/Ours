@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ScrollView, StyleSheet, Text } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useAuth } from '@/lib/auth';
 import { FormError, PrimaryButton, Screen, SecondaryButton, TextField } from '@/components/kit';
 import { colors, sp, text } from '@/theme';
@@ -8,6 +8,8 @@ import { colors, sp, text } from '@/theme';
 export default function SignUp() {
   const { signUp } = useAuth();
   const router = useRouter();
+  // A friend-referral link lands here as /sign-up?ref=CODE.
+  const { ref } = useLocalSearchParams<{ ref?: string }>();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -18,7 +20,7 @@ export default function SignUp() {
     setError(null);
     setBusy(true);
     try {
-      await signUp(email.trim(), password, name.trim());
+      await signUp(email.trim(), password, name.trim(), typeof ref === 'string' ? ref : null);
       // the (auth) layout redirects home once signed in
     } catch (err: any) {
       setError(err?.message ?? 'Something went wrong');
@@ -33,6 +35,11 @@ export default function SignUp() {
         <Text style={[text.bodySerif, { color: colors.inkMuted, marginBottom: sp.xxl }]}>
           Start alone or together. You can invite your person any time.
         </Text>
+        {typeof ref === 'string' && ref.length > 0 && (
+          <Text style={[text.caption, { color: colors.accent, marginTop: -sp.lg, marginBottom: sp.xl }]}>
+            A friend sent you this way ♥
+          </Text>
+        )}
 
         <TextField label="Your name" value={name} onChangeText={setName} placeholder="Your cute name!" autoCapitalize="words" />
         <TextField

@@ -17,6 +17,7 @@ const ROUTES: Record<NotificationKind, string> = {
   date: '/dates',
   wishlist: '/wishlist',
   comment: '/memories',
+  game: '/',
 };
 
 export function routeForKind(kind: string): string {

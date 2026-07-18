@@ -5,11 +5,12 @@ import { sendPush } from '../_lib/push';
 import { notify } from '../_lib/notify';
 import { encryptField, readField } from '../_lib/envelope';
 import { route, requireString, HttpError } from '../_lib/respond';
+import { errorFields, log } from '../_lib/log';
 
 /**
  * Partner chat.
  *   GET  /api/messages[?before=<ISO>]  list (ascending), unread count, partner's read cursor
- *   POST /api/messages { body?, imageData?, imageThumb? }  send a message (text and/or a photo)
+ *   POST /api/messages { body?, imageData?, imageThumb?, replyToId? }  send (text and/or photo, optionally quoting)
  *   POST /api/messages/seen            mark the thread read (advance the cursor, tell the partner)
  *   GET  /api/messages/unread          just the unread count (for the badge)
  *   GET  /api/messages/:id             the full-resolution image of one message
@@ -31,6 +32,7 @@ interface Row {
   body_ct: Buffer | null;
   image_thumb: string | null;
   has_image: boolean;
+  reply_to_id: string | null;
   created_at: string;
 }
 
@@ -112,15 +114,25 @@ export default route(['GET', 'POST'], async (req, res) => {
     const body = hasBody ? requireString(req.body.body, 'Message', 4000) : '';
     const bodyCt = body ? await encryptField(cid, body) : null;
 
+    // Replying quotes an earlier message. Only the id is stored; the client
+    // renders the quote from its own copy of the thread.
+    let replyToId: string | null = null;
+    if (typeof req.body?.replyToId === 'string' && req.body.replyToId) {
+      const target = await one('SELECT id FROM messages WHERE id = $1 AND couple_id = $2', [req.body.replyToId, cid]);
+      if (!target) throw new HttpError(404, 'That message is gone');
+      replyToId = req.body.replyToId;
+    }
+
     const row = await one<{ id: string; created_at: string }>(
-      `INSERT INTO messages (couple_id, sender_id, body, body_ct, image_thumb, image_data)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, created_at::STRING AS created_at`,
-      [cid, user.id, bodyCt ? '' : body, bodyCt, imageThumb, imageData]
+      `INSERT INTO messages (couple_id, sender_id, body, body_ct, image_thumb, image_data, reply_to_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at::STRING AS created_at`,
+      [cid, user.id, bodyCt ? '' : body, bodyCt, imageThumb, imageData, replyToId]
     );
     const message = {
       id: row!.id,
       sender_id: user.id,
       body,
+      reply_to_id: replyToId,
       image_thumb: imageThumb,
       has_image: !!imageData,
       created_at: row!.created_at,
@@ -136,10 +148,10 @@ export default route(['GET', 'POST'], async (req, res) => {
       const others = await q<{ id: string }>('SELECT id FROM users WHERE couple_id = $1 AND id != $2', [cid, user.id]);
       const push = imageData && !body ? `${user.display_name} sent you a photo` : `${user.display_name} sent you a message`;
       for (const o of others) {
-        await sendPush(o.id, { title: 'Ours', body: push, url: '/chat' });
+        await sendPush(o.id, { title: 'Ours', body: push, url: '/chat' }, 'chat');
       }
     } catch (err) {
-      console.error('chat push failed', err);
+      log('error', 'chat.push_failed', { couple_id: cid, ...errorFields(err) });
     }
 
     res.status(201).json({ message });
@@ -150,7 +162,7 @@ export default route(['GET', 'POST'], async (req, res) => {
   const before = typeof req.query.before === 'string' && req.query.before ? req.query.before : null;
   const rows = await q<Row>(
     `SELECT id, sender_id, body, body_ct, image_thumb, (image_data IS NOT NULL) AS has_image,
-            created_at::STRING AS created_at
+            reply_to_id, created_at::STRING AS created_at
      FROM messages
      WHERE couple_id = $1 ${before ? 'AND created_at < $2' : ''}
      ORDER BY created_at DESC

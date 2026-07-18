@@ -35,7 +35,7 @@ import {
 import { Sheet } from '@/components/Sheet';
 import { Avatar } from '@/components/Avatar';
 import { BellButton, NudgeButton, SettingsButton } from '@/components/HeaderActions';
-import { colors, radius, sp, text } from '@/theme';
+import { colors, font, radius, sp, text } from '@/theme';
 import { countdownTo, daysSince, formatDay, nextOccurrence } from '@/lib/format';
 
 interface StreakState {
@@ -62,6 +62,15 @@ interface StoryState {
   levelStart: number;
   nextAt: number | null;
   counts: Record<string, number>;
+  recent?: { kind: string; points: number; created_at: string }[];
+}
+
+interface GameState {
+  game: { game_date: string; a: string; b: string };
+  played: boolean;
+  partnerPlayed: boolean;
+  mine: { pick: 'a' | 'b'; guess: 'a' | 'b' } | null;
+  reveal: { partnerPick: 'a' | 'b'; iGuessedRight: boolean; theyGuessedRight: boolean } | null;
 }
 
 // Client copies of the server's levels + point sources (api/_routes/home.ts);
@@ -71,7 +80,7 @@ const LEVELS: { at: number; title: string }[] = [
   { at: 15, title: 'Getting Closer' },
   { at: 40, title: 'Finding Our Rhythm' },
   { at: 80, title: 'Love Letters' },
-  { at: 140, title: 'Keepsakes' },
+  { at: 140, title: 'Slow Dances' },
   { at: 220, title: 'Golden Hours' },
   { at: 320, title: 'Building a Life' },
   { at: 450, title: 'The Long Song' },
@@ -79,15 +88,30 @@ const LEVELS: { at: number; title: string }[] = [
   { at: 850, title: 'Ever After' },
 ];
 
-const POINT_SOURCES: { key: string; label: string; per: number }[] = [
-  { key: 'memories', label: 'memories', per: 5 },
-  { key: 'dates_done', label: 'dates you went on', per: 5 },
-  { key: 'answers', label: 'prompt answers', per: 3 },
-  { key: 'bucket_done', label: 'list items done', per: 3 },
-  { key: 'notes', label: 'notes', per: 2 },
-  { key: 'milestones', label: 'milestones', per: 2 },
-  { key: 'comments', label: 'comments', per: 1 },
+// How the road ceremony describes the place you reached: real things, never a
+// score. Singular/plural forms for the top few counts.
+const MADE_OF: { key: string; one: string; many: string }[] = [
+  { key: 'memories', one: 'memory', many: 'memories' },
+  { key: 'notes', one: 'little note', many: 'little notes' },
+  { key: 'answers', one: 'answered question', many: 'answered questions' },
+  { key: 'dates_done', one: 'date', many: 'dates' },
+  { key: 'bucket_done', one: 'wish come true', many: 'wishes come true' },
+  { key: 'milestones', one: 'day that matters', many: 'days that matter' },
+  { key: 'comments', one: 'comment', many: 'comments' },
+  { key: 'guesses', one: 'right guess', many: 'right guesses' },
 ];
+
+// How a recent road-moving moment reads in "What moved you lately".
+const RECENT_LABEL: Record<string, string> = {
+  memory: 'A memory you kept',
+  note: 'A note you left',
+  answer: 'A question you answered',
+  comment: 'A comment under a memory',
+  milestone: 'A day you marked',
+  bucket: 'A wish that came true',
+  date: 'A date you went on',
+  guess: 'A right guess',
+};
 
 interface HomeData {
   couple: { id: string; invite_code: string; created_at: string } | null;
@@ -101,6 +125,7 @@ interface HomeData {
   upcomingDate: { id: string; title: string; location: string | null; proposed_for: string } | null;
   streak: StreakState;
   story: StoryState;
+  game: GameState | null;
   nudged?: boolean;
   isSunday: boolean;
   reflection: {
@@ -179,6 +204,7 @@ export default function Home() {
       .catch(() => {});
   });
   useCoupleEvent('date.updated', () => load().catch(() => {}));
+  useCoupleEvent('game.updated', () => load().catch(() => {}));
 
   const refresh = async () => {
     setRefreshing(true);
@@ -368,39 +394,55 @@ export default function Home() {
           </Section>
         </FadeIn>
 
-        {/* Relationship points: a gentle meter of everything you two build here.
-            Tap to unfold where the points came from; "All levels" opens the map. */}
+        {/* This-or-That: the daily two-tap game with a mutual reveal. */}
+        {data.game && (
+          <FadeIn delay={90}>
+            <Section label="Today's This or That">
+              <GameCard
+                state={data.game}
+                partnerName={data.partner?.display_name ?? 'your partner'}
+                hasPartner={!!data.partner}
+                onPlayed={(next) => setData((d) => (d ? { ...d, game: next } : d))}
+              />
+            </Section>
+          </FadeIn>
+        )}
+
+        {/* The winding path: where you two are, never a number. Tap to unfold
+            what moved you lately; "See the whole road" opens the map. */}
         {data.story && (
           <FadeIn delay={100}>
-            <Section label="Your journey">
+            <Section label="Your path">
               <PressableCard
                 onPress={() => {
                   tapHaptic();
                   setStoryOpen((o) => !o);
                 }}
               >
+                {/* The road: passed places gold, you two at the heart, the rest ahead. */}
+                <View style={styles.pathTrack}>
+                  {LEVELS.map((_, i) => {
+                    const n = i + 1;
+                    if (n === data.story.level) {
+                      return (
+                        <Text key={i} style={styles.pathHere}>
+                          ♥
+                        </Text>
+                      );
+                    }
+                    return <View key={i} style={[styles.pathDot, n < data.story.level && styles.pathDotPassed]} />;
+                  })}
+                </View>
                 <View style={styles.rowBetween}>
                   <View style={{ flex: 1 }}>
-                    <Text style={text.micro}>Level {data.story.level}</Text>
+                    <Text style={text.micro}>You two are at</Text>
                     <Text style={[text.subtitle, { marginTop: 2 }]}>{data.story.levelTitle}</Text>
-                  </View>
-                  <View style={{ alignItems: 'flex-end', gap: sp.xs }}>
-                    <Text style={[text.subtitle, { color: colors.accent }]}>
-                      {data.story.points.toLocaleString()}
+                    <Text style={[text.caption, { marginTop: sp.xs }]}>
+                      {data.story.nextAt !== null
+                        ? `The road bends on toward ${LEVELS[data.story.level]?.title ?? 'somewhere new'}.`
+                        : 'The far end of the road. You walk on together. ♥'}
                     </Text>
-                    <Text style={text.micro}>points</Text>
                   </View>
-                </View>
-                <View style={styles.storyTrack}>
-                  <View style={[styles.storyFill, { flex: storyProgress(data.story) }]} />
-                  <View style={{ flex: 100 - storyProgress(data.story) }} />
-                </View>
-                <View style={[styles.rowBetween, { marginTop: sp.sm }]}>
-                  <Text style={text.caption}>
-                    {data.story.nextAt !== null
-                      ? `${data.story.nextAt - data.story.points} points to Level ${data.story.level + 1}`
-                      : 'You have reached the final level. ♥'}
-                  </Text>
                   <ChevronDown
                     size={16}
                     color={colors.inkFaint}
@@ -411,28 +453,26 @@ export default function Home() {
                 {storyOpen && (
                   <View style={styles.storyBreakdown}>
                     <Text style={[text.caption, { marginBottom: sp.md }]}>
-                      Every memory, note, date, prompt, and milestone you two make earns points. They add up into
-                      levels, a keepsake of all you are building together. Nothing to chase, just yours to grow.
+                      The road moves as your life fills this place: memories, little notes, answers to the daily
+                      question, dates you go on, wishes that come true. No score, no hurry. Just keep going.
                     </Text>
-                    {POINT_SOURCES.map((s) => {
-                      const n = data.story.counts[s.key] ?? 0;
-                      return (
-                        <View key={s.key} style={styles.storySourceRow}>
-                          <Text style={[text.body, n === 0 && { color: colors.inkFaint }]}>
-                            {n} {s.label}
-                          </Text>
-                          <Text style={[text.caption, n === 0 && { color: colors.inkFaint }]}>
-                            {n * s.per} {n * s.per === 1 ? 'point' : 'points'}
-                          </Text>
-                        </View>
-                      );
-                    })}
+                    {data.story.recent && data.story.recent.length > 0 && (
+                      <>
+                        <Text style={[text.micro, { marginBottom: sp.xs }]}>What moved you lately</Text>
+                        {data.story.recent.map((r, i) => (
+                          <View key={`${r.kind}-${r.created_at}-${i}`} style={styles.storySourceRow}>
+                            <Text style={text.caption}>{RECENT_LABEL[r.kind] ?? 'Something you kept'}</Text>
+                            <Text style={[text.caption, { color: colors.accent }]}>{formatDay(r.created_at)}</Text>
+                          </View>
+                        ))}
+                      </>
+                    )}
                     <Pressable
                       onPress={() => setLevelsOpen(true)}
                       hitSlop={8}
                       style={{ alignSelf: 'center', marginTop: sp.md }}
                     >
-                      <Text style={[text.caption, { color: colors.accent }]}>All levels</Text>
+                      <Text style={[text.caption, { color: colors.accent }]}>See the whole road</Text>
                     </Pressable>
                   </View>
                 )}
@@ -565,11 +605,11 @@ export default function Home() {
         }}
       />
 
-      {/* The level map: where you have been, where you are, what comes next */}
-      <Sheet visible={levelsOpen} onClose={() => setLevelsOpen(false)} title="Your levels">
+      {/* The road map: where you have been, where you are, what lies ahead */}
+      <Sheet visible={levelsOpen} onClose={() => setLevelsOpen(false)} title="The whole road">
         <Text style={[text.caption, { marginBottom: sp.lg }]}>
-          Everything you two make together earns points, and points carry you through these levels. It is not a
-          score to win, just a quiet measure of how much you are building.
+          A winding road of places you pass through together. It moves as your life fills this place, and there is
+          no score and no hurry. Places you have passed are marked in gold.
         </Text>
         {LEVELS.map((c, i) => {
           const n = i + 1;
@@ -577,7 +617,9 @@ export default function Home() {
           const done = n < data.story.level;
           return (
             <View key={c.at} style={styles.chapterRow}>
-              <Text style={[styles.chapterNum, done && { color: colors.accent }]}>{done ? '✦' : n}</Text>
+              <Text style={[styles.chapterNum, done && { color: colors.accent }, now && { color: colors.surfaceSealed }]}>
+                {done ? '✦' : now ? '♥' : '·'}
+              </Text>
               <Text
                 style={[
                   now ? text.subtitle : text.body,
@@ -587,30 +629,27 @@ export default function Home() {
               >
                 {c.title}
               </Text>
-              <Text style={[text.caption, !done && !now && { color: colors.inkFaint }]}>
-                {now ? `${data.story.points} pts` : done ? '' : `${c.at} pts`}
+              <Text style={[text.caption, { color: colors.inkFaint }]}>
+                {now ? 'you are here' : done ? 'passed through' : ''}
               </Text>
             </View>
           );
         })}
-        <Text style={[text.caption, { textAlign: 'center', marginTop: sp.lg }]}>
-          Memories and dates earn 5 points. Prompts and list items, 3. Notes and milestones, 2. Comments, 1.
-        </Text>
       </Sheet>
 
-      {/* Level-up ceremony: shown once when the couple reaches a new level */}
-      <Sheet visible={!!levelReveal} onClose={() => setLevelReveal(null)} title="A new level" sealed>
+      {/* Road ceremony: shown once when the couple reaches a new place */}
+      <Sheet visible={!!levelReveal} onClose={() => setLevelReveal(null)} title="Somewhere new" sealed>
         {levelReveal && (
           <>
             <Text style={styles.chapterSeal}>✦ ✦</Text>
             <Text style={[text.micro, { color: colors.onSealed, textAlign: 'center' }]}>
-              Level {levelReveal.level}
+              The road has carried you to
             </Text>
             <Text style={styles.chapterTitle}>{levelReveal.levelTitle}</Text>
             <Text style={[text.caption, { color: colors.onSealed, textAlign: 'center', marginTop: sp.md }]}>
-              {pointsSummary(levelReveal)}
+              {madeOfSummary(levelReveal)}
             </Text>
-            <PrimaryButton inverted title="Keep going" onPress={() => setLevelReveal(null)} style={{ marginTop: sp.xl }} />
+            <PrimaryButton inverted title="Keep walking" onPress={() => setLevelReveal(null)} style={{ marginTop: sp.xl }} />
           </>
         )}
       </Sheet>
@@ -618,25 +657,157 @@ export default function Home() {
   );
 }
 
-/** "127 points so far: 18 memories, 12 prompt answers, 9 notes." Top three sources. */
-function pointsSummary(story: StoryState): string {
-  const top = POINT_SOURCES.map((s) => ({ ...s, n: story.counts[s.key] ?? 0 }))
-    .filter((s) => s.n > 0)
-    .sort((a, b) => b.n * b.per - a.n * a.per)
-    .slice(0, 3)
-    .map((s) => `${s.n} ${s.label}`);
-  const list = top.length > 1 ? `${top.slice(0, -1).join(', ')} and ${top[top.length - 1]}` : top[0] ?? '';
-  return list
-    ? `${story.points} points so far: ${list}.`
-    : `${story.points} points so far.`;
+/**
+ * The daily This-or-That, styled as the prompt card's sibling: the unplayed
+ * game is a SEALED (oxblood) card with two parchment options and a gold "or",
+ * the reveal is a light card with both partners' marks facing each other over
+ * their picks. Two taps: pick your side, then guess theirs. Nothing shows until
+ * both of you have played.
+ */
+function GameCard({
+  state,
+  partnerName,
+  hasPartner,
+  onPlayed,
+}: {
+  state: GameState;
+  partnerName: string;
+  hasPartner: boolean;
+  onPlayed: (next: GameState) => void;
+}) {
+  const { user, partner } = useAuth();
+  const [pick, setPick] = useState<'a' | 'b' | null>(null);
+  const [busy, setBusy] = useState(false);
+  const { game } = state;
+  const optionText = (letter: 'a' | 'b') => (letter === 'a' ? game.a : game.b);
+
+  const play = async (guess: 'a' | 'b') => {
+    if (!pick || busy) return;
+    setBusy(true);
+    try {
+      const next = await api<GameState>('/api/game/today', { method: 'POST', body: { pick, guess } });
+      successHaptic();
+      onPlayed(next);
+    } catch {
+      // A 409 (already played elsewhere) or a network slip: leave the card be,
+      // the next home load settles it.
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // The duel row: two parchment options with a small gold "or" between them.
+  const duelRow = (onChoose: (l: 'a' | 'b') => void) => (
+    <View style={styles.gameRow}>
+      <AppPressable
+        onPress={() => {
+          tapHaptic();
+          onChoose('a');
+        }}
+        style={styles.gameOption}
+      >
+        <Text style={styles.gameOptionText}>{game.a}</Text>
+      </AppPressable>
+      <Text style={styles.gameOr}>or</Text>
+      <AppPressable
+        onPress={() => {
+          tapHaptic();
+          onChoose('b');
+        }}
+        style={styles.gameOption}
+      >
+        <Text style={styles.gameOptionText}>{game.b}</Text>
+      </AppPressable>
+    </View>
+  );
+
+  if (!hasPartner) {
+    return (
+      <Card>
+        <Text style={text.caption}>
+          {game.a} or {game.b}? A tiny daily game for the two of you. Pair with your person to play.
+        </Text>
+      </Card>
+    );
+  }
+
+  // Reveal: both played. Marks face each other over the picks.
+  if (state.reveal && state.mine) {
+    const { reveal, mine } = state;
+    return (
+      <Card>
+        <View style={styles.gameRevealRow}>
+          <View style={styles.gameRevealSide}>
+            <Avatar id={user?.avatar} name={user?.display_name} size={44} />
+            <Text style={[text.subtitle, { marginTop: sp.sm }]}>{optionText(mine.pick)}</Text>
+            <Text style={text.micro}>You</Text>
+          </View>
+          <Text style={styles.gameRevealHeart}>♥</Text>
+          <View style={styles.gameRevealSide}>
+            <Avatar id={partner?.avatar} name={partnerName} size={44} />
+            <Text style={[text.subtitle, { marginTop: sp.sm }]}>{optionText(reveal.partnerPick)}</Text>
+            <Text style={text.micro}>{partnerName}</Text>
+          </View>
+        </View>
+        <View style={styles.divider} />
+        <Text style={[text.bodySerif, { fontStyle: 'italic', textAlign: 'center' }]}>
+          {reveal.iGuessedRight && reveal.theyGuessedRight
+            ? 'You both knew each other. Of course you did. ♥'
+            : reveal.iGuessedRight
+              ? 'You guessed them right. They are still figuring you out. ♥'
+              : reveal.theyGuessedRight
+                ? 'They knew you. You got a little surprise.'
+                : 'You surprised each other today.'}
+        </Text>
+        <Text style={[text.micro, { marginTop: sp.sm, textAlign: 'center' }]}>A new one tomorrow ✦</Text>
+      </Card>
+    );
+  }
+
+  // Played, waiting on the partner. Quiet parchment, like the prompt's waiting state.
+  if (state.played && state.mine) {
+    return (
+      <Card>
+        <Text style={[text.bodySerif, { fontStyle: 'italic', marginBottom: sp.sm }]}>
+          {game.a} or {game.b}?
+        </Text>
+        <Text style={text.caption}>
+          ✦ You said {optionText(state.mine.pick)}, and guessed {optionText(state.mine.guess)} for {partnerName}. The
+          reveal comes when they play.
+        </Text>
+      </Card>
+    );
+  }
+
+  // Not played yet: the sealed duel. Step 1 pick yours, step 2 guess theirs.
+  return (
+    <Card sealed>
+      <Text style={styles.gameQuestion}>{pick === null ? 'Which one is you?' : `And which one is ${partnerName}?`}</Text>
+      {duelRow((l) => (pick === null ? setPick(l) : play(l)))}
+      {pick !== null ? (
+        <Pressable onPress={() => setPick(null)} hitSlop={8} style={{ alignSelf: 'center', marginTop: sp.md }}>
+          <Text style={[text.caption, { color: colors.onSealed, opacity: 0.8 }]}>
+            You are {optionText(pick)}. Change it
+          </Text>
+        </Pressable>
+      ) : (
+        <Text style={[text.micro, styles.gameHint]}>
+          {state.partnerPlayed ? `${partnerName} already played ✦ two taps to the reveal` : 'Pick yours, then guess theirs'}
+        </Text>
+      )}
+    </Card>
+  );
 }
 
-/** 0-100 progress through the current level; never fully empty so the bar reads as begun. */
-function storyProgress(story: StoryState): number {
-  if (story.nextAt === null) return 100;
-  const span = story.nextAt - story.levelStart;
-  const done = story.points - story.levelStart;
-  return Math.min(100, Math.max(4, Math.round((done / span) * 100)));
+/** "A place made of 18 memories, 12 answered questions and 9 notes." No score, only things. */
+function madeOfSummary(story: StoryState): string {
+  const top = MADE_OF.map((s) => ({ ...s, n: story.counts[s.key] ?? 0 }))
+    .filter((s) => s.n > 0)
+    .sort((a, b) => b.n - a.n)
+    .slice(0, 3)
+    .map((s) => `${s.n} ${s.n === 1 ? s.one : s.many}`);
+  const list = top.length > 1 ? `${top.slice(0, -1).join(', ')} and ${top[top.length - 1]}` : top[0] ?? '';
+  return list ? `A place made of ${list}.` : 'A place you have made together.';
 }
 
 function daysUntilLabel(date: string): string {
@@ -826,17 +997,30 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.surfaceSealed,
   },
-  storyTrack: {
+  // The winding road: passed places gold, a heart where you two stand.
+  pathTrack: {
     flexDirection: 'row',
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: colors.hairline,
-    marginTop: sp.base,
-    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: sp.base,
+    paddingHorizontal: sp.xs,
   },
-  storyFill: {
+  pathDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: colors.inkFaint,
+    backgroundColor: colors.surfaceRaised,
+  },
+  pathDotPassed: {
     backgroundColor: colors.accent,
-    borderRadius: 2,
+    borderColor: colors.accent,
+  },
+  pathHere: {
+    fontSize: 16,
+    lineHeight: 18,
+    color: colors.surfaceSealed,
   },
   storyBreakdown: {
     marginTop: sp.base,
@@ -850,6 +1034,67 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: sp.xs,
     gap: sp.md,
+  },
+  gameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.sm,
+  },
+  // Parchment options on the sealed (oxblood) card, echoing the wax-seal duel.
+  gameOption: {
+    flex: 1,
+    minHeight: 72,
+    paddingVertical: sp.md,
+    paddingHorizontal: sp.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gameOptionText: {
+    ...text.body,
+    fontFamily: font.serif,
+    fontSize: 18,
+    lineHeight: 24,
+    color: colors.ink,
+    textAlign: 'center',
+  },
+  gameOr: {
+    ...text.bodySerif,
+    fontStyle: 'italic',
+    color: colors.accent,
+    paddingHorizontal: sp.xs,
+  },
+  gameQuestion: {
+    ...text.bodySerif,
+    fontSize: 22,
+    lineHeight: 30,
+    fontStyle: 'italic',
+    color: colors.onSealed,
+    textAlign: 'center',
+    marginVertical: sp.lg,
+  },
+  gameHint: {
+    textTransform: 'none',
+    letterSpacing: 0.2,
+    color: colors.onSealed,
+    opacity: 0.7,
+    textAlign: 'center',
+    marginTop: sp.md,
+  },
+  gameRevealRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.md,
+    marginBottom: sp.md,
+  },
+  gameRevealSide: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  gameRevealHeart: {
+    fontSize: 22,
+    color: colors.surfaceSealed,
   },
   chapterRow: {
     flexDirection: 'row',
