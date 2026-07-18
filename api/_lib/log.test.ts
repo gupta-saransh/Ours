@@ -74,6 +74,30 @@ describe('log + flushLogs', () => {
     await expect(flushLogs()).resolves.toBeUndefined();
   });
 
+  it('hands the in-flight request to the platform when waitUntil exists', async () => {
+    // Without this, Vercel can freeze the container the moment the response is
+    // written, suspending the ingest until a later request thaws it and the
+    // overdue timer aborts it ("This operation was aborted"), losing the batch.
+    let settle: (() => void) | undefined;
+    const inFlight = new Promise<{ ok: true; text: () => Promise<string> }>((resolve) => {
+      settle = () => resolve({ ok: true, text: async () => '' });
+    });
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(inFlight));
+
+    const kept: Promise<unknown>[] = [];
+    vi.stubGlobal(Symbol.for('@vercel/request-context'), {
+      get: () => ({ waitUntil: (p: Promise<unknown>) => kept.push(p) }),
+    });
+
+    log('info', 'test.waituntil');
+    // Resolves immediately even though the request has not come back yet.
+    await expect(flushLogs()).resolves.toBeUndefined();
+    expect(kept).toHaveLength(1);
+
+    settle!();
+    await expect(kept[0]).resolves.toBeUndefined();
+  });
+
   it('does nothing at all when Axiom is not configured', async () => {
     delete process.env.AXIOM_TOKEN;
     delete process.env.AXIOM_DATASET;

@@ -113,16 +113,39 @@ export const logInfo = (event: string, fields?: LogFields) => log('info', event,
 export const logWarn = (event: string, fields?: LogFields) => log('warn', event, fields);
 export const logError = (event: string, fields?: LogFields) => log('error', event, fields);
 
-/**
- * Ship whatever is buffered. Safe to call any number of times; never throws and
- * never rejects. Call it after the response is written.
- */
-export async function flushLogs(): Promise<void> {
-  const config = axiomConfig();
-  if (!config || buffer.length === 0) return;
-  const batch = buffer;
-  buffer = [];
+type WaitUntil = (promise: Promise<unknown>) => void;
 
+/**
+ * Vercel's per-invocation `waitUntil`, if the platform is offering one.
+ *
+ * This matters more than it looks. `route()` flushes AFTER the response has been
+ * written, and Vercel treats a finished response as a finished invocation: it
+ * may FREEZE the container mid-fetch even though we are still awaiting. The
+ * request hangs in limbo until the container thaws for the next request, at
+ * which point our overdue 2.5s timer fires immediately and aborts it. The
+ * symptom is an "axiom ingest error: This operation was aborted" printed at the
+ * head of some LATER request's logs, and a silently dropped batch. Handing the
+ * promise to `waitUntil` tells the platform to keep the invocation alive until
+ * shipping is done, which is the whole fix.
+ *
+ * Read off the request-context global rather than taking a dependency on
+ * `@vercel/functions` for one function call. If that contract ever changes we
+ * simply fall back to awaiting, which is exactly today's behavior.
+ */
+function platformWaitUntil(): WaitUntil | null {
+  try {
+    const holder = (globalThis as Record<symbol, unknown>)[Symbol.for('@vercel/request-context')] as
+      | { get?: () => { waitUntil?: unknown } | undefined }
+      | undefined;
+    const fn = holder?.get?.()?.waitUntil;
+    return typeof fn === 'function' ? (fn as WaitUntil) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** POST one batch. Never throws; a lost log line must never cost a request. */
+async function ship(config: AxiomConfig, batch: Record<string, unknown>[]): Promise<void> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FLUSH_TIMEOUT_MS);
   try {
@@ -140,10 +163,39 @@ export async function flushLogs(): Promise<void> {
       console.error(`axiom ingest failed: ${res.status} ${await res.text().catch(() => '')}`.slice(0, 300));
     }
   } catch (err) {
-    console.error('axiom ingest error:', err instanceof Error ? err.message : err);
+    const message = err instanceof Error ? err.message : String(err);
+    const aborted = controller.signal.aborted;
+    console.error(
+      aborted
+        ? `axiom ingest gave up after ${FLUSH_TIMEOUT_MS}ms (${batch.length} lines dropped; stdout still has them)`
+        : `axiom ingest error: ${message}`
+    );
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Ship whatever is buffered. Safe to call any number of times; never throws and
+ * never rejects. Call it after the response is written.
+ *
+ * When the platform offers `waitUntil` the returned promise resolves at once and
+ * the platform owns the in-flight request; otherwise the caller's await is what
+ * keeps it alive.
+ */
+export function flushLogs(): Promise<void> {
+  const config = axiomConfig();
+  if (!config || buffer.length === 0) return Promise.resolve();
+  const batch = buffer;
+  buffer = [];
+
+  const shipped = ship(config, batch);
+  const wait = platformWaitUntil();
+  if (wait) {
+    wait(shipped);
+    return Promise.resolve();
+  }
+  return shipped;
 }
 
 /** True when logs are being shipped somewhere durable (used by diagnostics). */
