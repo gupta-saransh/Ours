@@ -22,6 +22,25 @@ export function webPushSupported(): boolean {
   );
 }
 
+/**
+ * True on an iPhone that is browsing in a Safari TAB. iOS only exposes
+ * PushManager/Notification to an app added to the home screen, so
+ * `webPushSupported()` is false here and subscribing is impossible until they
+ * install. Worth telling them, rather than silently hiding notifications.
+ */
+export function webPushNeedsInstall(): boolean {
+  if (Platform.OS !== 'web' || typeof navigator === 'undefined' || typeof window === 'undefined') return false;
+  if (webPushSupported()) return false; // already able to subscribe
+  const isIOS =
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    // iPadOS 13+ reports itself as a Mac; the touch points give it away.
+    (navigator.platform === 'MacIntel' && ((navigator as { maxTouchPoints?: number }).maxTouchPoints ?? 0) > 1);
+  const standalone =
+    (window.navigator as { standalone?: boolean }).standalone === true ||
+    window.matchMedia?.('(display-mode: standalone)')?.matches === true;
+  return isIOS && !standalone;
+}
+
 /** Convert the base64url VAPID public key into the Uint8Array subscribe() wants. */
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);

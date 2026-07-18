@@ -6,7 +6,7 @@ import { useCoupleEvent } from '@/lib/realtime';
 import { useToast } from '@/lib/toast';
 import { successHaptic } from '@/lib/haptics';
 import { logEvent } from '@/lib/log';
-import { enableWebPush, webPushSupported } from '@/lib/push-web';
+import { enableWebPush, webPushNeedsInstall, webPushSupported } from '@/lib/push-web';
 import { askIsDue, readPushAsk, writePushAsk, type AskRecord } from '@/lib/pushAsk';
 import { PrimaryButton } from '@/components/kit';
 import { colors, font, radius, sp, text } from '@/theme';
@@ -33,16 +33,6 @@ import { colors, font, radius, sp, text } from '@/theme';
 
 /** Let the screen paint before asking for anything. */
 const SHOW_DELAY_MS = 2000;
-
-/** iPhone Safari can only subscribe from the installed home-screen app. */
-function iosNeedsInstall(): boolean {
-  if (Platform.OS !== 'web' || typeof navigator === 'undefined' || typeof window === 'undefined') return false;
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-  const standalone =
-    (window.navigator as { standalone?: boolean }).standalone === true ||
-    window.matchMedia?.('(display-mode: standalone)')?.matches === true;
-  return isIOS && !standalone;
-}
 
 type Variant = 'paired' | 'solo' | 'install';
 
@@ -90,7 +80,7 @@ export function NotificationsInvite() {
       // Settings explains how to undo it.
       if (typeof Notification !== 'undefined' && Notification.permission === 'denied') return;
 
-      const needsInstall = iosNeedsInstall();
+      const needsInstall = webPushNeedsInstall();
       if (!needsInstall && !webPushSupported()) return; // this browser simply cannot
 
       if (await isSubscribed()) return;
@@ -112,10 +102,10 @@ export function NotificationsInvite() {
       const record = readPushAsk();
       if (record.done || record.pairedAsked) return;
       if (typeof Notification !== 'undefined' && Notification.permission === 'denied') return;
-      if (!iosNeedsInstall() && !webPushSupported()) return;
+      if (!webPushNeedsInstall() && !webPushSupported()) return;
       if (await isSubscribed()) return;
       writePushAsk({ ...record, pairedAsked: true });
-      open(iosNeedsInstall() ? 'install' : 'paired', { ...record, pairedAsked: true });
+      open(webPushNeedsInstall() ? 'install' : 'paired', { ...record, pairedAsked: true });
     }, 1200);
   });
 

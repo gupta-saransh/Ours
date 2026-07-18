@@ -155,8 +155,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           body: { email, password, displayName, ref: ref || undefined },
         });
         await applySession(data.token, data.user);
-        // A fresh signup always owes the first-run flow. Set locally so the
-        // redirect fires before /auth/me has a chance to come back.
+        // The signup response carries only the user row. The space (and its
+        // invite code) is created server-side in the same request, so pull the
+        // full session in before onboarding asks them to share that code.
+        // Without this the first step showed an empty code until something
+        // else happened to call /auth/me.
+        await refresh().catch(() => {});
+        // A fresh signup always owes the first-run flow. Set locally AFTER the
+        // refresh, so a pre-v17 server (which omits the flag) cannot clear it.
         setNeedsOnboarding(true);
       },
       async signIn(email, password) {

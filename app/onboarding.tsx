@@ -7,7 +7,7 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
 import { successHaptic, tapHaptic } from '@/lib/haptics';
-import { enableWebPush, webPushSupported } from '@/lib/push-web';
+import { enableWebPush, webPushNeedsInstall, webPushSupported } from '@/lib/push-web';
 import { logEvent } from '@/lib/log';
 import { markPushAskDeclined } from '@/lib/pushAsk';
 import { nextStep, stepPosition, stepsFor, type OnboardingStep } from '@/lib/onboardingSteps';
@@ -69,10 +69,18 @@ export default function Onboarding() {
         (m) => m.kind === 'birthday' && (m.person_id ?? m.author_id) === user?.id
       ),
       hasNickname: !!partner?.nickname,
-      canNotify: Platform.OS === 'web' && webPushSupported(),
+      // An iPhone in a Safari tab cannot subscribe yet, but it CAN be told how
+      // (add to home screen). Hiding the step there is why it never appeared.
+      canNotify: Platform.OS === 'web' && (webPushSupported() || webPushNeedsInstall()),
       hasPushSubscription: pushed,
     });
   }, [paired, partner?.nickname, user?.id]);
+
+  // The space is created during signup, but only /auth/me carries it. If we
+  // arrived without it, pull it in so the first step can show the invite code.
+  useEffect(() => {
+    if (status === 'signedIn' && !couple) refresh().catch(() => {});
+  }, [status, couple, refresh]);
 
   useEffect(() => {
     if (status !== 'signedIn') return;
@@ -423,6 +431,19 @@ function NotificationsStep({ partnerName, onDone }: { partnerName: string | null
   const { user, updateProfile } = useAuth();
   const [busy, setBusy] = useState(false);
   const [blocked, setBlocked] = useState<string | null>(null);
+
+  // iPhone in a Safari tab: subscribing is impossible until Ours is on the home
+  // screen. Say that plainly instead of offering a button that cannot work.
+  if (webPushNeedsInstall()) {
+    return (
+      <StepFrame
+        title="Add Ours to your home screen"
+        line="iPhone only lets apps on your home screen send notifications. Tap the share button in Safari, choose Add to Home Screen, then open Ours from there. We will ask again once you do."
+      >
+        <PrimaryButton title="Got it" onPress={onDone} />
+      </StepFrame>
+    );
+  }
 
   const turnOn = async () => {
     setBusy(true);
