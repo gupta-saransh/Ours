@@ -141,11 +141,13 @@ export default route(['GET'], async (req, res) => {
       // Correct This-or-That guesses: my guess matched their pick that day.
       // Catch-guarded: the table is v16 and a pre-migration deploy must degrade.
       one<{ n: number }>(
-        `SELECT count(*)::int AS n
+        // Both rounds of the day count (v18), hence the two comparisons.
+        `SELECT (count(*) FILTER (WHERE a.guess = b.pick)
+               + count(*) FILTER (WHERE a.guess2 IS NOT NULL AND b.pick2 IS NOT NULL AND a.guess2 = b.pick2))::int AS n
          FROM daily_game_answers a
          JOIN daily_game_answers b
            ON b.couple_id = a.couple_id AND b.game_date = a.game_date AND b.user_id != a.user_id
-         WHERE a.couple_id = $1 AND a.guess = b.pick`,
+         WHERE a.couple_id = $1`,
         [cid]
       ).catch(() => null),
       // The last few point-earning moments, for the journey card's activity list.

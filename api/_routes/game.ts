@@ -86,41 +86,94 @@ function todayUTC(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export function todaysGame(): { game_date: string } & GamePair {
+/** How long after round one is settled the second question opens. */
+export const ROUND_TWO_DELAY_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * Both of the day's pairs. Round two is derived from a salted date so it is
+ * deterministic like round one, and nudged along if the hash happens to land on
+ * the same pair (playing "Coffee or Chai" twice in a day would be a bad joke).
+ */
+export function gamesForToday(): { game_date: string; rounds: [GamePair, GamePair] } {
   const game_date = todayUTC();
-  return { game_date, ...GAME_POOL[poolIndexFor(game_date)] };
+  const first = poolIndexFor(game_date);
+  let second = poolIndexFor(`${game_date}#2`);
+  if (second === first) second = (first + 1) % GAME_POOL.length;
+  return { game_date, rounds: [GAME_POOL[first], GAME_POOL[second]] };
+}
+
+export function todaysGame(): { game_date: string } & GamePair {
+  const { game_date, rounds } = gamesForToday();
+  return { game_date, ...rounds[0] };
 }
 
 interface AnswerRow {
   user_id: string;
   pick: 'a' | 'b';
   guess: 'a' | 'b';
+  pick2: 'a' | 'b' | null;
+  guess2: 'a' | 'b' | null;
+  created_at: string;
 }
 
 /**
- * The game state one partner is allowed to see. Before both have played, the
- * partner's row is reduced to a boolean; picks and guesses stay server-side
- * (same privacy shape as prompt answers).
+ * Which round is in play, and when the next one opens.
+ *
+ * Round one is always available. Round two opens 12 hours after BOTH partners
+ * have answered round one, measured from the later of the two answers, so it
+ * arrives as a reward for playing rather than as a second chore.
+ */
+export function roundStateFor(rows: AnswerRow[], now = Date.now()) {
+  const bothPlayedOne = rows.length >= 2;
+  if (!bothPlayedOne) return { round: 1 as const, opensAt: null as string | null };
+
+  const times = rows.map((r) => new Date(r.created_at).getTime()).filter((t) => Number.isFinite(t));
+  // No usable timestamp: stay on round one rather than let a NaN comparison
+  // (every comparison with NaN is false) quietly open the second question.
+  if (times.length === 0) return { round: 1 as const, opensAt: null as string | null };
+
+  const opens = Math.max(...times) + ROUND_TWO_DELAY_MS;
+  if (now < opens) return { round: 1 as const, opensAt: new Date(opens).toISOString() };
+  return { round: 2 as const, opensAt: null as string | null };
+}
+
+/**
+ * The game state one partner is allowed to see. Before both have played a
+ * round, the partner's row is reduced to a boolean; picks and guesses stay
+ * server-side (same privacy shape as prompt answers).
  */
 export async function gameStateFor(coupleId: string, userId: string) {
-  const game = todaysGame();
+  const { game_date, rounds } = gamesForToday();
   const rows = await q<AnswerRow>(
-    `SELECT user_id, pick, guess FROM daily_game_answers WHERE couple_id = $1 AND game_date = $2`,
-    [coupleId, game.game_date]
-  ).catch(() => [] as AnswerRow[]); // pre-v16 deploy: degrade to "not played"
+    `SELECT user_id, pick, guess, pick2, guess2, created_at::STRING AS created_at
+     FROM daily_game_answers WHERE couple_id = $1 AND game_date = $2`,
+    [coupleId, game_date]
+  ).catch(() => [] as AnswerRow[]); // pre-v16/v18 deploy: degrade to "not played"
+
   const mine = rows.find((r) => r.user_id === userId) ?? null;
   const theirs = rows.find((r) => r.user_id !== userId) ?? null;
-  const both = !!mine && !!theirs;
+  const { round, opensAt } = roundStateFor(rows);
+
+  // Read the round in play off the right pair of columns.
+  const myPick = round === 1 ? mine?.pick ?? null : mine?.pick2 ?? null;
+  const myGuess = round === 1 ? mine?.guess ?? null : mine?.guess2 ?? null;
+  const theirPick = round === 1 ? theirs?.pick ?? null : theirs?.pick2 ?? null;
+  const theirGuess = round === 1 ? theirs?.guess ?? null : theirs?.guess2 ?? null;
+  const both = !!myPick && !!theirPick;
+
   return {
-    game,
-    played: !!mine,
-    partnerPlayed: !!theirs,
-    mine: mine ? { pick: mine.pick, guess: mine.guess } : null,
+    game: { game_date, round, ...rounds[round - 1] },
+    round,
+    /** Set while round one is settled but round two has not opened yet. */
+    nextRoundAt: opensAt,
+    played: !!myPick,
+    partnerPlayed: !!theirPick,
+    mine: myPick && myGuess ? { pick: myPick, guess: myGuess } : null,
     reveal: both
       ? {
-          partnerPick: theirs!.pick,
-          iGuessedRight: mine!.guess === theirs!.pick,
-          theyGuessedRight: theirs!.guess === mine!.pick,
+          partnerPick: theirPick!,
+          iGuessedRight: myGuess === theirPick,
+          theyGuessedRight: theirGuess === myPick,
         }
       : null,
   };
@@ -137,26 +190,54 @@ export default route(['GET', 'POST'], async (req, res) => {
     return;
   }
 
-  // POST: play once for today.
+  // POST: play the round that is currently open.
   const pick = String(req.body?.pick ?? '');
   const guess = String(req.body?.guess ?? '');
   if (!LETTERS.has(pick) || !LETTERS.has(guess)) throw new HttpError(400, 'Pick and guess must be a or b');
 
-  const game = todaysGame();
-  const inserted = await one(
-    `INSERT INTO daily_game_answers (couple_id, user_id, game_date, pick, guess)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (couple_id, user_id, game_date) DO NOTHING
-     RETURNING id`,
-    [cid, user.id, game.game_date, pick, guess]
-  );
-  if (!inserted) throw new HttpError(409, 'You already played today. Tomorrow brings a new one.');
+  const { game_date } = gamesForToday();
+  // Which round is open is the server's call, never the client's.
+  const before = await gameStateFor(cid, user.id);
+
+  if (before.round === 1) {
+    const inserted = await one(
+      `INSERT INTO daily_game_answers (couple_id, user_id, game_date, pick, guess)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (couple_id, user_id, game_date) DO NOTHING
+       RETURNING id`,
+      [cid, user.id, game_date, pick, guess]
+    );
+    if (!inserted) {
+      throw new HttpError(
+        409,
+        before.nextRoundAt
+          ? 'You have played this one. The next question opens a little later today.'
+          : 'You already played this one. One more comes later today.'
+      );
+    }
+  } else {
+    // Round two lands on the same row, and only if it is still empty (the
+    // WHERE clause is what makes a replay a no-op rather than an overwrite).
+    const updated = await one(
+      `UPDATE daily_game_answers
+       SET pick2 = $4, guess2 = $5, round2_at = now()
+       WHERE couple_id = $1 AND user_id = $2 AND game_date = $3 AND pick2 IS NULL
+       RETURNING id`,
+      [cid, user.id, game_date, pick, guess]
+    );
+    if (!updated) throw new HttpError(409, 'You already played both of today’s questions. Tomorrow brings more.');
+  }
 
   const state = await gameStateFor(cid, user.id);
   // Tell the partner something changed. No picks in the event: the first
   // answerer's choice must stay hidden until the reveal, and after the reveal
   // clients refetch their own view anyway.
-  await publish(cid, 'game.updated', { game_date: game.game_date, by: user.id, revealed: !!state.reveal });
+  await publish(cid, 'game.updated', {
+    game_date,
+    round: before.round,
+    by: user.id,
+    revealed: !!state.reveal,
+  });
   if (state.reveal) {
     // The FIRST answerer gets pulled back for the payoff. Generic on purpose.
     await notify(cid, user.id, 'game', `${user.display_name} played today's This or That. See how you both chose`);

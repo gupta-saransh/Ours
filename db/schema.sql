@@ -332,3 +332,16 @@ CREATE INDEX IF NOT EXISTS game_answers_by_couple ON daily_game_answers (couple_
 --     back to author_id then the title text.
 ALTER TABLE users ADD COLUMN IF NOT EXISTS needs_onboarding BOOL NOT NULL DEFAULT false;
 ALTER TABLE milestones ADD COLUMN IF NOT EXISTS person_id UUID;
+
+-- v18: a SECOND This-or-That each day. The pair for round two is deterministic
+-- from the date like round one, and it opens 12 hours after BOTH partners have
+-- answered round one (so it is a reward for playing, not a second chore).
+--
+-- Deliberately stored as extra columns on the same row rather than a new row
+-- per round: daily_game_answers already carries UNIQUE (couple_id, user_id,
+-- game_date), and a second row per day would need that constraint dropped and
+-- rebuilt. Columns are additive and cost nothing. round1's "both answered at"
+-- is derived from the two rows' created_at, so it needs no column of its own.
+ALTER TABLE daily_game_answers ADD COLUMN IF NOT EXISTS pick2 STRING;
+ALTER TABLE daily_game_answers ADD COLUMN IF NOT EXISTS guess2 STRING;
+ALTER TABLE daily_game_answers ADD COLUMN IF NOT EXISTS round2_at TIMESTAMPTZ;

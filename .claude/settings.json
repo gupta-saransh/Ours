@@ -16,7 +16,8 @@
       "Bash(npx vitest *)",
       "WebSearch",
       "Bash(npm run *)",
-      "Bash(npm test *)"
+      "Bash(npm test *)",
+      "Bash(python -)"
     ],
     "additionalDirectories": [
       "d:\\Coding\\NewProjects\\RelationshipHQ\\api"

@@ -66,7 +66,11 @@ interface StoryState {
 }
 
 interface GameState {
-  game: { game_date: string; a: string; b: string };
+  game: { game_date: string; round: number; a: string; b: string };
+  /** 1 or 2: there are two questions a day (v18). */
+  round: number;
+  /** Set while round one is done and round two has not opened yet. */
+  nextRoundAt: string | null;
   played: boolean;
   partnerPlayed: boolean;
   mine: { pick: 'a' | 'b'; guess: 'a' | 'b' } | null;
@@ -657,6 +661,15 @@ export default function Home() {
   );
 }
 
+/** "in 5 hours" / "in a few minutes", for when the day's second question opens. */
+function opensIn(iso: string): string {
+  const mins = Math.round((new Date(iso).getTime() - Date.now()) / 60000);
+  if (mins <= 1) return 'any moment now';
+  if (mins < 60) return `in ${mins} minutes`;
+  const hours = Math.round(mins / 60);
+  return hours === 1 ? 'in an hour' : `in ${hours} hours`;
+}
+
 /**
  * The daily This-or-That, styled as the prompt card's sibling: the unplayed
  * game is a SEALED (oxblood) card with two parchment options and a gold "or",
@@ -697,27 +710,29 @@ function GameCard({
   };
 
   // The duel row: two parchment options with a small gold "or" between them.
+  // The flex lives on a wrapping View, NOT on AppPressable: AppPressable puts
+  // its `style` on an inner Animated.View, so flex there never reaches the
+  // Pressable and each option would size to its own text, leaving the row
+  // lopsided (a real reported bug, do not "simplify" this back).
+  const option = (letter: 'a' | 'b', onChoose: (l: 'a' | 'b') => void) => (
+    <View style={styles.gameOptionCell}>
+      <AppPressable
+        onPress={() => {
+          tapHaptic();
+          onChoose(letter);
+        }}
+        style={styles.gameOption}
+      >
+        <Text style={styles.gameOptionText}>{letter === 'a' ? game.a : game.b}</Text>
+      </AppPressable>
+    </View>
+  );
+
   const duelRow = (onChoose: (l: 'a' | 'b') => void) => (
     <View style={styles.gameRow}>
-      <AppPressable
-        onPress={() => {
-          tapHaptic();
-          onChoose('a');
-        }}
-        style={styles.gameOption}
-      >
-        <Text style={styles.gameOptionText}>{game.a}</Text>
-      </AppPressable>
+      {option('a', onChoose)}
       <Text style={styles.gameOr}>or</Text>
-      <AppPressable
-        onPress={() => {
-          tapHaptic();
-          onChoose('b');
-        }}
-        style={styles.gameOption}
-      >
-        <Text style={styles.gameOptionText}>{game.b}</Text>
-      </AppPressable>
+      {option('b', onChoose)}
     </View>
   );
 
@@ -759,7 +774,9 @@ function GameCard({
                 ? 'They knew you. You got a little surprise.'
                 : 'You surprised each other today.'}
         </Text>
-        <Text style={[text.micro, { marginTop: sp.sm, textAlign: 'center' }]}>A new one tomorrow ✦</Text>
+        <Text style={[text.micro, { marginTop: sp.sm, textAlign: 'center' }]}>
+          {state.nextRoundAt ? `One more opens ${opensIn(state.nextRoundAt)} ✦` : 'A new one tomorrow ✦'}
+        </Text>
       </Card>
     );
   }
@@ -775,6 +792,9 @@ function GameCard({
           ✦ You said {optionText(state.mine.pick)}, and guessed {optionText(state.mine.guess)} for {partnerName}. The
           reveal comes when they play.
         </Text>
+        {state.round === 2 && (
+          <Text style={[text.micro, { marginTop: sp.sm }]}>The second one today ✦</Text>
+        )}
       </Card>
     );
   }
@@ -792,7 +812,11 @@ function GameCard({
         </Pressable>
       ) : (
         <Text style={[text.micro, styles.gameHint]}>
-          {state.partnerPlayed ? `${partnerName} already played ✦ two taps to the reveal` : 'Pick yours, then guess theirs'}
+          {state.partnerPlayed
+            ? `${partnerName} already played ✦ two taps to the reveal`
+            : state.round === 2
+              ? 'Your second one today ✦ pick yours, then guess theirs'
+              : 'Pick yours, then guess theirs'}
         </Text>
       )}
     </Card>
@@ -1040,9 +1064,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: sp.sm,
   },
+  // The flex-carrying wrapper: see the comment on `option` in GameCard.
+  gameOptionCell: { flex: 1 },
   // Parchment options on the sealed (oxblood) card, echoing the wax-seal duel.
   gameOption: {
-    flex: 1,
+    width: '100%',
     minHeight: 72,
     paddingVertical: sp.md,
     paddingHorizontal: sp.md,
