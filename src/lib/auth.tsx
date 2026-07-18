@@ -2,6 +2,8 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { Platform } from 'react-native';
 import { api, setAuthToken } from './api';
 import { loadToken, saveToken } from './storage';
+import { claimSession, clearStashedSession, stashSession } from './handoff';
+import { logEvent } from './log';
 import { isThemePresetId, persistThemePreset, themePreset } from '@/theme';
 
 export interface User {
@@ -79,6 +81,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setToken(newToken);
     setUser(newUser);
     setStatus('signedIn');
+    // Leave it where the home-screen app can pick it up, so installing does not
+    // dump them back on the sign-in screen. Best effort, never blocks.
+    stashSession(newToken).catch(() => {});
   }, []);
 
   const clearSession = useCallback(async () => {
@@ -90,6 +95,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setPartner(null);
     setEncryption(false);
     setEncryptionCode(null);
+    setNeedsOnboarding(false);
+    // Never leave the install hand-off key behind after a sign-out.
+    await clearStashedSession();
     setStatus('signedOut');
   }, []);
 
@@ -123,7 +131,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Hydrate the session on launch.
   useEffect(() => {
     (async () => {
-      const stored = await loadToken();
+      let stored = await loadToken();
+      if (!stored) {
+        // Nothing stored. This may be the home-screen app's very first launch,
+        // which on iOS starts with an empty storage jar even though the person
+        // signed up in the browser moments ago. See lib/handoff.ts.
+        const handed = await claimSession();
+        if (handed) {
+          stored = handed;
+          await saveToken(handed);
+          logEvent('session.handoff_claimed');
+        }
+      }
       if (!stored) {
         setStatus('signedOut');
         return;

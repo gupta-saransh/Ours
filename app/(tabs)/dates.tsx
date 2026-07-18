@@ -4,7 +4,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { Sparkles, Star } from 'lucide-react-native';
+import { Pencil, Sparkles, Star, Trash2 } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
@@ -96,6 +96,7 @@ export default function Dates() {
   const [prefill, setPrefill] = useState<{ title: string; location: string } | null>(null);
   const [selected, setSelected] = useState<Proposal | null>(null);
   const [countering, setCountering] = useState(false);
+  const [editing, setEditing] = useState<Proposal | null>(null);
   const [reflectFor, setReflectFor] = useState<Proposal | null>(null);
 
   // A wish pulled down from the Wishes night sky arrives as ?wish=<title>; the
@@ -125,6 +126,18 @@ export default function Dates() {
     if (action === 'accept') successHaptic();
     try {
       await api(`/api/dates/${id}`, { method: 'PATCH', body: { action } });
+    } finally {
+      load().catch(() => {});
+    }
+  };
+
+  const removeProposal = async (id: string) => {
+    setSelected(null);
+    // Optimistic: it is gone from the list before the round trip, and a failure
+    // puts it back on the next load.
+    setProposals((prev) => (prev ? prev.filter((p) => p.id !== id) : prev));
+    try {
+      await api(`/api/dates/${id}`, { method: 'DELETE' });
     } finally {
       load().catch(() => {});
     }
@@ -280,25 +293,32 @@ export default function Dates() {
       </ScrollView>
 
       <ProposeSheet
-        open={composerOpen || countering}
+        open={composerOpen || countering || !!editing}
         counterOf={countering ? selected : null}
+        editing={editing}
         prefill={prefill}
         onClose={() => {
           setComposerOpen(false);
           setCountering(false);
+          setEditing(null);
           setSelected(null);
           setPrefill(null);
         }}
         onDone={() => {
           setComposerOpen(false);
           setCountering(false);
+          setEditing(null);
           setSelected(null);
           setPrefill(null);
           load().catch(() => {});
         }}
       />
 
-      <Sheet visible={!!selected && !countering && !reflectFor} onClose={() => setSelected(null)} title={selected?.title}>
+      <Sheet
+        visible={!!selected && !countering && !editing && !reflectFor}
+        onClose={() => setSelected(null)}
+        title={selected?.title}
+      >
         {selected && (
           <ProposalDetail
             proposal={selected}
@@ -308,6 +328,8 @@ export default function Dates() {
             onDecline={() => act(selected.id, 'decline')}
             onCounter={() => setCountering(true)}
             onReflect={() => setReflectFor(selected)}
+            onEdit={() => setEditing(selected)}
+            onDelete={() => removeProposal(selected.id)}
             onProposeNew={() => {
               setSelected(null);
               setComposerOpen(true);
@@ -348,6 +370,8 @@ function ProposalDetail({
   onDecline,
   onCounter,
   onReflect,
+  onEdit,
+  onDelete,
   onProposeNew,
 }: {
   proposal: Proposal;
@@ -357,9 +381,40 @@ function ProposalDetail({
   onDecline: () => void;
   onCounter: () => void;
   onReflect: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
   onProposeNew: () => void;
 }) {
   const when = whenLine(proposal);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  /**
+   * Change or call off the plan. An open proposal is the proposer's to manage;
+   * an accepted date belongs to both, so either can. Mirrors the server rule in
+   * date-item.ts, which enforces it regardless of what the UI offers.
+   */
+  const canManage = proposal.status === 'accepted' || mine;
+  const manageTools =
+    canManage && !proposal.completed_at ? (
+      <View style={styles.manageRow}>
+        <Pressable onPress={onEdit} hitSlop={8} style={styles.manageBtn}>
+          <Pencil size={14} color={colors.inkMuted} strokeWidth={1.75} />
+          <Text style={styles.manageText}>Change it</Text>
+        </Pressable>
+        {confirmingDelete ? (
+          <Pressable onPress={onDelete} hitSlop={8} style={styles.manageBtn}>
+            <Text style={[styles.manageText, { color: colors.danger, fontWeight: '600' }]}>
+              {proposal.status === 'accepted' ? 'Really call it off?' : 'Really remove it?'}
+            </Text>
+          </Pressable>
+        ) : (
+          <Pressable onPress={() => setConfirmingDelete(true)} hitSlop={8} style={styles.manageBtn}>
+            <Trash2 size={14} color={colors.inkMuted} strokeWidth={1.75} />
+            <Text style={styles.manageText}>{proposal.status === 'accepted' ? 'Call it off' : 'Remove'}</Text>
+          </Pressable>
+        )}
+      </View>
+    ) : null;
 
   if (proposal.status === 'open' && !mine) {
     return (
@@ -381,6 +436,7 @@ function ProposalDetail({
       <>
         <Text style={[text.caption, { marginBottom: sp.lg }]}>{when || 'No date or place yet, just the idea.'}</Text>
         <Text style={text.bodySerif}>You proposed this. {partnerName} gets to accept it, counter it, or pass.</Text>
+        {manageTools}
       </>
     );
   }
@@ -416,11 +472,14 @@ function ProposalDetail({
           <Text style={[text.caption, { marginBottom: sp.lg }]}>{when}</Text>
           <Text style={[text.bodySerif, { marginBottom: sp.lg }]}>How was it? Rate it, keep a note, add a photo to your timeline.</Text>
           <PrimaryButton title="Log how it went" onPress={onReflect} />
+          {manageTools}
         </>
       );
     }
 
-    // Upcoming: countdown + reminder promise.
+    // Upcoming: countdown, and the option to mark it done early. A date can
+    // happen before its day (or have no day at all), so the reflection must not
+    // be locked behind the calendar.
     return (
       <>
         <Text style={[text.caption, { marginBottom: sp.lg }]}>{when || 'No date set, just the promise.'}</Text>
@@ -429,8 +488,8 @@ function ProposalDetail({
           <Text style={text.bodySerif}>{days === 1 ? 'It is tomorrow.' : `${days} days to go.`}</Text>
         )}
         {days !== null && days === 0 && <Text style={text.bodySerif}>It is today. Have a good one.</Text>}
-        <Text style={[text.caption, { marginTop: sp.lg }]}>
-        </Text>
+        <SecondaryButton title="We already did this" onPress={onReflect} style={{ marginTop: sp.lg }} />
+        {manageTools}
       </>
     );
   }
@@ -444,6 +503,7 @@ function ProposalDetail({
           : 'This one was answered with a different idea.'}
       </Text>
       <SecondaryButton title="Propose something new" onPress={onProposeNew} />
+      {manageTools}
     </>
   );
 }
@@ -604,12 +664,15 @@ function StarRating({ value, onChange }: { value: number; onChange: (n: number) 
 function ProposeSheet({
   open,
   counterOf,
+  editing,
   prefill,
   onClose,
   onDone,
 }: {
   open: boolean;
   counterOf: Proposal | null;
+  /** The proposal being changed, when this sheet is in edit mode. */
+  editing: Proposal | null;
   prefill: { title: string; location: string } | null;
   onClose: () => void;
   onDone: () => void;
@@ -629,6 +692,17 @@ function ProposeSheet({
     }
   }, [open, prefill]);
 
+  // Editing starts from what is already there.
+  useEffect(() => {
+    if (open && editing) {
+      setTitle(editing.title);
+      setLocation(editing.location ?? '');
+      setDate(editing.proposed_for ?? '');
+      setTime(editing.proposed_time ?? '');
+      setError(null);
+    }
+  }, [open, editing]);
+
   const submit = async () => {
     setError(null);
     if (date.trim() && !/^\d{4}-\d{2}-\d{2}$/.test(date.trim())) {
@@ -647,7 +721,9 @@ function ProposeSheet({
         proposedFor: date.trim() || undefined,
         proposedTime: time.trim() || undefined,
       };
-      if (counterOf) {
+      if (editing) {
+        await api(`/api/dates/${editing.id}`, { method: 'PATCH', body: { action: 'edit', ...body } });
+      } else if (counterOf) {
         await api(`/api/dates/${counterOf.id}`, { method: 'PATCH', body: { action: 'counter', ...body } });
       } else {
         await api('/api/dates', { method: 'POST', body });
@@ -665,8 +741,17 @@ function ProposeSheet({
   };
 
   return (
-    <Sheet visible={open} onClose={onClose} title={counterOf ? 'Counter with your idea' : 'Propose a date'}>
+    <Sheet
+      visible={open}
+      onClose={onClose}
+      title={editing ? 'Change this date' : counterOf ? 'Counter with your idea' : 'Propose a date'}
+    >
       {counterOf && <Text style={[text.caption, { marginBottom: sp.lg }]}>Instead of "{counterOf.title}".</Text>}
+      {editing && editing.status === 'accepted' && (
+        <Text style={[text.caption, { marginBottom: sp.lg }]}>
+          You both said yes to this one, so your partner sees the change too.
+        </Text>
+      )}
       <TextField label="What are we doing?" value={title} onChangeText={setTitle} placeholder="Dinner at that little place" />
       <TextField label="Where (optional)" value={location} onChangeText={setLocation} placeholder="The old town" />
       <View style={styles.whenRow}>
@@ -688,7 +773,12 @@ function ProposeSheet({
         />
       </View>
       <FormError message={error} />
-      <PrimaryButton title={counterOf ? 'Send counter' : 'Propose'} onPress={submit} loading={busy} disabled={!title.trim()} />
+      <PrimaryButton
+        title={editing ? 'Save changes' : counterOf ? 'Send counter' : 'Propose'}
+        onPress={submit}
+        loading={busy}
+        disabled={!title.trim()}
+      />
       <LockBadge style={{ marginTop: sp.base, alignSelf: 'center' }} />
     </Sheet>
   );
@@ -720,6 +810,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: sp.sm,
     marginTop: sp.md,
+  },
+  // Quiet tools under the main action, icons over labels like the notes wall.
+  manageRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: sp.xl,
+    marginTop: sp.xl,
+    paddingTop: sp.base,
+    borderTopWidth: 1,
+    borderTopColor: colors.hairline,
+  },
+  manageBtn: { flexDirection: 'row', alignItems: 'center', gap: sp.xs },
+  manageText: {
+    ...text.micro,
+    textTransform: 'none',
+    letterSpacing: 0.2,
+    color: colors.inkMuted,
   },
   ratingTag: { ...text.caption, color: colors.accent, letterSpacing: 1 },
   ratingBig: { fontSize: 24, color: colors.accent, letterSpacing: 3, textAlign: 'center' },

@@ -164,13 +164,13 @@ export function NotificationsInvite() {
         }
       : variant === 'paired'
         ? {
-            title: `Hear from ${partnerName}`,
-            body: `Let us tap you on the shoulder when ${partnerName} leaves a note, saves a memory, or is just thinking of you. Only the two of you, never anything else.`,
+            title: `Never miss a word from ${partnerName}`,
+            body: `A message, a note left on the wall, a photo saved, or just ${partnerName} thinking of you. We will tell you the moment it happens, and nothing else, ever.`,
             cta: 'Yes, keep me close',
           }
         : {
-            title: 'Never miss a little thing',
-            body: 'Turn on notifications so a nudge, a new note, or a question waiting for you finds you, even when Ours is closed. Only the two of you, never anything else.',
+            title: 'Never miss a word from them',
+            body: 'A message, a note left on the wall, a photo saved, or just them thinking of you. We will tell you the moment it happens, and nothing else, ever.',
             cta: 'Turn them on',
           };
 

@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Redirect, useRouter } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { useAuth } from '@/lib/auth';
 import { successHaptic } from '@/lib/haptics';
+import { inviteLink, inviteMessage, shareOrCopy } from '@/lib/share';
 import {
   AppPressable,
   Card,
@@ -22,10 +23,14 @@ import { colors, radius, sp, text } from '@/theme';
 export default function Pair() {
   const { status, user, couple, partner, joinSpace, refresh } = useAuth();
   const router = useRouter();
-  const [code, setCode] = useState('');
+  // An invite link tapped by someone who already had an account arrives as
+  // /pair?join=CODE, so the field is already filled in for them.
+  const { join: joinParam } = useLocalSearchParams<{ join?: string }>();
+  const [code, setCode] = useState(typeof joinParam === 'string' ? joinParam.toUpperCase() : '');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [shared, setShared] = useState<string | null>(null);
 
   // Poll while unlinked so the moment they join, this page celebrates it.
   useEffect(() => {
@@ -57,6 +62,17 @@ export default function Pair() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Hand the invite to WhatsApp or iMessage as a link, so they tap once and
+  // land in this space instead of typing a code.
+  const share = async () => {
+    if (!couple) return;
+    const outcome = await shareOrCopy(inviteMessage(user?.display_name), inviteLink(couple.invite_code));
+    if (outcome === 'copied') {
+      setShared('Invite copied. Paste it to them ♥');
+      setTimeout(() => setShared(null), 3000);
+    }
+  };
+
   return (
     <Screen>
       <ScrollView contentContainerStyle={styles.body}>
@@ -72,7 +88,17 @@ export default function Pair() {
           <>
             <Text style={[text.display, { marginBottom: sp.md }]}>Bring your person in</Text>
             <Text style={[text.bodySerif, { color: colors.inkMuted, marginBottom: sp.xl }]}>
-              Share this code with them. When they join, everything you both add lives in one space.
+              Send them an invite and they land straight in here with you. When they join, everything you both
+              add lives in one space.
+            </Text>
+            <PrimaryButton title="Send the invite" onPress={share} disabled={!couple} />
+            {shared ? (
+              <Text style={[text.caption, { color: colors.accent, textAlign: 'center', marginTop: sp.sm }]}>
+                {shared}
+              </Text>
+            ) : null}
+            <Text style={[text.micro, { textAlign: 'center', marginTop: sp.lg, marginBottom: sp.sm }]}>
+              Or read them the code
             </Text>
             <AppPressable onPress={copy}>
               <Card style={styles.codeBox}>

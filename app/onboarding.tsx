@@ -12,6 +12,7 @@ import { isStandalone, shouldOfferInstall } from '@/lib/install';
 import { AddToHomeScreen } from '@/components/AddToHomeScreen';
 import { logEvent } from '@/lib/log';
 import { markPushAskDeclined } from '@/lib/pushAsk';
+import { inviteLink, inviteMessage, shareOrCopy } from '@/lib/share';
 import { nextStep, stepPosition, stepsFor, type OnboardingStep } from '@/lib/onboardingSteps';
 import { AppPressable, FormError, PrimaryButton, Screen, TextField } from '@/components/kit';
 import { colors, font, radius, sp, text } from '@/theme';
@@ -240,6 +241,7 @@ function PartnerStep({
 }) {
   const [theirCode, setTheirCode] = useState('');
   const [copied, setCopied] = useState(false);
+  const [shared, setShared] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -248,6 +250,18 @@ function PartnerStep({
     await Clipboard.setStringAsync(code);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  // The important one: hand the invite to WhatsApp or iMessage as a LINK, so
+  // the other person taps it and lands in a space that is already ours. Reading
+  // a six-character code down the phone is where people give up.
+  const share = async () => {
+    if (!code) return;
+    const outcome = await shareOrCopy(inviteMessage(firstName), inviteLink(code));
+    if (outcome === 'copied') {
+      setShared('Invite copied. Paste it to them ♥');
+      setTimeout(() => setShared(null), 3000);
+    }
   };
 
   const join = async () => {
@@ -267,10 +281,13 @@ function PartnerStep({
   return (
     <StepFrame
       title={firstName ? `Welcome, ${firstName}` : 'Welcome'}
-      line="Ours is built for two. Share your code with your person, or put theirs in if they got here first."
+      line="Ours is built for two. Send your person an invite and they land straight in here with you. No codes to read out."
     >
+      <PrimaryButton title="Send the invite" onPress={share} disabled={!code} />
+      {shared ? <Text style={styles.sharedNote}>{shared}</Text> : null}
+
       <View style={styles.codeBlock}>
-        <Text style={styles.codeLabel}>Your code</Text>
+        <Text style={styles.codeLabel}>Or read them the code</Text>
         <AppPressable onPress={copy} style={styles.codeChip}>
           <Text style={styles.code}>{code ?? '······'}</Text>
           <Text style={text.caption}>{copied ? 'Copied ✓' : 'Tap to copy'}</Text>
@@ -455,12 +472,8 @@ function NotificationsStep({
   if (alreadyOn) {
     return (
       <StepFrame
-        title="Notifications are on"
-        line={
-          partnerName
-            ? `We will let you know when ${partnerName} leaves a note, saves a memory, or is just thinking of you. You can change this any time in Settings.`
-            : 'We will let you know when your person joins and starts leaving things for you. You can change this any time in Settings.'
-        }
+        title={partnerName ? `You will hear from ${partnerName}` : 'You will hear from them'}
+        line="Notifications are on, so nothing they send you waits around unseen. You can change this any time in Settings."
       >
         <PrimaryButton title="Lovely" onPress={onDone} />
       </StepFrame>
@@ -493,11 +506,11 @@ function NotificationsStep({
 
   return (
     <StepFrame
-      title={partnerName ? `Hear from ${partnerName}` : 'Stay close'}
+      title={partnerName ? `Never miss a word from ${partnerName}` : 'Never miss a word from the one you love'}
       line={
         partnerName
-          ? `Let us tap you on the shoulder when ${partnerName} leaves a note, saves a memory, or is just thinking of you. Only the two of you, never anything else.`
-          : 'A nudge, a new note, a question waiting for you. Only the two of you, never anything else.'
+          ? `A message, a note left on the wall, a photo saved, or just ${partnerName} thinking of you. We will tell you the moment it happens, and nothing else, ever.`
+          : 'A message, a note left on the wall, a photo saved, or just them thinking of you. We will tell you the moment it happens, and nothing else, ever.'
       }
     >
       {blocked ? (
@@ -557,8 +570,9 @@ const styles = StyleSheet.create({
     color: colors.inkMuted,
     marginBottom: sp.xxl,
   },
-  codeBlock: { marginBottom: sp.base },
+  codeBlock: { marginBottom: sp.base, marginTop: sp.xl },
   codeLabel: { ...text.micro, marginBottom: sp.sm },
+  sharedNote: { ...text.caption, color: colors.accent, textAlign: 'center', marginTop: sp.sm },
   codeChip: {
     borderWidth: 1,
     borderColor: colors.hairline,

@@ -107,6 +107,16 @@ describe('the install step', () => {
     expect(steps.indexOf('install')).toBeLessThan(steps.indexOf('notifications'));
   });
 
+  /**
+   * The ordering is the whole point. On iOS the home-screen app has its own
+   * storage jar, so installing costs a sign-in; asking at the END would make
+   * someone redo a journey they had just finished. Install must come first.
+   */
+  it('is the very first thing asked, before anything they would have to redo', () => {
+    expect(stepsFor({ ...fresh, offerInstall: true })[0]).toBe('install');
+    expect(stepsFor({ ...iphoneInTab, paired: true })[0]).toBe('install');
+  });
+
   it('is gone once installed, leaving the ask behind', () => {
     // Reopened from the home screen: standalone, so nothing to install and the
     // browser can finally subscribe.

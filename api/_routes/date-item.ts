@@ -7,21 +7,37 @@ import { route, requireString, HttpError } from '../_lib/respond';
 import { PROPOSAL_COLUMNS, PROPOSAL_META_COLUMNS, decodeProposal, parseTime } from './dates';
 
 /**
- * PATCH /api/dates/:id with { action }.
+ * PATCH /api/dates/:id with { action }, and DELETE /api/dates/:id.
  *  - accept | decline | counter: only the partner who did NOT propose can act.
  *    Accepting a dated proposal creates a custom milestone in the same
  *    transaction; countering creates a fresh proposal (proposer swapped).
- *  - complete: after an accepted date has happened, either partner logs how it
- *    went { rating?, reflection?, memoryId?, saveIdea? }. Optionally links a
+ *  - complete: either partner logs how an accepted date went
+ *    { rating?, reflection?, memoryId?, saveIdea? }. Optionally links a
  *    timeline memory the client already created, and saves the date to the
- *    couple's rotating idea pool.
+ *    couple's rotating idea pool. Deliberately NOT limited to dates whose day
+ *    has passed: a date can happen early, or have no date at all.
+ *  - edit: change { title, location, proposedFor, proposedTime }. An OPEN
+ *    proposal is the proposer's to edit (their partner is mid-decision on it);
+ *    an ACCEPTED date belongs to both, so either may edit it. Changing the day
+ *    or time resets the reminder flags so the new schedule fires, and keeps the
+ *    milestone the acceptance created in step.
+ *  - DELETE: same ownership rule as edit, and takes the linked milestone with
+ *    it. A shared plan either partner agreed to is one either partner may call
+ *    off, the same exception memories already make.
  */
-export default route(['PATCH'], async (req, res) => {
+
+/** Who is allowed to change or remove this proposal? */
+function canModify(proposal: { proposer_id: string; status: string }, userId: string): boolean {
+  if (proposal.status === 'accepted') return true; // shared plan, either partner
+  return proposal.proposer_id === userId; // still just an idea, and it is theirs
+}
+
+export default route(['PATCH', 'DELETE'], async (req, res) => {
   const user = await requirePairedUser(req);
   const id = String(req.query.id ?? '');
-  const action = req.body?.action;
-  if (!['accept', 'decline', 'counter', 'complete'].includes(action)) {
-    throw new HttpError(400, 'action must be accept, decline, counter, or complete');
+  const action = req.method === 'DELETE' ? 'delete' : req.body?.action;
+  if (!['accept', 'decline', 'counter', 'complete', 'edit', 'delete'].includes(action)) {
+    throw new HttpError(400, 'action must be accept, decline, counter, complete, or edit');
   }
 
   const proposal = await one<{
@@ -33,8 +49,11 @@ export default route(['PATCH'], async (req, res) => {
     location_ct: Buffer | null;
     proposed_for: string | null;
     status: string;
+    milestone_id: string | null;
+    completed_at: string | null;
   }>(
-    `SELECT id, proposer_id, title, title_ct, location, location_ct, proposed_for::STRING AS proposed_for, status
+    `SELECT id, proposer_id, title, title_ct, location, location_ct, proposed_for::STRING AS proposed_for,
+            status, milestone_id, completed_at::STRING AS completed_at
      FROM date_proposals WHERE id = $1 AND couple_id = $2`,
     [id, user.couple_id]
   );
@@ -42,6 +61,114 @@ export default route(['PATCH'], async (req, res) => {
 
   // Plaintext title for the milestone/idea we may create (envelope.ts).
   const proposalTitle = (await readField(user.couple_id, proposal.title_ct, proposal.title)) ?? '';
+
+  // ---- Call it off ----
+  if (action === 'delete') {
+    if (!canModify(proposal, user.id)) {
+      throw new HttpError(403, 'Only the partner who proposed this can remove it');
+    }
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      // The milestone only exists because this date was accepted, so it goes too.
+      if (proposal.milestone_id) {
+        await client.query('DELETE FROM milestones WHERE id = $1 AND couple_id = $2', [
+          proposal.milestone_id,
+          user.couple_id,
+        ]);
+      }
+      await client.query('DELETE FROM date_proposals WHERE id = $1 AND couple_id = $2', [id, user.couple_id]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+    await publish(user.couple_id, 'date.updated', { id, deleted: true });
+    // Generic: the title is encrypted and must not reach the notifications table.
+    if (proposal.status === 'accepted') {
+      await notify(user.couple_id, user.id, 'date', `${user.display_name} called off a date`);
+    }
+    res.status(200).json({ ok: true });
+    return;
+  }
+
+  // ---- Change the plan ----
+  if (action === 'edit') {
+    if (!canModify(proposal, user.id)) {
+      throw new HttpError(403, 'Only the partner who proposed this can change it');
+    }
+    if (proposal.completed_at) throw new HttpError(409, 'This date is already logged');
+
+    const title = requireString(req.body?.title, 'Title', 140);
+    const location = req.body?.location ? requireString(req.body.location, 'Location', 200) : null;
+    let proposedFor: string | null = null;
+    if (req.body?.proposedFor) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(req.body.proposedFor)) throw new HttpError(400, 'proposedFor must be YYYY-MM-DD');
+      proposedFor = req.body.proposedFor;
+    }
+    const proposedTime = parseTime(req.body?.proposedTime);
+    const titleCt = await encryptField(user.couple_id, title);
+    const locationCt = location ? await encryptField(user.couple_id, location) : null;
+
+    // A moved date needs its reminders again: the 24h/6h/1h flags describe the
+    // OLD time, so leaving them set would silence the new one.
+    const moved = proposedFor !== proposal.proposed_for;
+
+    const client = await getPool().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `UPDATE date_proposals
+         SET title = $2, title_ct = $3, location = $4, location_ct = $5,
+             proposed_for = $6, proposed_time = $7, updated_at = now(),
+             reminded_24 = CASE WHEN $8 THEN false ELSE reminded_24 END,
+             reminded_6  = CASE WHEN $8 THEN false ELSE reminded_6  END,
+             reminded_1  = CASE WHEN $8 THEN false ELSE reminded_1  END
+         WHERE id = $1`,
+        [id, titleCt ? '' : title, titleCt, locationCt ? null : location, locationCt, proposedFor, proposedTime, moved]
+      );
+
+      // Keep the milestone the acceptance created in step with the plan.
+      if (proposal.milestone_id && proposedFor) {
+        await client.query('UPDATE milestones SET title = $2, date = $3 WHERE id = $1 AND couple_id = $4', [
+          proposal.milestone_id,
+          `Date: ${title}`,
+          proposedFor,
+          user.couple_id,
+        ]);
+      } else if (proposal.milestone_id && !proposedFor) {
+        // The day was cleared, so there is nothing to count down to.
+        await client.query('DELETE FROM milestones WHERE id = $1 AND couple_id = $2', [
+          proposal.milestone_id,
+          user.couple_id,
+        ]);
+        await client.query('UPDATE date_proposals SET milestone_id = NULL WHERE id = $1', [id]);
+      } else if (!proposal.milestone_id && proposedFor && proposal.status === 'accepted') {
+        // A day was added to an already-accepted date: it earns its milestone.
+        const { rows } = await client.query(
+          `INSERT INTO milestones (couple_id, author_id, title, date, kind)
+           VALUES ($1, $2, $3, $4, 'custom') RETURNING id`,
+          [user.couple_id, user.id, `Date: ${title}`, proposedFor]
+        );
+        await client.query('UPDATE date_proposals SET milestone_id = $2 WHERE id = $1', [id, rows[0].id]);
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    const editedRow = await one<Record<string, any>>(`SELECT ${PROPOSAL_COLUMNS} FROM date_proposals WHERE id = $1`, [id]);
+    const edited = editedRow ? await decodeProposal(user.couple_id, editedRow) : null;
+    await publish(user.couple_id, 'date.updated', { id, edited: true });
+    await notify(user.couple_id, user.id, 'date', `${user.display_name} changed a date`);
+    res.status(200).json({ proposal: edited });
+    return;
+  }
 
   // ---- Post-date reflection ----
   if (action === 'complete') {

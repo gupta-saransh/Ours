@@ -43,9 +43,11 @@ export function installTarget(): InstallTarget {
     (navigator.platform === 'MacIntel' && ((navigator as { maxTouchPoints?: number }).maxTouchPoints ?? 0) > 1);
 
   if (isIOS) {
-    // Every iOS browser is WebKit underneath, but only Safari itself can
-    // install a home-screen app that receives push. CriOS/FxiOS/EdgiOS are the
-    // Chrome/Firefox/Edge shells.
+    // Since iOS 16.4 EVERY iOS browser can install to the home screen from the
+    // share sheet (Safari, Chrome, Edge, Firefox, Orion), and the installed app
+    // is the same WebKit home-screen app with push either way. So this split is
+    // only about WHERE the share button sits: Safari keeps it in the bottom
+    // toolbar, the others put it at the top. Nobody is sent to Safari.
     const isRealSafari = /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
     return isRealSafari ? 'ios-safari' : 'ios-other';
   }
@@ -114,14 +116,19 @@ export async function promptInstall(): Promise<boolean> {
 /**
  * Should the onboarding install step appear?
  *
- * iOS: always when not installed, because notifications genuinely depend on it.
- * Android: only when we can offer the real one-tap prompt, so the step is never
- * a dead end (push already works in an Android tab, so it is a bonus there).
- * Desktop: never, this flow is written for a phone.
+ * On every phone that is not installed yet, iOS and Android alike. It is the
+ * FIRST thing asked after signing up, deliberately: on iOS the home-screen app
+ * has its own storage jar, so installing later means signing in again, and
+ * doing that at the end would throw away a journey they had just finished.
+ * Asking first costs one sign-in and nothing else.
+ *
+ * Android does not strictly need it (push works in a tab there) but the flow
+ * stays the same on both platforms, and Android usually gets a real one-tap
+ * install button instead of instructions.
+ *
+ * Desktop is excluded: this flow is written for a phone.
  */
 export function shouldOfferInstall(): boolean {
   const target = installTarget();
-  if (target === 'ios-safari' || target === 'ios-other') return true;
-  if (target === 'android') return canPromptInstall();
-  return false;
+  return target === 'ios-safari' || target === 'ios-other' || target === 'android';
 }

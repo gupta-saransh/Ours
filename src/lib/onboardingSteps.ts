@@ -20,13 +20,16 @@ export type OnboardingStep =
 
 /** The canonical order. `done` is not a step, it is the end of the flow. */
 export const STEP_ORDER: OnboardingStep[] = [
+  // FIRST, deliberately. On iOS the home-screen app has its own storage jar, so
+  // installing means signing in once more. Asking at the END of the flow would
+  // make them pay for that after doing all the work; asking first costs a
+  // single sign-in, and everything here is stored server-side so the flow
+  // resumes exactly where they left off.
+  'install',
   'partner',
   'anniversary',
   'birthday',
   'nickname',
-  // Install comes before the notification ask: on iPhone the ask cannot even
-  // work until Ours is on the home screen.
-  'install',
   'notifications',
 ];
 
@@ -87,8 +90,8 @@ export function stepsFor(ctx: StepContext): OnboardingStep[] {
         return ctx.offerInstall;
       case 'notifications':
         // On an uninstalled iPhone the browser cannot subscribe at all, so the
-        // install step carries the story instead; the ask returns by itself
-        // once they reopen Ours from the home screen and the flow resumes.
+        // ask waits: it returns by itself once they open Ours from the home
+        // screen and the flow resumes.
         return ctx.canNotify && !ctx.needsInstallFirst;
       default:
         return false;

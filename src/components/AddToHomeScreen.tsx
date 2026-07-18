@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
-import { Compass, MoreVertical, Share, SquarePlus } from 'lucide-react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { MoreVertical, Share } from 'lucide-react-native';
 import { successHaptic } from '@/lib/haptics';
 import { logEvent } from '@/lib/log';
 import {
@@ -11,7 +10,7 @@ import {
   promptInstall,
   type InstallTarget,
 } from '@/lib/install';
-import { PrimaryButton, SecondaryButton } from '@/components/kit';
+import { PrimaryButton } from '@/components/kit';
 import { colors, font, radius, sp, text } from '@/theme';
 
 /**
@@ -34,18 +33,10 @@ import { colors, font, radius, sp, text } from '@/theme';
 export function AddToHomeScreen({ onDone, onSkip }: { onDone: () => void; onSkip?: () => void }) {
   const target = installTarget();
   const [promptable, setPromptable] = useState(canPromptInstall());
-  const [copied, setCopied] = useState(false);
   const [installing, setInstalling] = useState(false);
 
   // The browser's offer can arrive after this screen is already up.
   useEffect(() => onInstallAvailable(setPromptable), []);
-
-  const copyLink = async () => {
-    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
-    await Clipboard.setStringAsync(window.location.origin);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
-  };
 
   const install = async () => {
     setInstalling(true);
@@ -84,14 +75,6 @@ export function AddToHomeScreen({ onDone, onSkip }: { onDone: () => void; onSkip
         <PrimaryButton title="I have added it" onPress={onDone} />
       )}
 
-      {target === 'ios-other' && (
-        <SecondaryButton
-          title={copied ? 'Link copied ✓' : 'Copy the link for Safari'}
-          onPress={copyLink}
-          style={{ marginTop: sp.md }}
-        />
-      )}
-
       {onSkip && (
         <Pressable onPress={onSkip} hitSlop={8} style={styles.later}>
           <Text style={styles.laterText}>Maybe later</Text>
@@ -99,45 +82,47 @@ export function AddToHomeScreen({ onDone, onSkip }: { onDone: () => void; onSkip
       )}
 
       <Text style={styles.foot}>
-        {target === 'ios-safari' || target === 'ios-other'
-          ? 'Open Ours from your home screen afterwards. It will ask about notifications there, which is the part an iPhone will not let a browser tab do.'
-          : 'Open Ours from your home screen afterwards and carry on right where you left off.'}
+        Open Ours from your home screen afterwards and carry on right where you left off. We do this first so you
+        never have to do it twice.
       </Text>
     </View>
   );
 }
 
 const COPY: Record<InstallTarget, { title: string; line: string; steps: string[] }> = {
+  // Same instructions for every iOS browser: since iOS 16.4 they all install
+  // from the share sheet. Only the share button's position differs, which the
+  // arrow on the phone handles.
   'ios-safari': {
-    title: 'Put Ours on your home screen',
-    line: 'It opens like a real app, and it is the only way an iPhone will let us send you notifications.',
+    title: 'Keep Ours on your home screen',
+    line: 'It opens like a real app, and it is the only way an iPhone will let the two of you get notifications.',
     steps: [
-      'Tap the share button at the bottom of Safari.',
+      'Tap the share button at the bottom of the screen.',
       'Scroll down the list and choose Add to Home Screen.',
       'Tap Add, then open Ours from your home screen.',
     ],
   },
   'ios-other': {
-    title: 'Open Ours in Safari first',
-    line: 'On iPhone, only Safari can add an app that receives notifications. It takes two taps to switch over.',
+    title: 'Keep Ours on your home screen',
+    line: 'It opens like a real app, and it is the only way an iPhone will let the two of you get notifications.',
     steps: [
-      'Tap the menu at the top right of this browser.',
-      'Choose Open in Safari.',
-      'In Safari, tap Share, then Add to Home Screen.',
+      'Tap the share button at the top of the screen.',
+      'Scroll down the list and choose Add to Home Screen.',
+      'Tap Add, then open Ours from your home screen.',
     ],
   },
   android: {
-    title: 'Put Ours on your home screen',
-    line: 'It opens like a real app, full screen, and lands a tap away from everything else you use.',
+    title: 'Keep Ours on your home screen',
+    line: 'It opens like a real app, full screen, a tap away from everything else you use.',
     steps: [
       'Tap the three dots at the top right.',
-      'Choose Add to Home screen, or Install app.',
+      'Choose Install app, or Add to Home screen.',
       'Confirm, then open Ours from your home screen.',
     ],
   },
   desktop: {
-    title: 'Put Ours on your home screen',
-    line: 'Ours is happiest on a phone, where it can reach you.',
+    title: 'Keep Ours on your home screen',
+    line: 'Ours is happiest on a phone, where it can reach the two of you.',
     steps: ['Open Ours on your phone to add it there.'],
   },
   installed: {
@@ -153,9 +138,9 @@ const COPY: Record<InstallTarget, { title: string; line: string; steps: string[]
  * shells put their menu at the top right.
  */
 function PhoneMock({ target }: { target: InstallTarget }) {
-  const pointsDown = target === 'ios-safari'; // bottom toolbar
-  const Glyph = target === 'ios-safari' ? Share : target === 'ios-other' ? Compass : MoreVertical;
-  const label = target === 'ios-safari' ? 'Share' : target === 'ios-other' ? 'Open in Safari' : 'Menu';
+  const pointsDown = target === 'ios-safari'; // Safari keeps share in the bottom bar
+  const Glyph = target === 'android' ? MoreVertical : Share;
+  const label = target === 'android' ? 'Menu' : 'Share';
 
   const ring = (
     <View style={styles.ring}>

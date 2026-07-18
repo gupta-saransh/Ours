@@ -6,10 +6,12 @@ import { FormError, PrimaryButton, Screen, SecondaryButton, TextField } from '@/
 import { colors, sp, text } from '@/theme';
 
 export default function SignUp() {
-  const { signUp } = useAuth();
+  const { signUp, joinSpace } = useAuth();
   const router = useRouter();
-  // A friend-referral link lands here as /sign-up?ref=CODE.
-  const { ref } = useLocalSearchParams<{ ref?: string }>();
+  // A friend-referral link lands here as /sign-up?ref=CODE, and a partner's
+  // invite as /sign-up?join=CODE.
+  const { ref, join } = useLocalSearchParams<{ ref?: string; join?: string }>();
+  const joinCode = typeof join === 'string' ? join.trim().toUpperCase() : '';
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -21,6 +23,10 @@ export default function SignUp() {
     setBusy(true);
     try {
       await signUp(email.trim(), password, name.trim(), typeof ref === 'string' ? ref : null);
+      // Invited by their partner: step straight into that space, so they never
+      // see a code at all. Best effort, a stale code must not strand a new
+      // account (the pairing screen is still there).
+      if (joinCode) await joinSpace(joinCode).catch(() => {});
       // the (auth) layout redirects home once signed in
     } catch (err: any) {
       setError(err?.message ?? 'Something went wrong');
