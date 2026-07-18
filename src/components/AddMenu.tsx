@@ -13,6 +13,7 @@ import {
 import { usePathname, useRouter } from 'expo-router';
 import {
   CalendarHeart,
+  CheckSquare,
   Gift,
   Image as ImageIcon,
   Plus,
@@ -38,19 +39,22 @@ interface Action {
   label: string;
   Icon: LucideIcon;
   path: string;
+  params?: Record<string, string>;
 }
 
-// Bottom-up: index 0 sits closest to the FAB.
+// Bottom-up: index 0 sits closest to the FAB. Note and Memory both open the
+// merged Timeline; `kind` tells it which composer to focus (see timeline.tsx).
 const ACTIONS: Action[] = [
   { key: 'milestone', label: 'Add a milestone', Icon: Star, path: '/milestones' },
   { key: 'date', label: 'Propose a date', Icon: CalendarHeart, path: '/dates' },
   { key: 'wish', label: 'Make a wish', Icon: Gift, path: '/wishlist' },
-  { key: 'note', label: 'Add note', Icon: StickyNote, path: '/notes' },
-  { key: 'memory', label: 'Add memory', Icon: ImageIcon, path: '/memories' },
+  { key: 'todo', label: 'Add a to-do', Icon: CheckSquare, path: '/todos' },
+  { key: 'note', label: 'Add note', Icon: StickyNote, path: '/timeline' },
+  { key: 'memory', label: 'Add memory', Icon: ImageIcon, path: '/timeline', params: { kind: 'memory' } },
 ];
 
 // Routes that show the FAB. Hidden elsewhere (Settings, Notifications, etc.).
-const VISIBLE_ON = new Set(['/', '/memories', '/notes', '/dates', '/wishlist', '/milestones']);
+const VISIBLE_ON = new Set(['/', '/timeline', '/todos', '/dates', '/wishlist', '/milestones']);
 
 const FAB_SIZE = 56;
 const FAB_RIGHT = sp.xl; // gap from the screen's right edge
@@ -111,7 +115,10 @@ export function AddMenu() {
     setOpen(false);
     // A fresh nonce each press so the target screen re-opens its composer even
     // when we're already on that tab.
-    router.navigate({ pathname: action.path as never, params: { compose: String(Date.now()) } });
+    router.navigate({
+      pathname: action.path as never,
+      params: { compose: String(Date.now()), ...action.params },
+    });
   };
 
   const rotate = anim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '45deg'] });

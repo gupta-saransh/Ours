@@ -7,17 +7,20 @@ import type { NotificationKind } from './notify';
  */
 const ROUTES: Record<NotificationKind, string> = {
   nudge: '/',
-  memory: '/memories',
-  note: '/notes',
+  // Notes and memories now share one surface (the Timeline), so both kinds and
+  // the comment/capsule kinds that hang off them all land there.
+  memory: '/timeline',
+  note: '/timeline',
   milestone: '/milestones',
   partner: '/',
   bucket: '/wishlist',
   prompt: '/prompts',
-  capsule: '/memories',
+  capsule: '/timeline',
   date: '/dates',
   wishlist: '/wishlist',
-  comment: '/memories',
+  comment: '/timeline',
   game: '/',
+  todo: '/todos',
 };
 
 export function routeForKind(kind: string): string {

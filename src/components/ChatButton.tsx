@@ -23,7 +23,7 @@ const FAB_SIZE = 56;
 const FAB_RIGHT = sp.xl;
 const CHAT_SIZE = 52;
 
-const VISIBLE_ON = new Set(['/', '/memories', '/notes', '/dates', '/wishlist', '/milestones']);
+const VISIBLE_ON = new Set(['/', '/timeline', '/todos', '/dates', '/wishlist', '/milestones']);
 
 export function ChatButton() {
   const { user, partner } = useAuth();

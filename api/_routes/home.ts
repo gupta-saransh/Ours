@@ -38,6 +38,7 @@ const POINTS: Record<string, number> = {
   notes: 2,
   milestones: 2,
   guesses: 2,
+  todos_done: 2,
   comments: 1,
 };
 
@@ -66,6 +67,7 @@ const RECENT_KIND_TO_POINTS: Record<string, string> = {
   bucket: 'bucket_done',
   date: 'dates_done',
   guess: 'guesses',
+  todo: 'todos_done',
 };
 
 /**
@@ -80,7 +82,7 @@ export default route(['GET'], async (req, res) => {
 
   const isSunday = new Date().getUTCDay() === 0;
 
-  const [couple, partner, anniversary, milestones, yearAgo, monthAgo, older, bucket, pinnedNote, seen, prompt, upcomingDate, reflection, streak, storyCounts, guessRow, recentRows, game] =
+  const [couple, partner, anniversary, milestones, yearAgo, monthAgo, older, bucket, pinnedNote, seen, prompt, upcomingDate, reflection, streak, storyCounts, guessRow, recentRows, game, todoWeek, todoWins] =
     await Promise.all([
       one('SELECT id, invite_code, created_at FROM couples WHERE id = $1', [cid]),
       one('SELECT id, display_name FROM users WHERE couple_id = $1 AND id != $2', [cid, user.id]),
@@ -166,6 +168,29 @@ export default route(['GET'], async (req, res) => {
         [cid]
       ).catch(() => [] as { kind: string; created_at: string }[]),
       gameStateFor(cid, user.id),
+      // The week's to-do standing, for the Home summary card. Monday-based like
+      // the weekly reflection. Catch-guarded: the table is v19 and a deploy that
+      // lands before the migration must degrade to "no card", not a 500.
+      one<Record<string, number>>(
+        `SELECT
+           count(*) FILTER (WHERE done AND done_at >= date_trunc('week', now()))::int AS week_done,
+           count(*) FILTER (WHERE due_date >= date_trunc('week', now())::DATE
+                              AND due_date < date_trunc('week', now())::DATE + 7)::int AS week_total,
+           count(*) FILTER (WHERE done = false AND due_date < now()::DATE)::int AS overdue,
+           count(*) FILTER (WHERE due_date = now()::DATE)::int AS today_total,
+           count(*) FILTER (WHERE due_date = now()::DATE AND done)::int AS today_done,
+           count(*) FILTER (WHERE done)::int AS all_done
+         FROM todos WHERE couple_id = $1`,
+        [cid]
+      ).catch(() => null),
+      // A few of the week's wins by name, so the card can say what you actually
+      // did rather than only how many.
+      q<Record<string, any>>(
+        `SELECT title, title_ct, done_by FROM todos
+         WHERE couple_id = $1 AND done AND done_at >= date_trunc('week', now())
+         ORDER BY done_at DESC LIMIT 3`,
+        [cid]
+      ).catch(() => [] as Record<string, any>[]),
     ]);
 
   // `nudges` powers the on-open hearts shower: an unseen nudge from the last
@@ -227,9 +252,28 @@ export default route(['GET'], async (req, res) => {
     };
   }
 
+  // Titles are encrypted at rest, so the week's wins decrypt here like every
+  // other piece of couple-authored text on this screen.
+  const todos = todoWeek
+    ? {
+        weekDone: todoWeek.week_done ?? 0,
+        weekTotal: todoWeek.week_total ?? 0,
+        overdue: todoWeek.overdue ?? 0,
+        todayTotal: todoWeek.today_total ?? 0,
+        todayDone: todoWeek.today_done ?? 0,
+        wins: await Promise.all(
+          (todoWins ?? []).map(async (w) => ({
+            title: (await readField(cid, w.title_ct, w.title)) ?? '',
+            done_by: w.done_by,
+          }))
+        ),
+      }
+    : null;
+
   res.status(200).json({
     couple,
     partner: partner ?? null,
+    todos,
     daysBasis: anniversary?.date ?? null,
     milestones,
     resurfaced,
@@ -249,6 +293,7 @@ export default route(['GET'], async (req, res) => {
           memories: 0, notes: 0, answers: 0, comments: 0, dates_done: 0, bucket_done: 0, milestones: 0,
         }),
         guesses: guessRow?.n ?? 0,
+        todos_done: todoWeek?.all_done ?? 0,
       };
       // Each recent moment carries the points it earned, so the card can show
       // "+5 · A memory · Jul 12" without the client re-deriving the values.

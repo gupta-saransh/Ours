@@ -6,8 +6,8 @@ import { colors, font, sp, text } from '@/theme';
 
 const LINKS = [
   { href: '/', label: 'Home' },
-  { href: '/memories', label: 'Memories' },
-  { href: '/notes', label: 'Notes' },
+  { href: '/timeline', label: 'Timeline' },
+  { href: '/todos', label: 'To-dos' },
   { href: '/dates', label: 'Dates' },
   { href: '/wishlist', label: 'Wishes' },
 ] as const;

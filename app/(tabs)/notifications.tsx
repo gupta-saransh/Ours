@@ -28,17 +28,18 @@ const KIND_ICON: Record<string, React.ComponentType<{ size?: number; color?: str
 // Where each notification deep-links on tap (mirrors api/_lib/notification-routes.ts).
 const KIND_ROUTE: Record<string, string> = {
   nudge: '/',
-  memory: '/memories',
-  note: '/notes',
+  memory: '/timeline',
+  note: '/timeline',
   milestone: '/milestones',
   partner: '/',
   bucket: '/wishlist',
   prompt: '/prompts',
-  capsule: '/memories',
+  capsule: '/timeline',
   date: '/dates',
   wishlist: '/wishlist',
-  comment: '/memories',
+  comment: '/timeline',
   game: '/',
+  todo: '/todos',
 };
 
 export default function Notifications() {

@@ -109,7 +109,7 @@ export default route(['POST', 'GET'], async (req, res) => {
         {
           title: 'Ours',
           body: 'The day is winding down. Add a memory or a little note before it slips away. ♥',
-          url: '/memories',
+          url: '/timeline',
         },
         'cron:daily'
       );

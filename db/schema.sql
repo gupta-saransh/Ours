@@ -345,3 +345,34 @@ ALTER TABLE milestones ADD COLUMN IF NOT EXISTS person_id UUID;
 ALTER TABLE daily_game_answers ADD COLUMN IF NOT EXISTS pick2 STRING;
 ALTER TABLE daily_game_answers ADD COLUMN IF NOT EXISTS guess2 STRING;
 ALTER TABLE daily_game_answers ADD COLUMN IF NOT EXISTS round2_at TIMESTAMPTZ;
+
+-- v19: the shared to-do list. One list per couple, visible to both, so the two
+-- of you can hold each other accountable: either partner adds, either ticks,
+-- and completing one notifies the other.
+--
+--   assignee_id  who it is for. NULL means "both of us" (the default), so an
+--     item needs no decision to be added. Mirrors milestones.person_id: a
+--     nullable member reference rather than an enum, validated server-side
+--     against the couple's own members.
+--   due_date  every to-do belongs to a DAY, because the screen is one day at a
+--     time. NOT NULL, defaulted to today by the route when the client omits it.
+--     An unfinished item deliberately STAYS on its day (moving it forward is an
+--     explicit choice the user makes), so this column is also what the pending
+--     count reads.
+--   title_ct  a to-do says real things about someone's life ("submit the
+--     assignment"), so the title is encrypted at rest like note and memory
+--     bodies. The plaintext `title` column stays for the encryption-off path.
+CREATE TABLE IF NOT EXISTS todos (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  couple_id UUID NOT NULL,
+  author_id UUID NOT NULL,
+  assignee_id UUID,
+  title STRING NOT NULL DEFAULT '',
+  title_ct BYTEA,
+  due_date DATE NOT NULL,
+  done BOOL NOT NULL DEFAULT false,
+  done_by UUID,
+  done_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS todos_by_couple_day ON todos (couple_id, due_date);

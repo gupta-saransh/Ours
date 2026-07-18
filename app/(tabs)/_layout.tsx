@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { Platform, useWindowDimensions, View } from 'react-native';
 import { Redirect, Tabs } from 'expo-router';
-import { CalendarHeart, Gift, Home, Image as ImageIcon, StickyNote } from 'lucide-react-native';
+import { CalendarHeart, CheckSquare, Gift, Home, Image as ImageIcon } from 'lucide-react-native';
 import { useAuth } from '@/lib/auth';
 import { NotificationsProvider } from '@/lib/notifications';
 import { tapHaptic } from '@/lib/haptics';
@@ -88,10 +88,12 @@ export default function TabsLayout() {
           }}
         >
           <Tabs.Screen name="index" options={{ title: 'Home', headerShown: false, tabBarIcon: icon(Home) }} />
-          <Tabs.Screen name="memories" options={{ title: 'Memories', tabBarIcon: icon(ImageIcon) }} />
-          <Tabs.Screen name="notes" options={{ title: 'Notes', tabBarIcon: icon(StickyNote) }} />
+          <Tabs.Screen name="timeline" options={{ title: 'Timeline', tabBarIcon: icon(ImageIcon) }} />
+          <Tabs.Screen name="todos" options={{ title: 'To-dos', tabBarIcon: icon(CheckSquare) }} />
           <Tabs.Screen name="dates" options={{ title: 'Dates', tabBarIcon: icon(CalendarHeart) }} />
           <Tabs.Screen name="wishlist" options={{ title: 'Wishes', tabBarIcon: icon(Gift) }} />
+          <Tabs.Screen name="memories" options={{ title: 'Memories', href: null }} />
+          <Tabs.Screen name="notes" options={{ title: 'Notes', href: null }} />
           <Tabs.Screen name="milestones" options={{ title: 'Milestones', href: null }} />
           <Tabs.Screen name="settings" options={{ title: 'Settings', href: null }} />
           <Tabs.Screen name="notifications" options={{ title: 'Activity', href: null }} />

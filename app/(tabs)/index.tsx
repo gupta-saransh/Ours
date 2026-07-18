@@ -115,6 +115,7 @@ const RECENT_LABEL: Record<string, string> = {
   bucket: 'A wish that came true',
   date: 'A date you went on',
   guess: 'A right guess',
+  todo: 'A to-do you finished',
 };
 
 interface HomeData {
@@ -130,6 +131,14 @@ interface HomeData {
   streak: StreakState;
   story: StoryState;
   game: GameState | null;
+  todos: {
+    weekDone: number;
+    weekTotal: number;
+    overdue: number;
+    todayTotal: number;
+    todayDone: number;
+    wins: { title: string; done_by: string | null }[];
+  } | null;
   nudged?: boolean;
   isSunday: boolean;
   reflection: {
@@ -485,6 +494,47 @@ export default function Home() {
           </FadeIn>
         )}
 
+        {/* Weekly to-do standing: what got done together, what is still waiting. */}
+        {data.todos && (data.todos.weekTotal > 0 || data.todos.overdue > 0) && (
+          <FadeIn delay={110}>
+            <Section label="Keeping each other on track">
+              <PressableCard onPress={() => router.push('/todos')}>
+                <View style={styles.rowBetween}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={text.subtitle}>
+                      {data.todos.weekDone} of {data.todos.weekTotal} done this week
+                    </Text>
+                    {data.todos.overdue > 0 && (
+                      <Text style={[text.caption, { color: colors.danger, marginTop: sp.xs }]}>
+                        {data.todos.overdue} unfinished from earlier
+                      </Text>
+                    )}
+                  </View>
+                  {data.todos.todayTotal > 0 && (
+                    <Text style={styles.upcomingDays}>
+                      {data.todos.todayDone}/{data.todos.todayTotal} today
+                    </Text>
+                  )}
+                </View>
+                {data.todos.wins.length > 0 && (
+                  <View style={{ marginTop: sp.md }}>
+                    {data.todos.wins.map((w, i) => (
+                      <Text
+                        key={i}
+                        style={[text.caption, i > 0 && { marginTop: sp.xs }]}
+                        numberOfLines={1}
+                      >
+                        ✓ {w.title}
+                        {w.done_by === user?.id ? ' · you' : data.partner ? ` · ${data.partner.display_name}` : ''}
+                      </Text>
+                    ))}
+                  </View>
+                )}
+              </PressableCard>
+            </Section>
+          </FadeIn>
+        )}
+
         {/* Weekly reflection, Sundays only */}
         {data.isSunday && data.reflection && (
           <FadeIn delay={120}>
@@ -556,7 +606,7 @@ export default function Home() {
         {data.pinnedNote && (
           <FadeIn delay={240}>
             <Section label="Pinned on your wall">
-              <PressableCard onPress={() => router.push('/notes')}>
+              <PressableCard onPress={() => router.push('/timeline')}>
                 <Text style={text.bodySerif} numberOfLines={3}>
                   {data.pinnedNote.body}
                 </Text>
@@ -569,7 +619,7 @@ export default function Home() {
         {data.resurfaced && (
           <FadeIn delay={280}>
             <Section label={data.resurfaced.tag}>
-              <PressableCard onPress={() => router.push('/memories')}>
+              <PressableCard onPress={() => router.push('/timeline')}>
                 <View style={{ flexDirection: 'row', gap: sp.base, alignItems: 'center' }}>
                   {data.resurfaced.thumb_data && (
                     <Image source={{ uri: data.resurfaced.thumb_data }} style={styles.resurfacedPhoto} contentFit="cover" />

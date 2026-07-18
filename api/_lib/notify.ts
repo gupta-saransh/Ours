@@ -16,7 +16,8 @@ export type NotificationKind =
   | 'date'
   | 'wishlist'
   | 'comment'
-  | 'game';
+  | 'game'
+  | 'todo';
 
 /**
  * The notification service: every meaningful action lands in the

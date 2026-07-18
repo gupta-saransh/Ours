@@ -38,6 +38,8 @@ import cronReminders from './_routes/cron-reminders';
 import clientLogs from './_routes/logs';
 import game from './_routes/game';
 import referral from './_routes/referral';
+import todos from './_routes/todos';
+import todoItem from './_routes/todo-item';
 
 type Handler = (req: VercelRequest, res: VercelResponse) => Promise<void>;
 
@@ -94,6 +96,8 @@ const routes: Partial<Record<string, Handler>> = {
   logs: clientLogs,
   'game/today': game,
   referral,
+  todos,
+  'todos/:id': todoItem,
 };
 
 function pathSegments(req: VercelRequest): string[] {
