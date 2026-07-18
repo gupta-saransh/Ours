@@ -30,10 +30,16 @@ export default function TabsLayout() {
   // Signed in and notifications are meant to be on: make sure the server
   // actually holds a live subscription. Silent (never prompts), and it fixes
   // accounts whose push_token went missing or was never stored.
+  //
+  // NOT during onboarding. This effect runs even on the render that redirects
+  // there (hooks cannot be conditional), and on a device where permission was
+  // already granted it would subscribe the new account before the flow reached
+  // its notifications step, which then skipped itself as "already done".
+  // Onboarding owns that step for new signups.
   const notificationsOn = user?.notifications_enabled;
   useEffect(() => {
-    if (status === 'signedIn' && notificationsOn) ensureWebPushSubscribed();
-  }, [status, notificationsOn]);
+    if (status === 'signedIn' && notificationsOn && !needsOnboarding) ensureWebPushSubscribed();
+  }, [status, notificationsOn, needsOnboarding]);
 
   if (status === 'loading') return null;
   if (status === 'signedOut') return <Redirect href="/welcome" />;

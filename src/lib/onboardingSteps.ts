@@ -31,12 +31,17 @@ export interface StepContext {
   /** Have they already given their partner a pet name? */
   hasNickname: boolean;
   /**
-   * Can this platform actually deliver notifications? False on native, where
-   * APNs/FCM credentials are not provisioned, so asking would be a stub.
+   * Can this platform do ANYTHING about notifications? False on native (APNs
+   * and FCM credentials are not provisioned, so asking would be a stub) and in
+   * a browser with no push support at all. True on an iPhone in a Safari tab,
+   * which cannot subscribe yet but can be shown how to install.
+   *
+   * Deliberately NOT "do they already have a subscription": that used to hide
+   * the step, and on a device where permission was already granted the account
+   * could get auto-subscribed before the flow reached it, so the step silently
+   * vanished. The step now always shows and picks its own wording.
    */
   canNotify: boolean;
-  /** Does the server already hold a push subscription for them? */
-  hasPushSubscription: boolean;
 }
 
 /**
@@ -58,7 +63,7 @@ export function stepsFor(ctx: StepContext): OnboardingStep[] {
         // Only meaningful once there is a partner to name.
         return ctx.paired && !ctx.hasNickname;
       case 'notifications':
-        return ctx.canNotify && !ctx.hasPushSubscription;
+        return ctx.canNotify;
       default:
         return false;
     }

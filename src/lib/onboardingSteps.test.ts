@@ -14,7 +14,6 @@ const fresh: StepContext = {
   hasOwnBirthday: false,
   hasNickname: false,
   canNotify: true,
-  hasPushSubscription: false,
 };
 
 describe('stepsFor', () => {
@@ -47,15 +46,15 @@ describe('stepsFor', () => {
     expect(stepsFor({ ...fresh, canNotify: false })).toEqual(['partner', 'anniversary', 'birthday']);
   });
 
-  it('skips notifications when a subscription is already stored', () => {
-    expect(stepsFor({ ...fresh, hasPushSubscription: true })).toEqual([
-      'partner',
-      'anniversary',
-      'birthday',
-    ]);
+  // Regression: an existing subscription used to remove this step. On a device
+  // that had already granted permission, the account could be auto-subscribed
+  // moments after signup, and the step vanished from the flow. It now always
+  // shows and the screen picks its own wording.
+  it('keeps the notifications step even when a subscription already exists', () => {
+    expect(stepsFor(fresh)).toContain('notifications');
   });
 
-  it('returns nothing to do when everything is already set', () => {
+  it('leaves only the notifications step when everything else is set', () => {
     expect(
       stepsFor({
         paired: true,
@@ -63,7 +62,18 @@ describe('stepsFor', () => {
         hasOwnBirthday: true,
         hasNickname: true,
         canNotify: true,
-        hasPushSubscription: true,
+      })
+    ).toEqual(['notifications']);
+  });
+
+  it('returns nothing to do when the platform cannot notify either', () => {
+    expect(
+      stepsFor({
+        paired: true,
+        hasAnniversary: true,
+        hasOwnBirthday: true,
+        hasNickname: true,
+        canNotify: false,
       })
     ).toEqual([]);
   });

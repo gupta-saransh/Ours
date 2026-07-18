@@ -45,6 +45,9 @@ export default function Onboarding() {
   const [current, setCurrent] = useState<OnboardingStep | null>(null);
   const [history, setHistory] = useState<OnboardingStep[]>([]);
   const [finishing, setFinishing] = useState(false);
+  // Does the server already hold a subscription for this account? Only changes
+  // the notifications step's wording, never whether it is shown.
+  const [alreadySubscribed, setAlreadySubscribed] = useState(false);
 
   const paired = !!partner;
 
@@ -60,6 +63,7 @@ export default function Onboarding() {
             .catch(() => false)
         : Promise.resolve(true),
     ]);
+    setAlreadySubscribed(pushed);
     return stepsFor({
       paired,
       hasAnniversary: milestones.some((m) => m.kind === 'anniversary'),
@@ -72,7 +76,6 @@ export default function Onboarding() {
       // An iPhone in a Safari tab cannot subscribe yet, but it CAN be told how
       // (add to home screen). Hiding the step there is why it never appeared.
       canNotify: Platform.OS === 'web' && (webPushSupported() || webPushNeedsInstall()),
-      hasPushSubscription: pushed,
     });
   }, [paired, partner?.nickname, user?.id]);
 
@@ -197,7 +200,11 @@ export default function Onboarding() {
           />
         )}
         {current === 'notifications' && (
-          <NotificationsStep partnerName={partner?.display_name ?? null} onDone={advance} />
+          <NotificationsStep
+            partnerName={partner?.display_name ?? null}
+            alreadyOn={alreadySubscribed}
+            onDone={advance}
+          />
         )}
 
         {finishing ? <Text style={styles.finishing}>Taking you in ✦</Text> : null}
@@ -427,10 +434,35 @@ function NicknameStep({
  * card: warm words first, so the browser's own prompt (which you only get one
  * shot at) fires only for people who already said yes here.
  */
-function NotificationsStep({ partnerName, onDone }: { partnerName: string | null; onDone: () => void }) {
+function NotificationsStep({
+  partnerName,
+  alreadyOn,
+  onDone,
+}: {
+  partnerName: string | null;
+  alreadyOn: boolean;
+  onDone: () => void;
+}) {
   const { user, updateProfile } = useAuth();
   const [busy, setBusy] = useState(false);
   const [blocked, setBlocked] = useState<string | null>(null);
+
+  // This device already granted permission, so the account is subscribed
+  // without anyone tapping anything. Confirm it rather than asking again.
+  if (alreadyOn) {
+    return (
+      <StepFrame
+        title="Notifications are on"
+        line={
+          partnerName
+            ? `We will let you know when ${partnerName} leaves a note, saves a memory, or is just thinking of you. You can change this any time in Settings.`
+            : 'We will let you know when your person joins and starts leaving things for you. You can change this any time in Settings.'
+        }
+      >
+        <PrimaryButton title="Lovely" onPress={onDone} />
+      </StepFrame>
+    );
+  }
 
   // iPhone in a Safari tab: subscribing is impossible until Ours is on the home
   // screen. Say that plainly instead of offering a button that cannot work.
