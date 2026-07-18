@@ -1,6 +1,7 @@
-import { q } from '../_lib/db';
+import { q, one } from '../_lib/db';
 import { missingVapidVars, sendPush } from '../_lib/push';
 import { pickDateReminder } from '../_lib/date-reminders';
+import { dueForCountdown, type MilestoneRow } from '../_lib/milestone-countdown';
 import { log } from '../_lib/log';
 import { route, HttpError } from '../_lib/respond';
 
@@ -19,6 +20,15 @@ import { route, HttpError } from '../_lib/respond';
  *   ?kind=prompt morning nudge: anyone who has not answered today's question
  *                yet gets a push pointing at it. Run once a day, in the
  *                morning of your timezone.
+ *   ?kind=milestone countdown reminders: for every milestone whose countdown
+ *                window is open (see api/_lib/milestone-countdown.ts,
+ *                notify_days_before, 0 = off, 7 by default), both partners get
+ *                a push once a day ("N days to {label}", or "Today is..." on
+ *                the day itself), tracked by last_reminded_date so a retried
+ *                or re-run cron never double-sends the same day. Run once a
+ *                day. Milestone titles are plaintext (not encrypted), so the
+ *                push body can safely name the day; a birthday resolves to the
+ *                actual name of whoever's it is rather than the raw title.
  *
  * Writes no notification rows (a self-reminder should not crowd the bell) and
  * never reads couple content. Date reminders are intentionally generic (no
@@ -266,6 +276,56 @@ export default route(['POST', 'GET'], async (req, res) => {
       kind,
       dates_in_window: rows.length,
       due,
+      recipients,
+      sent,
+      failed: tally(failed),
+      missing_vapid_env: missingVapid,
+      duration_ms: Date.now() - startedAt,
+    };
+    log(sent === 0 && recipients > 0 ? 'warn' : 'info', 'cron.summary', report);
+    res.status(200).json(report);
+    return;
+  }
+
+  if (kind === 'milestone') {
+    const today = new Date().toISOString().slice(0, 10);
+    const rows = await q<MilestoneRow & { couple_id: string; title: string; person_name: string | null }>(
+      `SELECT m.id, m.couple_id, m.title, m.date::STRING AS date, m.kind, m.person_id,
+              m.notify_days_before, m.last_reminded_date::STRING AS last_reminded_date,
+              u.display_name AS person_name
+       FROM milestones m
+       LEFT JOIN users u ON u.id = m.person_id
+       WHERE m.notify_days_before > 0`
+    );
+    const due = dueForCountdown(rows, today);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+
+    const failed: (string | undefined)[] = [];
+    let sent = 0;
+    let recipients = 0;
+
+    for (const d of due) {
+      const m = byId.get(d.id)!;
+      const label = m.kind === 'birthday' && m.person_name ? `${m.person_name}'s birthday` : m.title;
+      const body = d.daysUntil === 0 ? `Today is ${label}! ♥` : `${d.daysUntil} ${d.daysUntil === 1 ? 'day' : 'days'} to ${label}. ♥`;
+
+      const partners = await q<{ id: string }>(
+        `SELECT id FROM users WHERE couple_id = $1 AND notifications_enabled = true AND push_token IS NOT NULL`,
+        [m.couple_id]
+      );
+      recipients += partners.length;
+      for (const p of partners) {
+        const out = await sendPush(p.id, { title: 'Ours', body, url: '/milestones' }, 'cron:milestone');
+        if (out.delivered) sent += 1;
+        else failed.push(out.reason);
+      }
+      await one('UPDATE milestones SET last_reminded_date = $2 WHERE id = $1 RETURNING id', [m.id, today]);
+    }
+
+    const report = {
+      kind,
+      milestones_checked: rows.length,
+      due: due.length,
       recipients,
       sent,
       failed: tally(failed),

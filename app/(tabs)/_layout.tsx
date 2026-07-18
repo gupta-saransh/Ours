@@ -12,6 +12,7 @@ import { HeartsRain } from '@/components/HeartsRain';
 import { AddMenu } from '@/components/AddMenu';
 import { ChatButton } from '@/components/ChatButton';
 import { NotificationsInvite } from '@/components/NotificationsInvite';
+import { WhatsNewModal } from '@/components/WhatsNewModal';
 import { ensureWebPushSubscribed } from '@/lib/push-web';
 import { useSafeBottom } from '@/lib/safeArea';
 import { colors, font, text } from '@/theme';
@@ -105,6 +106,7 @@ export default function TabsLayout() {
         <NudgeToast />
         <HeartsRain />
         <NotificationsInvite />
+        <WhatsNewModal />
       </View>
     </NotificationsProvider>
   );

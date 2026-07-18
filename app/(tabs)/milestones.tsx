@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { api } from '@/lib/api';
 import { successHaptic } from '@/lib/haptics';
 import {
@@ -15,7 +15,7 @@ import {
   TextField,
 } from '@/components/kit';
 import { Sheet } from '@/components/Sheet';
-import { colors, sp, text } from '@/theme';
+import { colors, radius, sp, text } from '@/theme';
 import { countdownTo, milestoneDate, nextOccurrence } from '@/lib/format';
 import { useComposeParam } from '@/lib/useComposeParam';
 
@@ -24,7 +24,11 @@ interface Milestone {
   title: string;
   date: string;
   kind: 'anniversary' | 'birthday' | 'custom';
+  /** Countdown window (v20): 0 = off, undefined = pre-migration deploy. */
+  notify_days_before?: number;
 }
+
+const DEFAULT_NOTIFY_DAYS_BEFORE = 7;
 
 const KIND_LABEL: Record<Milestone['kind'], string> = {
   anniversary: 'Anniversary',
@@ -74,6 +78,20 @@ export default function Milestones() {
     }
   };
 
+  const updateNotifyDays = async (id: string, notifyDaysBefore: number) => {
+    const prevValue = milestones?.find((m) => m.id === id)?.notify_days_before;
+    setMilestones((prev) =>
+      prev ? prev.map((m) => (m.id === id ? { ...m, notify_days_before: notifyDaysBefore } : m)) : prev
+    );
+    try {
+      await api(`/api/milestones/${id}`, { method: 'PATCH', body: { notifyDaysBefore } });
+    } catch {
+      setMilestones((prev) =>
+        prev ? prev.map((m) => (m.id === id ? { ...m, notify_days_before: prevValue } : m)) : prev
+      );
+    }
+  };
+
   if (failed && !milestones) {
     return (
       <Screen>
@@ -110,7 +128,14 @@ export default function Milestones() {
             <PrimaryButton title="Add a date" onPress={() => setComposerOpen(true)} style={{ marginTop: sp.md }} />
           ) : null
         }
-        renderItem={({ item }) => <MilestoneCard milestone={item} now={now} onRemove={() => remove(item.id)} />}
+        renderItem={({ item }) => (
+          <MilestoneCard
+            milestone={item}
+            now={now}
+            onRemove={() => remove(item.id)}
+            onChangeNotifyDays={(n) => updateNotifyDays(item.id, n)}
+          />
+        )}
       />
       <MilestoneComposer
         open={composerOpen}
@@ -124,11 +149,27 @@ export default function Milestones() {
   );
 }
 
-function MilestoneCard({ milestone, now, onRemove }: { milestone: Milestone; now: Date; onRemove: () => void }) {
+function MilestoneCard({
+  milestone,
+  now,
+  onRemove,
+  onChangeNotifyDays,
+}: {
+  milestone: Milestone;
+  now: Date;
+  onRemove: () => void;
+  onChangeNotifyDays: (n: number) => void;
+}) {
   const target = nextOccurrence(milestone.date, milestone.kind, now);
   const c = countdownTo(target, now);
   const original = milestoneDate(milestone.date);
   const yearsNext = milestone.kind !== 'custom' ? target.getFullYear() - original.getFullYear() : 0;
+
+  // Pre-migration deploys carry no field at all; treat that the same as the
+  // default rather than reading it as "off".
+  const notifyDaysBefore = milestone.notify_days_before ?? DEFAULT_NOTIFY_DAYS_BEFORE;
+  const countdownOn = notifyDaysBefore > 0;
+  const [daysDraft, setDaysDraft] = useState(String(notifyDaysBefore || DEFAULT_NOTIFY_DAYS_BEFORE));
 
   return (
     <Card style={styles.milestone}>
@@ -155,6 +196,36 @@ function MilestoneCard({ milestone, now, onRemove }: { milestone: Milestone; now
         {target.getDate()} {target.toLocaleString('en', { month: 'long' })} {target.getFullYear()}
         {yearsNext > 0 ? ` · ${yearsNext} ${yearsNext === 1 ? 'year' : 'years'}` : ''}
       </Text>
+
+      <View style={styles.notifyRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={text.body}>Countdown reminders</Text>
+          <Text style={text.caption}>A banner and a daily push as the day nears.</Text>
+        </View>
+        <Switch
+          value={countdownOn}
+          onValueChange={(v) => onChangeNotifyDays(v ? Number(daysDraft) || DEFAULT_NOTIFY_DAYS_BEFORE : 0)}
+          trackColor={{ true: colors.blush, false: colors.hairline }}
+          thumbColor={countdownOn ? colors.surfaceSealed : '#FFFFFF'}
+        />
+      </View>
+      {countdownOn && (
+        <View style={styles.daysBeforeRow}>
+          <Text style={text.caption}>Start</Text>
+          <TextField
+            value={daysDraft}
+            onChangeText={setDaysDraft}
+            onBlur={() => {
+              const n = Math.max(0, Math.min(60, Math.round(Number(daysDraft)) || DEFAULT_NOTIFY_DAYS_BEFORE));
+              setDaysDraft(String(n));
+              if (n !== notifyDaysBefore) onChangeNotifyDays(n);
+            }}
+            keyboardType="number-pad"
+            style={styles.daysBeforeInput}
+          />
+          <Text style={text.caption}>days before</Text>
+        </View>
+      )}
     </Card>
   );
 }
@@ -247,6 +318,28 @@ const styles = StyleSheet.create({
   },
   milestone: { marginBottom: sp.lg },
   topRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  notifyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.md,
+    marginTop: sp.lg,
+    paddingTop: sp.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.hairline,
+  },
+  daysBeforeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.sm,
+    marginTop: sp.sm,
+  },
+  daysBeforeInput: {
+    width: 56,
+    height: 36,
+    textAlign: 'center',
+    borderRadius: radius.sm,
+    borderBottomWidth: 1,
+  },
   countRow: { flexDirection: 'row', gap: sp.lg },
   unitNumber: {
     ...text.title,

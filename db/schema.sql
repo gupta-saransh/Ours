@@ -376,3 +376,18 @@ CREATE TABLE IF NOT EXISTS todos (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS todos_by_couple_day ON todos (couple_id, due_date);
+
+-- v20: milestone countdown reminders. Every milestone (including ones added
+-- before this migration) gets a 7-day countdown window by default, per the
+-- user's explicit choice ("7 days by default" over an opt-in-per-milestone
+-- start); 0 means the countdown/reminders are off for that milestone.
+--   notify_days_before  how many days before the next occurrence the Home
+--     countdown banner starts showing and the daily reminder cron starts
+--     firing. 0 = disabled. DEFAULT 7 applies to existing rows as part of this
+--     single ADD COLUMN statement, not a follow-up UPDATE (which CockroachDB
+--     would reject in this same schema.sql, see the v12 note above).
+--   last_reminded_date  the UTC day the countdown push last went out, so the
+--     daily cron (which may run more than once, or be retried) never double
+--     sends for the same day.
+ALTER TABLE milestones ADD COLUMN IF NOT EXISTS notify_days_before INT NOT NULL DEFAULT 7;
+ALTER TABLE milestones ADD COLUMN IF NOT EXISTS last_reminded_date DATE;

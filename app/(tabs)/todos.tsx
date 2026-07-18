@@ -375,7 +375,7 @@ function Composer({
       }}
       style={[styles.pill, assignee === value && styles.pillActive]}
     >
-      <Text style={[text.micro, assignee === value && { color: colors.surfaceSealed, fontWeight: '600' }]}>{label}</Text>
+      <Text style={[text.micro, assignee === value && { color: colors.onSealed, fontWeight: '600' }]}>{label}</Text>
     </Pressable>
   );
 

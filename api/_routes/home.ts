@@ -5,6 +5,7 @@ import { route } from '../_lib/respond';
 import { promptStateFor, streakStateFor } from './prompts';
 import { computeReflection } from './reflection';
 import { gameStateFor } from './game';
+import { dueForCountdown, type MilestoneRow } from '../_lib/milestone-countdown';
 
 const RESURFACE_COLUMNS = `id, thumb_data, note, note_ct,
   COALESCE(memory_date, created_at::DATE)::STRING AS memory_date`;
@@ -90,7 +91,16 @@ export default route(['GET'], async (req, res) => {
         `SELECT date::STRING AS date FROM milestones WHERE couple_id = $1 AND kind = 'anniversary' ORDER BY date ASC LIMIT 1`,
         [cid]
       ),
-      q(`SELECT id, title, date::STRING AS date, kind FROM milestones WHERE couple_id = $1 ORDER BY date ASC LIMIT 30`, [cid]),
+      // notify_days_before/person_id (v20/v17) power the countdown banner below;
+      // catch-guarded so a deploy that lands before either migration degrades to
+      // the plain list instead of a 500.
+      q(
+        `SELECT id, title, date::STRING AS date, kind, person_id, notify_days_before FROM milestones
+         WHERE couple_id = $1 ORDER BY date ASC LIMIT 30`,
+        [cid]
+      ).catch(() =>
+        q(`SELECT id, title, date::STRING AS date, kind FROM milestones WHERE couple_id = $1 ORDER BY date ASC LIMIT 30`, [cid])
+      ),
       one(
         `SELECT ${RESURFACE_COLUMNS} FROM memories
          WHERE couple_id = $1 AND COALESCE(memory_date, created_at::DATE) = (now() - INTERVAL '1 year')::DATE LIMIT 1`,
@@ -210,6 +220,36 @@ export default route(['GET'], async (req, res) => {
   ]);
   const partnerNickname = myNick?.partner_nickname ?? null;
 
+  // The countdown banner: the soonest milestone whose countdown window is
+  // open right now. Computed from the SAME milestones list already fetched
+  // above (no extra query, keeps Home to one request). Birthdays resolve to
+  // the real name of whoever's it is (never a nickname or "your/their": both
+  // partners see the same banner, and a nickname is specific to the viewer);
+  // anniversaries/custom fall back to the title text.
+  const countdownRows = (milestones as (MilestoneRow & { title: string; person_id?: string | null })[]).filter(
+    (m) => typeof m.notify_days_before === 'number'
+  );
+  const dueToday = new Date().toISOString().slice(0, 10);
+  const due = dueForCountdown(countdownRows, dueToday).sort((a, b) => a.daysUntil - b.daysUntil)[0] ?? null;
+  const countdown = due
+    ? (() => {
+        const m = countdownRows.find((r) => r.id === due.id)!;
+        const who =
+          m.kind === 'birthday' && m.person_id
+            ? m.person_id === user.id
+              ? user.display_name
+              : m.person_id === partner?.id
+                ? partner.display_name
+                : null
+            : null;
+        return {
+          id: m.id,
+          daysUntil: due.daysUntil,
+          label: who ? `${who}'s birthday` : m.title,
+        };
+      })()
+    : null;
+
   const picked = yearAgo
     ? { ...yearAgo, tag: 'One year ago today' }
     : monthAgo
@@ -274,6 +314,7 @@ export default route(['GET'], async (req, res) => {
     couple,
     partner: partner ?? null,
     todos,
+    countdown,
     daysBasis: anniversary?.date ?? null,
     milestones,
     resurfaced,

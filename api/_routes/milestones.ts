@@ -8,12 +8,26 @@ const KINDS = ['anniversary', 'birthday', 'custom'] as const;
 /**
  * `person_id` (v17) says WHOSE a milestone is, which only birthdays need. It is
  * nullable: shared milestones (anniversaries) and every pre-v17 row leave it
- * null, and readers fall back to author_id, then the title text. Every query
- * here falls back to the old column list too, so a deploy that lands before the
- * migration keeps working.
+ * null, and readers fall back to author_id, then the title text.
+ *
+ * `notify_days_before` / `last_reminded_date` (v20) drive the countdown banner
+ * + daily reminder, see api/_lib/milestone-countdown.ts. Every query here falls
+ * back through THREE column lists (v20 -> v17 -> legacy) so a deploy that lands
+ * before either migration keeps working instead of 500ing.
  */
-const COLUMNS = 'id, author_id, person_id, title, date, kind, created_at';
+const COLUMNS_V20 =
+  'id, author_id, person_id, title, date, kind, notify_days_before, last_reminded_date::STRING AS last_reminded_date, created_at';
+const COLUMNS_V17 = 'id, author_id, person_id, title, date, kind, created_at';
 const COLUMNS_LEGACY = 'id, author_id, title, date, kind, created_at';
+
+const DEFAULT_NOTIFY_DAYS_BEFORE = 7;
+
+function readNotifyDaysBefore(raw: unknown): number {
+  if (raw === undefined || raw === null) return DEFAULT_NOTIFY_DAYS_BEFORE;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > 60) throw new HttpError(400, 'Countdown days must be 0-60');
+  return n;
+}
 
 export default route(['GET', 'POST'], async (req, res) => {
   const user = await requirePairedUser(req);
@@ -25,7 +39,7 @@ export default route(['GET', 'POST'], async (req, res) => {
          WHERE couple_id = $1 ORDER BY date ASC LIMIT 200`,
         [user.couple_id]
       );
-    const milestones = await list(COLUMNS).catch(() => list(COLUMNS_LEGACY));
+    const milestones = await list(COLUMNS_V20).catch(() => list(COLUMNS_V17).catch(() => list(COLUMNS_LEGACY)));
     res.status(200).json({ milestones });
     return;
   }
@@ -36,6 +50,7 @@ export default route(['GET', 'POST'], async (req, res) => {
     throw new HttpError(400, 'Date must be YYYY-MM-DD');
   }
   const kind = KINDS.includes(req.body?.kind) ? req.body.kind : 'custom';
+  const notifyDaysBefore = readNotifyDaysBefore(req.body?.notifyDaysBefore);
 
   // Whose birthday this is. Only ever one of the two people in this space:
   // anything else is rejected rather than silently ignored.
@@ -51,14 +66,20 @@ export default route(['GET', 'POST'], async (req, res) => {
   }
 
   const milestone = await one(
-    `INSERT INTO milestones (couple_id, author_id, title, date, kind, person_id)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING ${COLUMNS}`,
-    [user.couple_id, user.id, title, date, kind, personId]
+    `INSERT INTO milestones (couple_id, author_id, title, date, kind, person_id, notify_days_before)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING ${COLUMNS_V20}`,
+    [user.couple_id, user.id, title, date, kind, personId, notifyDaysBefore]
   ).catch(() =>
     one(
-      `INSERT INTO milestones (couple_id, author_id, title, date, kind)
-       VALUES ($1, $2, $3, $4, $5) RETURNING ${COLUMNS_LEGACY}`,
-      [user.couple_id, user.id, title, date, kind]
+      `INSERT INTO milestones (couple_id, author_id, title, date, kind, person_id)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING ${COLUMNS_V17}`,
+      [user.couple_id, user.id, title, date, kind, personId]
+    ).catch(() =>
+      one(
+        `INSERT INTO milestones (couple_id, author_id, title, date, kind)
+         VALUES ($1, $2, $3, $4, $5) RETURNING ${COLUMNS_LEGACY}`,
+        [user.couple_id, user.id, title, date, kind]
+      )
     )
   );
   await notify(user.couple_id, user.id, 'milestone', `${user.display_name} added a milestone: ${title}`);

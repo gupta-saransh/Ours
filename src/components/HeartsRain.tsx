@@ -5,18 +5,32 @@ import { useAuth } from '@/lib/auth';
 import { successHaptic } from '@/lib/haptics';
 import { colors } from '@/theme';
 
+type Variant = 'hearts' | 'confetti';
+
 // One instance lives in the tab layout; anything can set it off.
-let trigger: (() => void) | null = null;
+let trigger: ((variant: Variant) => void) | null = null;
 
 /** Shower the screen with hearts (used when a nudge is waiting as the app opens). */
 export function showHearts() {
-  trigger?.();
+  trigger?.('hearts');
 }
 
-const HEART_COUNT = 18;
+/**
+ * A minimal confetti shower for the milestone countdown banner ("7 days to
+ * X's birthday"). Deliberately NOT literal multicolor confetti: the design
+ * system's "no confetti" rule stands, and there is exactly ONE sanctioned
+ * shower engine (below) that every celebration reuses. This is that same
+ * engine wearing small rectangles in the app's own palette instead of ♥
+ * glyphs, not a second system.
+ */
+export function showConfetti() {
+  trigger?.('confetti');
+}
+
+const PIECE_COUNT = 20;
 const PALETTE = [colors.surfaceSealed, colors.accent, colors.blush];
 
-interface HeartSpec {
+interface PieceSpec {
   left: number; // percent
   size: number;
   delay: number;
@@ -26,8 +40,8 @@ interface HeartSpec {
   color: string;
 }
 
-function makeSpecs(): HeartSpec[] {
-  return Array.from({ length: HEART_COUNT }, () => ({
+function makeSpecs(): PieceSpec[] {
+  return Array.from({ length: PIECE_COUNT }, () => ({
     left: 4 + Math.random() * 88,
     size: 14 + Math.round(Math.random() * 14),
     delay: Math.round(Math.random() * 700),
@@ -39,17 +53,17 @@ function makeSpecs(): HeartSpec[] {
 }
 
 /**
- * A brief rain of ♥ over the whole app when your partner's nudge lands: live
- * over Ably, or on open via showHearts() when /api/home says one was waiting.
- * Non-interactive overlay; hearts are content marks, so this stays within the
- * no-confetti spirit (short, quiet, then gone).
+ * A brief rain over the whole app: hearts on a nudge (live over Ably, or on
+ * open via showHearts() when /api/home says one was waiting) or a streak win;
+ * small theme-colored confetti pieces on a milestone countdown. Non-interactive
+ * overlay, short, then gone, in the no-second-effect spirit of the design rule.
  */
 export function HeartsRain() {
   const { user } = useAuth();
-  const [burst, setBurst] = useState(0);
+  const [burst, setBurst] = useState<{ n: number; variant: Variant } | null>(null);
 
   useEffect(() => {
-    trigger = () => setBurst((b) => b + 1);
+    trigger = (variant) => setBurst((b) => ({ n: (b?.n ?? 0) + 1, variant }));
     return () => {
       trigger = null;
     };
@@ -57,14 +71,14 @@ export function HeartsRain() {
 
   useCoupleEvent('nudge', (data) => {
     if (data?.fromId && data.fromId === user?.id) return; // your own nudge
-    setBurst((b) => b + 1);
+    setBurst((b) => ({ n: (b?.n ?? 0) + 1, variant: 'hearts' }));
   });
 
-  if (burst === 0) return null;
-  return <Burst key={burst} onDone={() => setBurst(0)} />;
+  if (!burst) return null;
+  return <Burst key={burst.n} variant={burst.variant} onDone={() => setBurst(null)} />;
 }
 
-function Burst({ onDone }: { onDone: () => void }) {
+function Burst({ variant, onDone }: { variant: Variant; onDone: () => void }) {
   const { height } = useWindowDimensions();
   const specs = useMemo(makeSpecs, []);
   const values = useRef(specs.map(() => new Animated.Value(0))).current;
@@ -85,39 +99,43 @@ function Burst({ onDone }: { onDone: () => void }) {
 
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      {specs.map((s, i) => (
-        <Animated.Text
-          key={i}
-          style={{
-            position: 'absolute',
-            left: `${s.left}%`,
-            top: 0,
-            fontSize: s.size,
-            color: s.color,
-            opacity: values[i].interpolate({
-              inputRange: [0, 0.08, 0.75, 1],
-              outputRange: [0, 0.9, 0.9, 0],
-            }),
-            transform: [
-              {
-                translateY: values[i].interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [-40, height + 40],
-                }),
-              },
-              {
-                translateX: values[i].interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [0, s.sway],
-                }),
-              },
-              { rotate: s.rotate },
-            ],
-          }}
-        >
-          ♥
-        </Animated.Text>
-      ))}
+      {specs.map((s, i) => {
+        const opacity = values[i].interpolate({
+          inputRange: [0, 0.08, 0.75, 1],
+          outputRange: [0, 0.9, 0.9, 0],
+        });
+        const transform = [
+          { translateY: values[i].interpolate({ inputRange: [0, 1], outputRange: [-40, height + 40] }) },
+          { translateX: values[i].interpolate({ inputRange: [0, 1], outputRange: [0, s.sway] }) },
+          { rotate: s.rotate },
+        ];
+        if (variant === 'confetti') {
+          return (
+            <Animated.View
+              key={i}
+              style={{
+                position: 'absolute',
+                left: `${s.left}%`,
+                top: 0,
+                width: s.size * 0.55,
+                height: s.size * 0.28,
+                borderRadius: 1,
+                backgroundColor: s.color,
+                opacity,
+                transform,
+              }}
+            />
+          );
+        }
+        return (
+          <Animated.Text
+            key={i}
+            style={{ position: 'absolute', left: `${s.left}%`, top: 0, fontSize: s.size, color: s.color, opacity, transform }}
+          >
+            ♥
+          </Animated.Text>
+        );
+      })}
     </View>
   );
 }

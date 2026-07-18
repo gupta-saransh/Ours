@@ -18,7 +18,7 @@ import { useAuth } from '@/lib/auth';
 import { useToast } from '@/lib/toast';
 import { useCoupleEvent } from '@/lib/realtime';
 import { successHaptic, tapHaptic } from '@/lib/haptics';
-import { showHearts } from '@/components/HeartsRain';
+import { showConfetti, showHearts } from '@/components/HeartsRain';
 import {
   AppPressable,
   Card,
@@ -131,6 +131,7 @@ interface HomeData {
   streak: StreakState;
   story: StoryState;
   game: GameState | null;
+  countdown: { id: string; daysUntil: number; label: string } | null;
   todos: {
     weekDone: number;
     weekTotal: number;
@@ -170,6 +171,10 @@ export default function Home() {
   // The prompt date we last celebrated for, so the streak hearts shower fires
   // exactly once the day both partners answer (never twice, never on reopen).
   const celebratedDateRef = React.useRef<string | null>(null);
+  // Guards the countdown-banner confetti to once per app open, same rule as
+  // the nudge hearts shower above (it would otherwise refire on every refresh
+  // while the banner stays up for its whole multi-day window).
+  const confettiShownRef = React.useRef(false);
 
   const load = useCallback(async (): Promise<HomeData> => {
     setFailed(false);
@@ -179,6 +184,10 @@ export default function Home() {
     if (home.nudged && !showeredRef.current) {
       showeredRef.current = true;
       showHearts();
+    }
+    if (home.countdown && !confettiShownRef.current) {
+      confettiShownRef.current = true;
+      showConfetti();
     }
     // Reaching a new level earns the couple their little ceremony. The last
     // celebrated level lives client-side (web localStorage; native skips
@@ -333,6 +342,19 @@ export default function Home() {
             )}
           </View>
         </FadeIn>
+
+        {data.countdown && (
+          <FadeIn delay={20}>
+            <AppPressable onPress={() => router.push('/milestones')} style={styles.countdownCard}>
+              <Text style={styles.countdownGlyphs}>✦ ♥ ✦</Text>
+              <Text style={styles.countdownHeadline}>
+                {data.countdown.daysUntil === 0
+                  ? `Today is ${data.countdown.label} ♥`
+                  : `${data.countdown.daysUntil} ${data.countdown.daysUntil === 1 ? 'day' : 'days'} to ${data.countdown.label}`}
+              </Text>
+            </AppPressable>
+          </FadeIn>
+        )}
 
         {!data.partner && data.couple && (
           <FadeIn delay={40}>
@@ -1249,6 +1271,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: sp.md,
     marginBottom: sp.md,
+  },
+  countdownCard: {
+    backgroundColor: colors.blushSoft,
+    borderWidth: 1,
+    borderColor: colors.accent,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    paddingVertical: sp.lg,
+    paddingHorizontal: sp.lg,
+    marginBottom: sp.xxl,
+    width: '100%',
+    maxWidth: 620,
+    alignSelf: 'center',
+  },
+  countdownGlyphs: {
+    color: colors.accent,
+    fontSize: 13,
+    letterSpacing: 4,
+    marginBottom: sp.sm,
+  },
+  countdownHeadline: {
+    ...text.subtitle,
+    textAlign: 'center',
   },
   codeText: {
     ...text.title,
