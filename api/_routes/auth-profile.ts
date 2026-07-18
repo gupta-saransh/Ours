@@ -54,6 +54,12 @@ export default route(['PATCH'], async (req, res) => {
     }
     await one(`UPDATE users SET partner_nickname = $2 WHERE id = $1`, [user.id, nickname]);
   }
+  if (body.onboarded !== undefined) {
+    // The first-run flow finished (or was skipped to the end). One-way: nothing
+    // ever sets this back to true except a fresh signup. Guarded so a
+    // pre-v17 deploy cannot fail the whole profile save.
+    await one(`UPDATE users SET needs_onboarding = false WHERE id = $1`, [user.id]).catch(() => null);
+  }
 
   const updated = await one<SessionUser>(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [user.id]);
   // avatar is deliberately outside USER_COLUMNS (auth must not depend on the v9

@@ -70,3 +70,50 @@ describe('computeStreak', () => {
     expect(s.current).toBe(2);
   });
 });
+
+/**
+ * The weekly grace day, as the streak screen surfaces it. Ours has no purchase
+ * mechanic, so this one free miss per week is the whole safety net and the UI
+ * needs to say plainly whether it is still in hand.
+ */
+describe('weekly grace visibility', () => {
+  it('reports grace as available when no miss has been forgiven this week', () => {
+    const s = computeStreak([d(-1), TODAY], TODAY);
+    expect(s.graceUsed).toBe(false);
+    expect(s.graceAvailable).toBe(true);
+    expect(s.graceDay).toBeNull();
+  });
+
+  it('reports grace as spent, and names the day it covered', () => {
+    // Mon and Wed answered, Tue missed: grace bridges Tuesday.
+    const mon = mondayOf(TODAY);
+    const s = computeStreak([addDays(mon, 0), addDays(mon, 2)], addDays(mon, 2));
+    expect(s.current).toBe(2);
+    expect(s.graceUsed).toBe(true);
+    expect(s.graceAvailable).toBe(false);
+    expect(s.graceDay).toBe(addDays(mon, 1)); // the Tuesday it forgave
+  });
+
+  it('treats a couple with no history as having their grace in hand', () => {
+    expect(computeStreak([], TODAY)).toMatchObject({ graceAvailable: true, graceDay: null });
+  });
+
+  it('does not count a grace spent in an earlier week against this one', () => {
+    // Miss inside LAST week, then answer through into today.
+    const lastMon = addDays(mondayOf(TODAY), -7);
+    const days = [
+      addDays(lastMon, 0),
+      addDays(lastMon, 2), // Tue of last week forgiven
+      addDays(lastMon, 3),
+      addDays(lastMon, 4),
+      addDays(lastMon, 5),
+      addDays(lastMon, 6),
+      addDays(mondayOf(TODAY), 0),
+      addDays(mondayOf(TODAY), 1),
+      TODAY,
+    ];
+    const s = computeStreak(days, TODAY);
+    expect(s.graceUsed).toBe(false); // this week is clean
+    expect(s.graceAvailable).toBe(true);
+  });
+});

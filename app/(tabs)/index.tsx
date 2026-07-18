@@ -311,7 +311,7 @@ export default function Home() {
               </>
             )}
             {data.streak && data.streak.current >= 1 && (
-              <AppPressable onPress={() => router.push('/prompts')} style={styles.streakChip}>
+              <AppPressable onPress={() => router.push('/streak')} style={styles.streakChip}>
                 <Flame size={13} color={colors.accent} strokeWidth={1.75} />
                 <Text style={[text.caption, { color: colors.inkMuted }]}>
                   {data.streak.current === 1 ? 'Day 1 of your streak' : `${data.streak.current} days in a row`}

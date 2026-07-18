@@ -7,6 +7,7 @@ import { useToast } from '@/lib/toast';
 import { successHaptic } from '@/lib/haptics';
 import { logEvent } from '@/lib/log';
 import { enableWebPush, webPushSupported } from '@/lib/push-web';
+import { askIsDue, readPushAsk, writePushAsk, type AskRecord } from '@/lib/pushAsk';
 import { PrimaryButton } from '@/components/kit';
 import { colors, font, radius, sp, text } from '@/theme';
 
@@ -30,46 +31,8 @@ import { colors, font, radius, sp, text } from '@/theme';
  * us the user forever.
  */
 
-const ASK_KEY = 'ours.push-ask';
-/** Days to wait before ask #1, #2, #3. After the last one we never ask again. */
-const WAIT_DAYS = [0, 3, 10];
 /** Let the screen paint before asking for anything. */
 const SHOW_DELAY_MS = 2000;
-
-interface AskRecord {
-  /** How many times the card has been shown. */
-  n: number;
-  /** ISO date of the last showing. */
-  at: string;
-  /** The "your partner joined" ask is allowed once, outside the schedule. */
-  pairedAsked?: boolean;
-  /** They granted, or the browser blocked us. Either way, stop asking. */
-  done?: boolean;
-}
-
-function readRecord(): AskRecord {
-  try {
-    const raw = localStorage.getItem(ASK_KEY);
-    return raw ? (JSON.parse(raw) as AskRecord) : { n: 0, at: '' };
-  } catch {
-    return { n: 0, at: '' };
-  }
-}
-
-function writeRecord(next: AskRecord): void {
-  try {
-    localStorage.setItem(ASK_KEY, JSON.stringify(next));
-  } catch {
-    // Private mode. We simply ask again next time.
-  }
-}
-
-function daysSince(iso: string): number {
-  if (!iso) return Infinity;
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return Infinity;
-  return (Date.now() - then) / 86_400_000;
-}
 
 /** iPhone Safari can only subscribe from the installed home-screen app. */
 function iosNeedsInstall(): boolean {
@@ -108,7 +71,7 @@ export function NotificationsInvite() {
   const open = useCallback(
     (v: Variant, record: AskRecord) => {
       setVariant(v);
-      writeRecord({ ...record, n: record.n + 1, at: new Date().toISOString() });
+      writePushAsk({ ...record, n: record.n + 1, at: new Date().toISOString() });
       logEvent('push.invite_shown', { variant: v, ask_number: record.n + 1 });
     },
     []
@@ -121,7 +84,7 @@ export function NotificationsInvite() {
     evaluated.current = true;
 
     const timer = setTimeout(async () => {
-      const record = readRecord();
+      const record = readPushAsk();
       if (record.done) return;
       // Already blocked at the browser level: asking again cannot help, and
       // Settings explains how to undo it.
@@ -131,8 +94,9 @@ export function NotificationsInvite() {
       if (!needsInstall && !webPushSupported()) return; // this browser simply cannot
 
       if (await isSubscribed()) return;
-      if (record.n >= WAIT_DAYS.length) return; // asked enough, leave them be
-      if (daysSince(record.at) < WAIT_DAYS[record.n]) return; // too soon
+      // Spacing and the three-ask cap live in pushAsk.ts, shared with the
+      // onboarding step so a skip there counts toward the same schedule.
+      if (!askIsDue(record)) return;
 
       open(needsInstall ? 'install' : partner ? 'paired' : 'solo', record);
     }, SHOW_DELAY_MS);
@@ -145,12 +109,12 @@ export function NotificationsInvite() {
   useCoupleEvent('partner.joined', () => {
     if (Platform.OS !== 'web') return;
     setTimeout(async () => {
-      const record = readRecord();
+      const record = readPushAsk();
       if (record.done || record.pairedAsked) return;
       if (typeof Notification !== 'undefined' && Notification.permission === 'denied') return;
       if (!iosNeedsInstall() && !webPushSupported()) return;
       if (await isSubscribed()) return;
-      writeRecord({ ...record, pairedAsked: true });
+      writePushAsk({ ...record, pairedAsked: true });
       open(iosNeedsInstall() ? 'install' : 'paired', { ...record, pairedAsked: true });
     }, 1200);
   });
@@ -168,7 +132,7 @@ export function NotificationsInvite() {
       if (!user?.notifications_enabled) await updateProfile({ notificationsEnabled: true });
       await enableWebPush();
       await refresh().catch(() => {});
-      writeRecord({ ...readRecord(), done: true });
+      writePushAsk({ ...readPushAsk(), done: true });
       successHaptic();
       logEvent('push.invite_accepted');
       close();
@@ -178,7 +142,7 @@ export function NotificationsInvite() {
       // stop asking, since only browser settings can undo it now.
       const message = err?.message ?? 'Your browser would not allow it.';
       setBlocked(message);
-      writeRecord({ ...readRecord(), done: true });
+      writePushAsk({ ...readPushAsk(), done: true });
       logEvent('push.invite_declined', { message: String(message).slice(0, 120) });
     } finally {
       setBusy(false);

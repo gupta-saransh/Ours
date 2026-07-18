@@ -22,7 +22,7 @@ import { colors, font, text } from '@/theme';
 const TAB_BAR_CONTENT_HEIGHT = 58;
 
 export default function TabsLayout() {
-  const { status, user } = useAuth();
+  const { status, user, needsOnboarding } = useAuth();
   const { width } = useWindowDimensions();
   const safeBottom = useSafeBottom();
   const wide = Platform.OS === 'web' && width >= 900;
@@ -37,6 +37,9 @@ export default function TabsLayout() {
 
   if (status === 'loading') return null;
   if (status === 'signedOut') return <Redirect href="/welcome" />;
+  // A brand new signup owes the guided first run. Existing accounts are marked
+  // done by the v17 column default and never land here.
+  if (needsOnboarding) return <Redirect href="/onboarding" />;
 
   const icon =
     (Glyph: typeof Home) =>

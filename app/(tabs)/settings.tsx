@@ -2,7 +2,18 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Platform, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
-import { Check, Lock } from 'lucide-react-native';
+import {
+  Bell,
+  Check,
+  ChevronRight,
+  Heart,
+  KeyRound,
+  Lock,
+  Mail,
+  Palette,
+  Share2,
+  Users,
+} from 'lucide-react-native';
 import { useAuth } from '@/lib/auth';
 import { api } from '@/lib/api';
 import { disableWebPush, enableWebPush } from '@/lib/push-web';
@@ -10,6 +21,7 @@ import {
   AppPressable,
   Card,
   FormError,
+  ListRow,
   PrimaryButton,
   Screen,
   SecondaryButton,
@@ -238,7 +250,7 @@ export default function Settings() {
       <ScrollView contentContainerStyle={styles.body}>
         <FormError message={error} />
 
-        <Section label="Profile">
+        <Section label="You">
           <Card>
             <View style={styles.nameRow}>
               <View style={{ flex: 1 }}>
@@ -252,8 +264,12 @@ export default function Settings() {
                 style={styles.saveButton}
               />
             </View>
-            <Text style={text.caption}>Email</Text>
-            <Text style={text.body}>{user?.email}</Text>
+            <ListRow
+              leading={<Mail size={18} color={colors.inkMuted} strokeWidth={1.75} />}
+              title="Email"
+              caption={user?.email}
+              last
+            />
             <View style={styles.markBlock}>
               <Text style={text.body}>Your mark</Text>
               <Text style={[text.caption, { marginBottom: sp.md }]}>
@@ -280,17 +296,36 @@ export default function Settings() {
 
         <Section label="Your space">
           <Card>
-            <View style={styles.row}>
-              <Text style={text.body}>Partner</Text>
-              <View style={styles.partnerCell}>
-                {partner && <Avatar id={partner.avatar} name={partner.display_name} size={24} />}
-                <Text style={[text.body, { color: colors.inkMuted }]}>
-                  {partner ? partner.display_name : 'Just you so far'}
-                </Text>
-              </View>
-            </View>
+            <ListRow
+              leading={
+                partner ? (
+                  <Avatar id={partner.avatar} name={partner.display_name} size={22} />
+                ) : (
+                  <Users size={18} color={colors.inkMuted} strokeWidth={1.75} />
+                )
+              }
+              title={partner ? partner.display_name : 'Just you so far'}
+              caption={partner ? 'Your person' : 'Link with your partner to share everything'}
+              trailing={
+                partner ? undefined : <ChevronRight size={18} color={colors.inkFaint} strokeWidth={1.75} />
+              }
+              onPress={partner ? undefined : () => router.push('/pair')}
+            />
+            <ListRow
+              leading={<KeyRound size={18} color={colors.inkMuted} strokeWidth={1.75} />}
+              title="Invite code"
+              caption="Share it so your person can join this space"
+              trailing={<Text style={styles.code}>{couple?.invite_code ?? '...'}</Text>}
+            />
+            <ListRow
+              leading={<Heart size={18} color={colors.inkMuted} strokeWidth={1.75} />}
+              title="Plan"
+              caption="Everything is included, always"
+              trailing={<Text style={[text.caption, { color: colors.positive }]}>Free</Text>}
+              last={!partner}
+            />
             {partner && (
-              <View style={[styles.nickBlock, styles.rowBorder]}>
+              <View style={styles.nickBlock}>
                 <View style={styles.nameRow}>
                   <View style={{ flex: 1 }}>
                     <TextField
@@ -314,69 +349,34 @@ export default function Settings() {
                 </Text>
               </View>
             )}
-            <View style={[styles.row, styles.rowBorder]}>
-              <Text style={text.body}>Invite code</Text>
-              <Text style={styles.code}>{couple?.invite_code ?? '...'}</Text>
-            </View>
-            <View style={[styles.row, styles.rowBorder]}>
-              <Text style={text.body}>Plan</Text>
-              <Text style={[text.body, { color: colors.inkMuted }]}>Free · everything included</Text>
-            </View>
-            {!partner && (
-              <SecondaryButton
-                title="Link with your partner"
-                onPress={() => router.push('/pair')}
-                style={{ marginTop: sp.md }}
-              />
-            )}
           </Card>
         </Section>
 
         <Section label="Notifications">
           <Card>
-            <View style={styles.row}>
-              <View style={{ flex: 1, paddingRight: sp.base }}>
-                <Text style={text.body}>Nudges and new notes</Text>
-                <Text style={text.caption}>
-                  Get them even when Ours is closed. On iPhone, add Ours to your home screen first, then turn this on.
-                </Text>
-              </View>
-              <Switch
-                value={notificationsOn}
-                onValueChange={toggleNotifications}
-                trackColor={{ true: colors.blush, false: colors.hairline }}
-                thumbColor={notificationsOn ? colors.surfaceSealed : '#FFFFFF'}
-              />
-            </View>
+            <ListRow
+              leading={<Bell size={18} color={colors.inkMuted} strokeWidth={1.75} />}
+              title="Nudges and new notes"
+              caption="Get them even when Ours is closed. On iPhone, add Ours to your home screen first."
+              trailing={
+                <Switch
+                  value={notificationsOn}
+                  onValueChange={toggleNotifications}
+                  trackColor={{ true: colors.blush, false: colors.hairline }}
+                  thumbColor={notificationsOn ? colors.surfaceSealed : '#FFFFFF'}
+                />
+              }
+            />
             {/* Delivery has several moving parts (server keys, browser
                 permission, a subscription that can quietly expire). This asks
                 the server what it sees, and can send a real one to prove it. */}
-            <View style={[styles.row, styles.rowBorder, styles.testRow]}>
-              <View style={{ flex: 1, paddingRight: sp.base }}>
-                <Text style={text.body}>Check they are working</Text>
-                <Text style={text.caption}>{pushLine}</Text>
-              </View>
-              <SecondaryButton title="Send a test" onPress={sendTestPush} loading={testingPush} />
-            </View>
-          </Card>
-        </Section>
-
-        <Section label="Share Ours">
-          <Card>
-            <Text style={[text.caption, { marginBottom: sp.md }]}>
-              Know another pair who would love a little home like this? Send them your link.
-            </Text>
-            <AppPressable onPress={copyReferral} style={styles.referralChip} disabled={!referral?.code}>
-              <Text style={styles.referralLink} numberOfLines={1}>
-                {referral?.code ? referralLink(referral.code) : 'Getting your link...'}
-              </Text>
-              <Text style={text.caption}>{referralCopied ? 'Copied ✓' : 'Tap to copy'}</Text>
-            </AppPressable>
-            {referral && referral.joined > 0 && (
-              <Text style={[text.caption, { marginTop: sp.sm, textAlign: 'center' }]}>
-                {referral.joined === 1 ? 'One friend joined through you ♥' : `${referral.joined} friends joined through you ♥`}
-              </Text>
-            )}
+            <ListRow
+              leading={<Check size={18} color={colors.inkMuted} strokeWidth={1.75} />}
+              title="Check they are working"
+              caption={pushLine}
+              trailing={<SecondaryButton title="Send a test" onPress={sendTestPush} loading={testingPush} />}
+              last
+            />
           </Card>
         </Section>
 
@@ -385,7 +385,11 @@ export default function Settings() {
         {Platform.OS === 'web' && (
           <Section label="Appearance">
             <Card>
-              <Text style={[text.caption, { marginBottom: sp.sm }]}>
+              <View style={styles.shareHead}>
+                <Palette size={16} color={colors.accent} strokeWidth={1.75} />
+                <Text style={text.subtitle}>Your look</Text>
+              </View>
+              <Text style={[text.caption, { marginTop: sp.xs, marginBottom: sp.md }]}>
                 Dress your space, for both of you. Your partner wears the new look next time they open Ours.
               </Text>
               {THEME_PRESETS.map((p, i) => {
@@ -445,6 +449,29 @@ export default function Settings() {
           </Card>
         </Section>
 
+        <Section label="Share Ours">
+          <Card>
+            <View style={styles.shareHead}>
+              <Share2 size={16} color={colors.accent} strokeWidth={1.75} />
+              <Text style={text.subtitle}>Pass it on</Text>
+            </View>
+            <Text style={[text.caption, { marginTop: sp.xs, marginBottom: sp.md }]}>
+              Know another pair who would love a little home like this? Send them your link.
+            </Text>
+            <AppPressable onPress={copyReferral} style={styles.referralChip} disabled={!referral?.code}>
+              <Text style={styles.referralLink} numberOfLines={1}>
+                {referral?.code ? referralLink(referral.code) : 'Getting your link...'}
+              </Text>
+              <Text style={text.caption}>{referralCopied ? 'Copied ✓' : 'Tap to copy'}</Text>
+            </AppPressable>
+            {referral && referral.joined > 0 && (
+              <Text style={[text.caption, { marginTop: sp.sm, textAlign: 'center' }]}>
+                {referral.joined === 1 ? 'One friend joined through you ♥' : `${referral.joined} friends joined through you ♥`}
+              </Text>
+            )}
+          </Card>
+        </Section>
+
         <Section label="Account">
           <SecondaryButton title="Log out" onPress={signOut} />
           <View style={{ height: sp.md }} />
@@ -478,7 +505,6 @@ const styles = StyleSheet.create({
   },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: sp.md },
   nickBlock: { paddingTop: sp.md },
-  partnerCell: { flexDirection: 'row', alignItems: 'center', gap: sp.sm },
   markBlock: {
     marginTop: sp.base,
     paddingTop: sp.md,
@@ -494,16 +520,11 @@ const styles = StyleSheet.create({
   },
   markCellActive: { borderColor: colors.accent },
   privacyHead: { flexDirection: 'row', alignItems: 'center', gap: sp.sm },
+  // Same head treatment for every section that opens with an icon + title.
+  shareHead: { flexDirection: 'row', alignItems: 'center', gap: sp.sm },
   saveButton: { height: 40, paddingHorizontal: sp.base, marginTop: sp.sm },
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: sp.md,
-    gap: sp.md,
-  },
+  // Rows are ListRow now; this only separates the theme swatches.
   rowBorder: { borderTopWidth: 1, borderTopColor: colors.hairline },
-  testRow: { alignItems: 'flex-start' },
   referralChip: {
     borderWidth: 1,
     borderColor: colors.hairline,

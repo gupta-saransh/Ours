@@ -165,6 +165,33 @@ export async function streakStateFor(coupleId: string): Promise<StreakState> {
   return computeStreak(await mutualDays(coupleId), todayUTC());
 }
 
+export interface AnswerDay {
+  date: string;
+  /** Did I answer that day? */
+  mine: boolean;
+  /** Did my partner? Both true is what makes the day count. */
+  theirs: boolean;
+}
+
+/**
+ * Who answered on which day, for the streak screen's shared calendar. One row
+ * per (day, person) collapsed into a per-day pair. Bounded to a year so the
+ * payload stays small; no answer text is read, only the fact that one exists.
+ */
+export async function answerDaysFor(coupleId: string, userId: string): Promise<AnswerDay[]> {
+  const rows = await q<{ d: string; mine: number; theirs: number }>(
+    `SELECT prompt_date::STRING AS d,
+            count(*) FILTER (WHERE user_id = $2)::INT AS mine,
+            count(*) FILTER (WHERE user_id != $2)::INT AS theirs
+     FROM daily_prompt_answers
+     WHERE couple_id = $1 AND prompt_date > (now() - INTERVAL '1 year')::DATE
+     GROUP BY prompt_date
+     ORDER BY prompt_date ASC`,
+    [coupleId, userId]
+  );
+  return rows.map((r) => ({ date: r.d, mine: r.mine > 0, theirs: r.theirs > 0 }));
+}
+
 /**
  * Recompute after a reveal and refresh the cached counters on the couple row
  * (admin analytics read those columns directly). Returns the fresh state.
@@ -247,11 +274,15 @@ export default route(['GET', 'POST'], async (req, res) => {
   }
 
   if (req.method === 'GET') {
-    const [state, streak] = await Promise.all([
+    // ?days=1 adds the per-day answer history the streak screen's calendar
+    // needs. Off by default so the prompt card stays a light request.
+    const wantDays = req.query.days === '1';
+    const [state, streak, days] = await Promise.all([
       promptStateFor(user.couple_id, user.id),
       streakStateFor(user.couple_id),
+      wantDays ? answerDaysFor(user.couple_id, user.id) : Promise.resolve(undefined),
     ]);
-    res.status(200).json({ ...state, streak });
+    res.status(200).json({ ...state, streak, ...(days ? { days } : {}) });
     return;
   }
 

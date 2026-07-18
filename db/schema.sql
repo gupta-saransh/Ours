@@ -320,3 +320,15 @@ CREATE TABLE IF NOT EXISTS daily_game_answers (
   UNIQUE (couple_id, user_id, game_date)
 );
 CREATE INDEX IF NOT EXISTS game_answers_by_couple ON daily_game_answers (couple_id, game_date DESC);
+
+-- v17: guided onboarding + whose birthday.
+--   users.needs_onboarding  gates the first-run flow to NEW signups only.
+--     Defaults to FALSE so every existing account is already "done" without a
+--     backfill UPDATE (which CockroachDB would reject in this same file, see
+--     the v12 note above). auth-signup.ts is the only place that sets it true;
+--     finishing or skipping to the end of onboarding sets it back to false.
+--   milestones.person_id  whose birthday a row is about. Nullable: older rows
+--     and shared milestones (anniversaries) leave it null, and readers fall
+--     back to author_id then the title text.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS needs_onboarding BOOL NOT NULL DEFAULT false;
+ALTER TABLE milestones ADD COLUMN IF NOT EXISTS person_id UUID;

@@ -11,6 +11,13 @@ export default route(['GET'], async (req, res) => {
     | null = null;
   let encryptionCode: string | null = null;
   let avatar: string | null = null;
+  // Guarded like the avatar/nickname reads below: pre-v17 this column does not
+  // exist, and "already onboarded" is the safe answer (never trap an existing
+  // account in the first-run flow).
+  const onboardingRow = await one<{ needs_onboarding: boolean }>(
+    'SELECT needs_onboarding FROM users WHERE id = $1',
+    [user.id]
+  ).catch(() => null);
   if (user.couple_id) {
     // The avatar + nickname selects are catch-guarded: a deploy that lands
     // before the v9/v11 migration must degrade gracefully, never fail /me (a
@@ -53,5 +60,6 @@ export default route(['GET'], async (req, res) => {
     partner: partner ?? null,
     encryption: encryptionEnabled(),
     encryptionCode,
+    needsOnboarding: onboardingRow?.needs_onboarding ?? false,
   });
 });

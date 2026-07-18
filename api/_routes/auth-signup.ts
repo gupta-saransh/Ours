@@ -14,10 +14,20 @@ export default route(['POST'], async (req, res) => {
   const existing = await one('SELECT id FROM users WHERE email = $1', [email]);
   if (existing) throw new HttpError(409, 'An account with that email already exists');
 
-  const user = await one<SessionUser>(
-    `INSERT INTO users (email, password_hash, display_name) VALUES ($1, $2, $3) RETURNING ${USER_COLUMNS}`,
+  // needs_onboarding is set true ONLY here, so the guided first-run flow can
+  // never catch an existing account. Guarded: pre-v17 the column does not
+  // exist, and signing up must still work.
+  let user = await one<SessionUser>(
+    `INSERT INTO users (email, password_hash, display_name, needs_onboarding)
+     VALUES ($1, $2, $3, true) RETURNING ${USER_COLUMNS}`,
     [email, hashPassword(password), displayName]
-  );
+  ).catch(() => undefined);
+  if (!user) {
+    user = await one<SessionUser>(
+      `INSERT INTO users (email, password_hash, display_name) VALUES ($1, $2, $3) RETURNING ${USER_COLUMNS}`,
+      [email, hashPassword(password), displayName]
+    );
+  }
 
   // Friend referral: /sign-up?ref=CODE passes the code through. Best-effort and
   // catch-guarded (pre-v16 schema, bogus code) so it can never block a signup.

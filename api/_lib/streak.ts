@@ -21,6 +21,10 @@ export interface StreakState {
   countedToday: boolean;
   atRisk: boolean; // the streak is alive but today has not been counted yet
   graceUsed?: boolean; // the current run is only alive because a weekly grace covered a miss
+  /** This week's single grace day is still unspent, so one slip is survivable. */
+  graceAvailable?: boolean;
+  /** The day this week's grace covered, when it has been spent (UTC, YYYY-MM-DD). */
+  graceDay?: string | null;
 }
 
 export function addDays(dateStr: string, n: number): string {
@@ -67,7 +71,18 @@ function runEndingAt(set: Set<string>, endDay: string): number {
  */
 export function computeStreak(mutualDaysAsc: string[], today: string): StreakState {
   const set = new Set(mutualDaysAsc);
-  if (set.size === 0) return { current: 0, longest: 0, countedToday: false, atRisk: false, graceUsed: false };
+  if (set.size === 0) {
+    return {
+      current: 0,
+      longest: 0,
+      countedToday: false,
+      atRisk: false,
+      graceUsed: false,
+      // No streak to protect yet, but the week's grace is genuinely untouched.
+      graceAvailable: true,
+      graceDay: null,
+    };
+  }
 
   // Current run: walk backward from today. Today, if not yet answered, is
   // "pending" (not a miss) so the streak carried from yesterday stays alive; it
@@ -77,6 +92,8 @@ export function computeStreak(mutualDaysAsc: string[], today: string): StreakSta
   let day = today;
   let pendingToday = !countedToday;
   const graceSpent = new Set<string>();
+  // Which day this week's grace ended up covering, for the UI to name it.
+  let graceDay: string | null = null;
   while (true) {
     if (set.has(day)) {
       current++;
@@ -94,6 +111,7 @@ export function computeStreak(mutualDaysAsc: string[], today: string): StreakSta
     if (graceSpent.has(wk)) break;
     if (!set.has(addDays(day, -1))) break;
     graceSpent.add(wk);
+    if (wk === mondayOf(today)) graceDay = day;
     day = addDays(day, -1);
   }
 
@@ -104,11 +122,14 @@ export function computeStreak(mutualDaysAsc: string[], today: string): StreakSta
     if (r > longest) longest = r;
   }
 
+  const graceUsed = graceSpent.has(mondayOf(today));
   return {
     current,
     longest,
     countedToday,
     atRisk: current > 0 && !countedToday,
-    graceUsed: graceSpent.has(mondayOf(today)),
+    graceUsed,
+    graceAvailable: !graceUsed,
+    graceDay,
   };
 }

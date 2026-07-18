@@ -40,6 +40,8 @@ interface AuthContextValue {
   token: string | null;
   encryption: boolean; // server confirms envelope encryption at rest is active
   encryptionCode: string | null; // "seal code": same for both partners, derived from the couple's key
+  /** True only for a brand new signup that has not finished the first-run flow. */
+  needsOnboarding: boolean;
   /** `ref` is a friend-referral code from a /sign-up?ref= link, if any. */
   signUp(email: string, password: string, displayName: string, ref?: string | null): Promise<void>;
   signIn(email: string, password: string): Promise<void>;
@@ -54,6 +56,8 @@ interface AuthContextValue {
     themePreset?: string;
     avatar?: string | null;
     partnerNickname?: string | null;
+    /** Marks the first-run flow finished. One way, set only by onboarding. */
+    onboarded?: boolean;
   }): Promise<void>;
 }
 
@@ -67,6 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [partner, setPartner] = useState<Partner | null>(null);
   const [encryption, setEncryption] = useState(false);
   const [encryptionCode, setEncryptionCode] = useState<string | null>(null);
+  const [needsOnboarding, setNeedsOnboarding] = useState(false);
 
   const applySession = useCallback(async (newToken: string, newUser: User) => {
     setAuthToken(newToken);
@@ -95,12 +100,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       partner: Partner | null;
       encryption?: boolean;
       encryptionCode?: string | null;
+      needsOnboarding?: boolean;
     }>('/api/auth/me');
     setUser(data.user);
     setCouple(data.couple);
     setPartner(data.partner);
     setEncryption(!!data.encryption);
     setEncryptionCode(data.encryptionCode ?? null);
+    // Absent (pre-v17 server) means "already onboarded": never trap an existing
+    // account in the first-run flow.
+    setNeedsOnboarding(!!data.needsOnboarding);
     // The couple's shared preset bakes into module-scope styles at bundle
     // evaluation, so a look either partner chose (on any device) applies here
     // via one reload on the next app load.
@@ -139,12 +148,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       token,
       encryption,
       encryptionCode,
+      needsOnboarding,
       async signUp(email, password, displayName, ref) {
         const data = await api<{ token: string; user: User }>('/api/auth/signup', {
           method: 'POST',
           body: { email, password, displayName, ref: ref || undefined },
         });
         await applySession(data.token, data.user);
+        // A fresh signup always owes the first-run flow. Set locally so the
+        // redirect fires before /auth/me has a chance to come back.
+        setNeedsOnboarding(true);
       },
       async signIn(email, password) {
         const data = await api<{ token: string; user: User }>('/api/auth/login', {
@@ -174,9 +187,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       async updateProfile(patch) {
         const data = await api<{ user: User }>('/api/auth/profile', { method: 'PATCH', body: patch });
         setUser(data.user);
+        if (patch.onboarded) setNeedsOnboarding(false);
       },
     }),
-    [status, user, couple, partner, token, encryption, encryptionCode, applySession, clearSession, refresh]
+    [
+      status,
+      user,
+      couple,
+      partner,
+      token,
+      encryption,
+      encryptionCode,
+      needsOnboarding,
+      applySession,
+      clearSession,
+      refresh,
+    ]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

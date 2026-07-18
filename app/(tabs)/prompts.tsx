@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useCoupleEvent } from '@/lib/realtime';
@@ -21,6 +22,7 @@ interface StreakState {
 /** Every prompt you both answered, newest first. */
 export default function Prompts() {
   const { user, partner } = useAuth();
+  const router = useRouter();
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [streak, setStreak] = useState<StreakState | null>(null);
   const [failed, setFailed] = useState(false);
@@ -82,6 +84,9 @@ export default function Prompts() {
             <Text style={styles.streakHow}>
               Your streak grows by one each day you both answer the prompt. Miss a day and a weekly grace keeps it alive.
             </Text>
+            <Pressable onPress={() => router.push('/streak')} hitSlop={8} style={styles.streakLink}>
+              <Text style={[text.caption, { color: colors.accent }]}>See your streak ✦</Text>
+            </Pressable>
           </View>
         }
         ListEmptyComponent={<Empty line="No prompts answered together yet." />}
@@ -139,4 +144,5 @@ const styles = StyleSheet.create({
     color: colors.inkFaint,
     textAlign: 'center',
   },
+  streakLink: { alignSelf: 'center', marginTop: sp.md },
 });
