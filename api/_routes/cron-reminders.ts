@@ -125,7 +125,7 @@ export default route(['POST', 'GET'], async (req, res) => {
         u.id,
         {
           title: 'Ours',
-          body: 'The day is winding down. Add a memory or a little note before it slips away. ♥',
+          body: 'Pssst...don’t forget to log a cute memory or a little note for your favourite person!♥',
           url: '/timeline',
         },
         'cron:daily'
