@@ -77,6 +77,17 @@ interface GameState {
   reveal: { partnerPick: 'a' | 'b'; iGuessedRight: boolean; theyGuessedRight: boolean } | null;
 }
 
+/**
+ * The heart mark, pinned to TEXT presentation.
+ *
+ * A bare U+2665 inherits emoji presentation on iOS, which paints it as the
+ * system's glossy red ❤️ rather than the ink-colored glyph the design system
+ * asks for, and it ignores the `color` style entirely. The trailing U+FE0E
+ * (variation selector-15) tells the renderer to use the text glyph, so the mark
+ * takes its color from the surrounding style like every other character.
+ */
+const HEART = '♥︎';
+
 // Client copies of the server's levels + point sources (api/_routes/home.ts);
 // keep in sync.
 const LEVELS: { at: number; title: string }[] = [
@@ -826,25 +837,27 @@ function GameCard({
         <View style={styles.gameRevealRow}>
           <View style={styles.gameRevealSide}>
             <Avatar id={user?.avatar} name={user?.display_name} size={44} />
-            <Text style={[text.subtitle, { marginTop: sp.sm }]}>{optionText(mine.pick)}</Text>
-            <Text style={text.micro}>You</Text>
+            <Text style={[text.subtitle, styles.gameRevealPick]}>{optionText(mine.pick)}</Text>
+            <Text style={[text.micro, styles.gameRevealWho]}>You</Text>
           </View>
-          <Text style={styles.gameRevealHeart}>♥</Text>
+          <Text style={styles.gameRevealHeart}>{HEART}</Text>
           <View style={styles.gameRevealSide}>
             <Avatar id={partner?.avatar} name={partnerName} size={44} />
-            <Text style={[text.subtitle, { marginTop: sp.sm }]}>{optionText(reveal.partnerPick)}</Text>
-            <Text style={text.micro}>{partnerName}</Text>
+            <Text style={[text.subtitle, styles.gameRevealPick]}>{optionText(reveal.partnerPick)}</Text>
+            <Text style={[text.micro, styles.gameRevealWho]} numberOfLines={1}>
+              {partnerName}
+            </Text>
           </View>
         </View>
         <View style={styles.divider} />
         <Text style={[text.bodySerif, { fontStyle: 'italic', textAlign: 'center' }]}>
           {reveal.iGuessedRight && reveal.theyGuessedRight
-            ? 'You both knew each other. Of course you did. ♥'
+            ? `Two minds, one thought! You two are completely in sync. ${HEART}`
             : reveal.iGuessedRight
-              ? 'You guessed them right. They are still figuring you out. ♥'
+              ? `You've got them all figured out! Now we wait for them to catch up to you. ${HEART}`
               : reveal.theyGuessedRight
-                ? 'They knew you. You got a little surprise.'
-                : 'You surprised each other today.'}
+                ? `They had you pegged from the start! Caught you off guard, didn't they? ${HEART}`
+                : 'Plot twist! You managed to completely catch each other by surprise.'}
         </Text>
         <Text style={[text.micro, { marginTop: sp.sm, textAlign: 'center' }]}>
           {state.nextRoundAt ? `One more opens ${opensIn(state.nextRoundAt)} ✦` : 'A new one tomorrow ✦'}
@@ -1182,17 +1195,37 @@ const styles = StyleSheet.create({
   },
   gameRevealRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    // NOT 'center': the two picks can wrap to different numbers of lines, and
+    // centring the row would slide the whole thing (heart included) around
+    // depending on which side happened to be taller. Top-aligned keeps the two
+    // avatars on one line, always.
+    alignItems: 'flex-start',
     gap: sp.md,
     marginBottom: sp.md,
   },
   gameRevealSide: {
     flex: 1,
+    minWidth: 0, // let a long pick wrap instead of widening its column
     alignItems: 'center',
+  },
+  // alignItems centres the text BLOCK, but a block that wraps to two lines is
+  // still left-aligned inside itself, which is what made "Rewatch a / favorite"
+  // hang off to one side under a centred avatar. The text has to say centre too.
+  gameRevealPick: {
+    marginTop: sp.sm,
+    textAlign: 'center',
+  },
+  gameRevealWho: {
+    textAlign: 'center',
   },
   gameRevealHeart: {
     fontSize: 22,
+    lineHeight: 22,
     color: colors.surfaceSealed,
+    // Sit level with the AVATARS, not with the middle of the whole column: the
+    // heart is between the two people, and pinning it to the avatar row is the
+    // only way it stays put no matter how either pick wraps. (44 - 22) / 2.
+    marginTop: 11,
   },
   chapterRow: {
     flexDirection: 'row',

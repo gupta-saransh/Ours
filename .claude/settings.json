@@ -19,7 +19,13 @@
       "Bash(npm test *)",
       "Bash(python -)",
       "Read(//c/Users/Srg/.claude/uploads/84e45cef-b5ef-4a70-a358-6f2ae7399a95/**)",
-      "Bash(grep -n \"^function MemoryComposer\\\\|^function RevealViewer\\\\|^/\\\\*\\\\*\" \"app/\\(tabs\\)/timeline.tsx\")"
+      "Bash(grep -n \"^function MemoryComposer\\\\|^function RevealViewer\\\\|^/\\\\*\\\\*\" \"app/\\(tabs\\)/timeline.tsx\")",
+      "Bash(awk '/CREATE TABLE IF NOT EXISTS/{t=$6} /couple_id|user_id|author_id|sender_id|assignee_id|person_id|done_by|referred_by|actor_id|memory_id|comment_id|message_id|note_id/{print t\": \"$1}' db/schema.sql)",
+      "Bash(node -e \"console.log\\(JSON.stringify\\(require\\('./package.json'\\).scripts,null,2\\)\\)\")",
+      "Bash(node -e \"const p=require\\('./package.json'\\);console.log\\(Object.keys\\(p.dependencies\\).join\\('\\\\n'\\)\\)\")",
+      "Bash(node \"C:/Users/Srg/AppData/Local/Temp/claude/d--Coding-NewProjects-RelationshipHQ/84e45cef-b5ef-4a70-a358-6f2ae7399a95/scratchpad/fixdelim.js\")",
+      "Bash(sed -n '71,73p' CLAUDE.md)",
+      "Bash(python3 -)"
     ],
     "additionalDirectories": [
       "d:\\Coding\\NewProjects\\RelationshipHQ\\api"

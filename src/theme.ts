@@ -220,6 +220,30 @@ export const sp = {
 // Legacy 4pt multiplier; still referenced by unmigrated styles.
 export const space = (n: number) => n * 4;
 
+/**
+ * Categorical series colors for the admin dashboard's charts.
+ *
+ * A chart legend needs colors that stay distinguishable side by side, which the
+ * semantic roles above cannot give (they are one warm family by design). These
+ * live here rather than in the screen so the "no hardcoded hex outside
+ * theme.ts" rule still holds. Ordered most-distinct first, since the first few
+ * entries land on the highest-volume sources and carry the most ink.
+ *
+ * Deliberately still in the app's warm register: oxblood, gold, olive, clay,
+ * ink-blue, plum. Not a generic dashboard rainbow.
+ */
+export const chartSeries = [
+  '#7E382C', // oxblood (chat: always the biggest)
+  '#B8862F', // ochre gold
+  '#77743F', // dry olive
+  '#9C5B3E', // clay
+  '#4E6070', // slate blue
+  '#6B4A63', // plum
+  '#A8823C', // light ochre
+  '#5C7355', // sage
+  '#8C4F4F', // faded rose
+] as const;
+
 export const radius = {
   none: 0,
   hairline: 2,

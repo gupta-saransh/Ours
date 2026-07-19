@@ -1,64 +1,104 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { LockKeyhole, RefreshCw } from 'lucide-react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, Easing, Pressable, ScrollView, StyleSheet, Text, View, type TextStyle } from 'react-native';
+import { AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, LockKeyhole, RefreshCw } from 'lucide-react-native';
 import { apiUrl } from '@/lib/api';
-import { formatDay } from '@/lib/format';
-import { Card, FormError, PrimaryButton, Screen, SecondaryButton, Skeleton, TextField } from '@/components/kit';
+import { BarList, Legend, Sparkline, StackStrip, TrendChart, seriesColor } from '@/components/charts';
+import { FormError, PrimaryButton, Screen, TextField } from '@/components/kit';
 import { colors, radius, sp, text } from '@/theme';
 
 /**
- * /admin/dashboard — aggregate analytics only, gated by a single password
- * (ADMIN_PASSWORD in Vercel). Deliberately outside the (auth)/(tabs) groups so
- * it never touches, or is touched by, a couple's own session: the admin token
- * lives only in this screen's state (never localStorage, never the shared
- * api() client), and is checked server-side by api/_lib/admin.ts.
+ * /admin/dashboard — the operator's view of the product.
  *
- * Rebuilt from scratch. The bugs the previous version shipped, each of which
- * has a guard here now, so do not undo them:
- *   1. An expired admin token (12h) landed on a retry-only error screen with no
- *      way back to the password gate, so the page was stuck until a full
- *      reload. A 401 now returns to the gate with an explanatory message.
- *   2. A failed REFRESH left stale numbers on screen with no indication, since
- *      the error state only rendered when there was no data at all. A refresh
- *      failure now shows a banner and keeps the (clearly labelled) old data.
- *   3. Charts stored the highlighted bar as an ARRAY INDEX. The 30-day window
- *      shifts every day, so after a refresh an index could point past the end
- *      of the series and crash the render. Selection is now the day STRING,
- *      which is either found or falls back to the peak.
+ * Gated by a single password (ADMIN_PASSWORD in Vercel), deliberately outside
+ * the (auth)/(tabs) groups so it never touches, or is touched by, a couple's
+ * own session: the admin token lives only in this screen's state, never
+ * localStorage, never the shared api() client.
+ *
+ * WHAT THIS SCREEN IS FOR. Five questions, in the order an operator asks them:
+ *   1. Is anything broken?           -> health strip, first, above the fold
+ *   2. Is it growing?                -> KPI cards, each with a delta and a shape
+ *   3. Are people actually using it? -> the activity chart
+ *   4. Who is thriving, who is gone? -> the named leaderboard
+ *   5. What are they using it for?   -> content mix
+ *
+ * Rebuilt from scratch after the previous version was (correctly) called
+ * unreadable: twelve context-free numbers in a serif display face, no deltas,
+ * no interaction, and a headline that was simply wrong. The specific traps,
+ * each now guarded, so do not undo them:
+ *   1. "Couples" counted couple ROWS, including abandoned shells with zero
+ *      members. Five of twelve were empty, so the headline overstated reality
+ *      by 71% and disagreed with the paired/solo counts printed beside it. A
+ *      space is now a couple that HAS members; the shells became a health item.
+ *   2. An expired admin token (12h) landed on a retry-only error screen with no
+ *      way back to the password gate. A 401 returns to the gate.
+ *   3. A failed REFRESH left stale numbers on screen with no indication. It now
+ *      shows a banner and labels the old data.
+ *   4. Charts stored the highlighted bar as an ARRAY INDEX; the window slides
+ *      daily, so a held index could point past the end of the new series and
+ *      crash the render. Selection is a day STRING (see TrendChart).
  */
 
-const WINDOW_LABEL = 'last 30 days';
+const WINDOWS = [7, 30, 90] as const;
 
-/** Display names for the source keys the server sends in `sources`. */
 const SOURCE_LABELS: Record<string, string> = {
+  messages: 'Chat',
   memories: 'Memories',
   notes: 'Notes',
-  messages: 'Chat messages',
-  prompts: 'Prompt answers',
-  comments: 'Comments',
-  dates: 'Dates',
   todos: 'To-dos',
+  prompts: 'Prompts',
+  comments: 'Comments',
   bucket: 'Bucket list',
   wishlist: 'Wishlist',
+  dates: 'Dates',
+  milestones: 'Milestones',
 };
+
+interface Kpi {
+  value: number;
+  previous: number;
+  deltaPct: number | null;
+  spark: number[];
+}
 
 interface Stats {
   generatedAt: string;
+  window: { days: number; from: string | null; to: string | null };
   sources: string[];
-  totals: Record<string, number>;
-  membership: { paired: number; solo: number };
-  streaks: { on_streak: number; longest_ever: number; avg_current: number };
-  activeCouples: number;
-  signups: { day: string; n: number }[];
+  kpis: { activeSpaces: Kpi; spaces: Kpi; people: Kpi; content: Kpi; messages: Kpi };
+  membership: { spaces: number; paired: number; solo: number; empty: number; coupleRowsTotal: number };
+  health: {
+    emptySpaces: number;
+    noPushSubscription: number;
+    notificationsOff: number;
+    unpairedPeople: number;
+    totalPeople: number;
+  };
+  engagement: {
+    onStreak: number;
+    longestEver: number;
+    avgStreak: number;
+    gameRounds: number;
+    todos: number;
+    todosDone: number;
+    reactions: number;
+    capsules: number;
+    reflections: number;
+    referred: number;
+  };
   activity: { day: string; counts: Record<string, number>; total: number }[];
+  signups: { day: string; n: number }[];
+  contentMix: { src: string; n: number }[];
   couples: {
     id: string;
-    created_at: string;
+    names: string[];
     members: number;
+    created_at: string;
     encrypted: boolean;
+    streak: number;
     counts: Record<string, number>;
     total: number;
     last_active: string | null;
+    empty: boolean;
   }[];
 }
 
@@ -89,348 +129,36 @@ async function adminFetch<T>(
   return data as T;
 }
 
+/** "3d ago" / "just now": a leaderboard needs recency at a glance. */
+function ago(iso: string | null): string {
+  if (!iso) return 'never';
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return 'never';
+  const mins = Math.floor((Date.now() - then) / 60_000);
+  if (mins < 2) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? 'yesterday' : `${days}d ago`;
+}
+
 export default function AdminDashboard() {
   const [token, setToken] = useState<string | null>(null);
-  const [gateNotice, setGateNotice] = useState<string | null>(null);
+  const [password, setPassword] = useState('');
+  const [gateError, setGateError] = useState<string | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
+
+  const [days, setDays] = useState<number>(30);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
+  const [activeKeys, setActiveKeys] = useState<Set<string>>(new Set());
 
-  const lock = useCallback((notice: string | null) => {
-    setToken(null);
-    setStats(null);
-    setError(null);
-    setGateNotice(notice);
-  }, []);
-
-  const load = useCallback(
-    async (t: string) => {
-      setLoading(true);
-      try {
-        const data = await adminFetch<Stats>('/api/admin/stats', t);
-        setStats(data);
-        setError(null);
-      } catch (err) {
-        if (err instanceof UnauthorizedError) {
-          lock('That session expired. Sign in again.');
-          return;
-        }
-        // Keep whatever is already on screen; the banner says it is stale.
-        setError(err instanceof Error ? err.message : 'Could not load the numbers.');
-      } finally {
-        setLoading(false);
-      }
-    },
-    [lock]
-  );
-
-  useEffect(() => {
-    if (token) load(token);
-  }, [token, load]);
-
-  if (!token) {
-    return (
-      <AdminGate
-        notice={gateNotice}
-        onUnlocked={(t) => {
-          setGateNotice(null);
-          setToken(t);
-        }}
-      />
-    );
-  }
-
-  return (
-    <Screen>
-      <ScrollView contentContainerStyle={styles.body}>
-        <View style={styles.header}>
-          <View style={{ flex: 1 }}>
-            <Text style={text.title}>Analytics</Text>
-            <Text style={text.caption}>
-              {stats ? `As of ${timeOfDay(stats.generatedAt)}` : loading ? 'Loading…' : 'Not loaded'}
-            </Text>
-          </View>
-          <RefreshButton spinning={loading} onPress={() => !loading && load(token)} />
-          <Pressable onPress={() => lock(null)} hitSlop={8} style={styles.headerBtn}>
-            <LockKeyhole size={18} color={colors.inkMuted} strokeWidth={1.75} />
-          </Pressable>
-        </View>
-
-        {error && (
-          <Card style={styles.errorCard}>
-            <Text style={[text.caption, { color: colors.danger }]}>
-              {error}
-              {stats ? ' Showing the last numbers that loaded.' : ''}
-            </Text>
-            {!stats && <SecondaryButton title="Try again" onPress={() => load(token)} style={{ marginTop: sp.md }} />}
-          </Card>
-        )}
-
-        {!stats ? (
-          loading ? (
-            <View>
-              <Skeleton height={120} style={{ marginBottom: sp.lg }} />
-              <Skeleton height={160} style={{ marginBottom: sp.lg }} />
-              <Skeleton height={200} />
-            </View>
-          ) : null
-        ) : (
-          <Report stats={stats} />
-        )}
-      </ScrollView>
-    </Screen>
-  );
-}
-
-function Report({ stats }: { stats: Stats }) {
-  const t = stats.totals;
-  const sources = stats.sources?.length ? stats.sources : Object.keys(SOURCE_LABELS);
-
-  const contentItems = sources
-    .map((src) => ({ label: SOURCE_LABELS[src] ?? src, value: t[src] ?? 0 }))
-    .concat([{ label: 'Milestones', value: t.milestones ?? 0 }])
-    .filter((i) => i.value > 0)
-    .sort((a, b) => b.value - a.value);
-
-  return (
-    <View>
-      <Group label="Who is here">
-        <View style={styles.grid}>
-          <Tile label="Couples" value={t.couples ?? 0} />
-          <Tile label="People" value={t.users ?? 0} />
-          <Tile label="Paired" value={stats.membership.paired} />
-          <Tile label="Solo" value={stats.membership.solo} />
-          <Tile label="Active this week" value={stats.activeCouples} />
-          <Tile label="Encrypted" value={t.encrypted_couples ?? 0} />
-        </View>
-      </Group>
-
-      <Group label="Engagement">
-        <View style={styles.grid}>
-          <Tile label="On a streak" value={stats.streaks.on_streak} />
-          <Tile label="Longest ever" value={stats.streaks.longest_ever} />
-          <Tile label="Avg. streak" value={stats.streaks.avg_current} />
-          <Tile label="Game rounds" value={t.game_rounds ?? 0} />
-          <Tile label="To-dos done" value={`${t.todos_done ?? 0}/${t.todos ?? 0}`} />
-          <Tile label="Reactions" value={t.reactions ?? 0} />
-          <Tile label="Time capsules" value={t.capsules ?? 0} />
-          <Tile label="Reflections saved" value={t.reflections ?? 0} />
-          <Tile label="Joined via referral" value={t.referred ?? 0} />
-        </View>
-        <Text style={styles.footnote}>
-          Streak figures come from the cached counters on each couple, refreshed when a prompt reveals. The couple's own
-          screen recomputes from history and is the source of truth.
-        </Text>
-      </Group>
-
-      <Group label="New signups">
-        <BarChart
-          series={stats.signups.map((s) => ({ day: s.day, value: s.n }))}
-          caption={(d, v) => `${formatDay(d)} · ${v} ${v === 1 ? 'signup' : 'signups'}`}
-          empty="Nobody has signed up yet."
-        />
-      </Group>
-
-      <Group label="Activity">
-        <ActivityChart series={stats.activity ?? []} />
-      </Group>
-
-      <Group label="What has been made">
-        <MagnitudeBars
-          items={contentItems}
-          footer={
-            (t.bucket ?? 0) > 0 ? `${t.bucket_done ?? 0} of ${t.bucket} bucket-list items marked done.` : undefined
-          }
-        />
-      </Group>
-
-      <Group label="By couple">
-        <CoupleList couples={stats.couples ?? []} sources={sources} />
-      </Group>
-    </View>
-  );
-}
-
-/* ---------------------------------- charts --------------------------------- */
-
-const CHART_HEIGHT = 96;
-
-interface Point {
-  day: string;
-  value: number;
-}
-
-/**
- * Vertical bars, one per day. The highlighted bar is tracked by DAY STRING,
- * never by index: the window slides every day, so an index kept across a
- * refresh can point past the end of a newly loaded series (that was a real
- * crash). An unknown day simply falls back to the peak.
- */
-function BarChart({
-  series,
-  caption,
-  empty,
-  header,
-}: {
-  series: Point[];
-  caption: (day: string, value: number) => string;
-  empty: string;
-  header?: React.ReactNode;
-}) {
-  const [selectedDay, setSelectedDay] = useState<string | null>(null);
-
-  if (series.length === 0) {
-    return (
-      <Card>
-        {header}
-        <Text style={text.caption}>{empty}</Text>
-      </Card>
-    );
-  }
-
-  const max = Math.max(1, ...series.map((p) => p.value));
-  const peak = series.reduce((best, p) => (p.value > best.value ? p : best), series[0]);
-  const shown = (selectedDay && series.find((p) => p.day === selectedDay)) || peak;
-
-  return (
-    <Card>
-      {header}
-      <View style={styles.barsRow}>
-        {series.map((p) => {
-          const h = Math.max(2, Math.round((p.value / max) * CHART_HEIGHT));
-          const isShown = p.day === shown.day;
-          return (
-            <Pressable key={p.day} onPress={() => setSelectedDay(p.day)} style={styles.barCol}>
-              <View
-                style={[styles.bar, { height: h, backgroundColor: isShown ? colors.surfaceSealed : colors.inkFaint }]}
-              />
-            </Pressable>
-          );
-        })}
-      </View>
-      <View style={styles.axisLine} />
-      <Text style={styles.chartCaption}>{caption(shown.day, shown.value)}</Text>
-      <Text style={styles.chartSub}>
-        {series.reduce((s, p) => s + p.value, 0).toLocaleString()} total over the {WINDOW_LABEL}
-      </Text>
-    </Card>
-  );
-}
-
-/** Everything made per day, with a daily/cumulative toggle. */
-function ActivityChart({ series }: { series: Stats['activity'] }) {
-  const [cumulative, setCumulative] = useState(false);
-
-  let running = 0;
-  const points: Point[] = series.map((d) => {
-    running += d.total;
-    return { day: d.day, value: cumulative ? running : d.total };
-  });
-
-  return (
-    <BarChart
-      series={points}
-      empty="Nothing has been made yet."
-      header={
-        <View style={styles.chartHeader}>
-          <Text style={text.subtitle}>{cumulative ? 'Running total' : 'Made each day'}</Text>
-          <Pressable onPress={() => setCumulative((c) => !c)} hitSlop={8}>
-            <Text style={styles.link}>{cumulative ? 'Show daily' : 'Show cumulative'}</Text>
-          </Pressable>
-        </View>
-      }
-      caption={(d, v) => `${formatDay(d)} · ${v.toLocaleString()} ${cumulative ? 'made so far' : 'that day'}`}
-    />
-  );
-}
-
-/** Horizontal magnitude bars, sorted high to low, value printed past the tip. */
-function MagnitudeBars({ items, footer }: { items: { label: string; value: number }[]; footer?: string }) {
-  if (items.length === 0) {
-    return (
-      <Card>
-        <Text style={text.caption}>Nothing has been made yet.</Text>
-      </Card>
-    );
-  }
-  const max = Math.max(1, ...items.map((i) => i.value));
-  return (
-    <Card>
-      {items.map((item, i) => (
-        <View key={item.label} style={[styles.barRow, i > 0 && { marginTop: sp.sm }]}>
-          <Text style={[text.caption, styles.barLabel]} numberOfLines={1}>
-            {item.label}
-          </Text>
-          <View style={styles.track}>
-            <View style={[styles.trackFill, { width: `${Math.max(2, (item.value / max) * 100)}%` }]} />
-          </View>
-          <Text style={[text.caption, styles.barValue]}>{item.value.toLocaleString()}</Text>
-        </View>
-      ))}
-      {footer && <Text style={[text.caption, { marginTop: sp.lg }]}>{footer}</Text>}
-    </Card>
-  );
-}
-
-/** Per-couple volume, biggest first. Counts only, never content. */
-function CoupleList({ couples, sources }: { couples: Stats['couples']; sources: string[] }) {
-  const [showAll, setShowAll] = useState(false);
-
-  if (couples.length === 0) {
-    return (
-      <Card>
-        <Text style={text.caption}>No couples yet.</Text>
-      </Card>
-    );
-  }
-
-  const shown = showAll ? couples : couples.slice(0, 10);
-  const max = Math.max(1, ...couples.map((c) => c.total));
-
-  return (
-    <Card>
-      {shown.map((c, i) => {
-        // Only the kinds this couple actually used, so the line stays short.
-        const parts = sources
-          .filter((src) => (c.counts?.[src] ?? 0) > 0)
-          .map((src) => `${c.counts[src]} ${(SOURCE_LABELS[src] ?? src).toLowerCase()}`);
-        return (
-          <View key={c.id} style={[styles.coupleRow, i > 0 && styles.coupleBorder]}>
-            <View style={styles.coupleHead}>
-              <Text style={styles.coupleId}>{c.id}</Text>
-              <Text style={styles.coupleTotal}>{c.total.toLocaleString()}</Text>
-            </View>
-            <View style={styles.coupleTrack}>
-              <View style={[styles.coupleFill, { width: `${Math.max(2, (c.total / max) * 100)}%` }]} />
-            </View>
-            <Text style={[text.caption, { marginTop: sp.xs }]}>
-              {c.members === 2 ? 'Paired' : c.members === 1 ? 'Solo' : 'Empty'}
-              {parts.length > 0 ? ` · ${parts.join(' · ')}` : ' · nothing yet'}
-            </Text>
-            <Text style={styles.coupleMeta}>
-              joined {formatDay(c.created_at)}
-              {c.last_active ? ` · last active ${formatDay(c.last_active)}` : ' · never active'}
-            </Text>
-          </View>
-        );
-      })}
-      {couples.length > 10 && (
-        <Pressable onPress={() => setShowAll((s) => !s)} hitSlop={8} style={styles.showAll}>
-          <Text style={styles.link}>{showAll ? 'Show fewer' : `Show all ${couples.length}`}</Text>
-        </Pressable>
-      )}
-    </Card>
-  );
-}
-
-/* ----------------------------------- bits ---------------------------------- */
-
-/** Spins while a refresh is in flight, so a slow request still feels answered. */
-function RefreshButton({ spinning, onPress }: { spinning: boolean; onPress: () => void }) {
   const spin = useRef(new Animated.Value(0)).current;
-
   useEffect(() => {
-    if (!spinning) {
+    if (!loading) {
       spin.stopAnimation();
       spin.setValue(0);
       return;
@@ -440,272 +168,556 @@ function RefreshButton({ spinning, onPress }: { spinning: boolean; onPress: () =
     );
     loop.start();
     return () => loop.stop();
-  }, [spinning, spin]);
+  }, [loading, spin]);
 
-  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  const load = useCallback(async (tok: string, windowDays: number) => {
+    setLoading(true);
+    try {
+      const data = await adminFetch<Stats>(`/api/admin/stats?days=${windowDays}`, tok);
+      setStats(data);
+      setError(null);
+      setStale(false);
+      // Every source on for the first load, then leave the operator's legend
+      // choices alone across refreshes and window changes.
+      setActiveKeys((cur) => (cur.size === 0 ? new Set(data.sources) : cur));
+    } catch (err) {
+      if (err instanceof UnauthorizedError) {
+        setToken(null);
+        setStats(null);
+        setGateError('That session expired. Enter the password again.');
+        return;
+      }
+      setError(err instanceof Error ? err.message : 'Could not load');
+      // Keep whatever is on screen, but say plainly that it is old.
+      setStale(true);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (token) load(token, days).catch(() => {});
+  }, [token, days, load]);
+
+  const signIn = async () => {
+    setSigningIn(true);
+    setGateError(null);
+    try {
+      const { token: tok } = await adminFetch<{ token: string }>('/api/admin/auth', null, {
+        method: 'POST',
+        body: { password },
+      });
+      setPassword('');
+      setToken(tok);
+    } catch (err) {
+      setGateError(err instanceof Error ? err.message : 'Could not sign in');
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const toggleKey = (key: string) =>
+    setActiveKeys((cur) => {
+      const next = new Set(cur);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      // Switching everything off leaves an empty chart that reads as broken
+      // with no obvious way back; the last one stays on.
+      return next.size === 0 ? cur : next;
+    });
+
+  /** Per-source totals WITHIN the selected window, for the legend counts. */
+  const windowTotals = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const p of stats?.activity ?? []) {
+      for (const [k, n] of Object.entries(p.counts)) out[k] = (out[k] ?? 0) + n;
+    }
+    return out;
+  }, [stats?.activity]);
+
+  // ---- password gate ------------------------------------------------------
+  if (!token) {
+    return (
+      <Screen>
+        <View style={styles.gate}>
+          <View style={styles.gateIcon}>
+            <LockKeyhole size={22} color={colors.onSealed} strokeWidth={1.75} />
+          </View>
+          <Text style={styles.gateTitle}>Analytics</Text>
+          <Text style={styles.gateHint}>Counts and names only. Nobody's content is ever read.</Text>
+          <TextField
+            label="Password"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+            autoCapitalize="none"
+            onSubmitEditing={signIn}
+          />
+          {gateError ? <FormError message={gateError} /> : null}
+          <PrimaryButton title={signingIn ? 'Checking…' : 'Unlock'} onPress={signIn} disabled={signingIn} />
+        </View>
+      </Screen>
+    );
+  }
+
+  const k = stats?.kpis;
 
   return (
-    <Pressable onPress={onPress} disabled={spinning} hitSlop={8} style={styles.headerBtn}>
-      <Animated.View style={{ transform: [{ rotate }] }}>
-        <RefreshCw size={18} color={spinning ? colors.inkFaint : colors.accent} strokeWidth={1.75} />
-      </Animated.View>
-    </Pressable>
+    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+      <View style={styles.header}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>Analytics</Text>
+          <Text style={styles.subtitle}>
+            {stale ? 'Showing the last numbers that loaded' : `Updated ${ago(stats?.generatedAt ?? null)}`}
+          </Text>
+        </View>
+        <View style={styles.headerBtns}>
+          <View style={styles.segment}>
+            {WINDOWS.map((w) => (
+              <Pressable
+                key={w}
+                onPress={() => setDays(w)}
+                style={[styles.segmentBtn, days === w && styles.segmentBtnActive]}
+              >
+                <Text style={[styles.segmentText, days === w && styles.segmentTextActive]}>{w}d</Text>
+              </Pressable>
+            ))}
+          </View>
+          <Pressable
+            onPress={() => token && load(token, days)}
+            disabled={loading}
+            style={styles.iconBtn}
+            accessibilityLabel="Refresh"
+          >
+            <Animated.View
+              style={{
+                transform: [{ rotate: spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }],
+              }}
+            >
+              <RefreshCw size={17} color={colors.ink} strokeWidth={1.75} />
+            </Animated.View>
+          </Pressable>
+          <Pressable onPress={() => setToken(null)} style={styles.iconBtn} accessibilityLabel="Lock">
+            <LockKeyhole size={17} color={colors.ink} strokeWidth={1.75} />
+          </Pressable>
+        </View>
+      </View>
+
+      {stale && error ? (
+        <View style={styles.staleBanner}>
+          <AlertTriangle size={15} color={colors.danger} strokeWidth={1.75} />
+          <Text style={styles.staleText}>Refresh failed: {error}</Text>
+        </View>
+      ) : null}
+
+      {!stats ? (
+        <Text style={styles.loading}>{loading ? 'Loading…' : error ?? 'No data'}</Text>
+      ) : (
+        <>
+          <HealthStrip health={stats.health} />
+
+          <View style={styles.kpiGrid}>
+            <KpiCard
+              label="Active spaces"
+              sub="made something in 7d"
+              kpi={k!.activeSpaces}
+              of={stats.membership.spaces}
+              color={seriesColor(0)}
+            />
+            <KpiCard label="Spaces" sub="couples with people in them" kpi={k!.spaces} color={seriesColor(4)} />
+            <KpiCard label="People" sub="signed up" kpi={k!.people} color={seriesColor(2)} />
+            <KpiCard label="Things made" sub={`in ${days}d`} kpi={k!.content} color={seriesColor(1)} />
+          </View>
+
+          <Section title="Activity" hint="Tap or hover a day. Tap a source to filter.">
+            <TrendChart
+              data={stats.activity}
+              keys={stats.sources}
+              activeKeys={activeKeys}
+              emptyLabel="Nothing made in this window."
+            />
+            <Legend
+              keys={stats.sources}
+              labels={SOURCE_LABELS}
+              activeKeys={activeKeys}
+              totals={windowTotals}
+              onToggle={toggleKey}
+            />
+          </Section>
+
+          <Section
+            title="Spaces"
+            hint={`${stats.membership.paired} paired · ${stats.membership.solo} solo${
+              stats.membership.empty ? ` · ${stats.membership.empty} empty` : ''
+            }`}
+          >
+            <CoupleTable couples={stats.couples} sources={stats.sources} />
+          </Section>
+
+          <View style={styles.twoUp}>
+            <Section title="What they make" style={styles.half}>
+              <BarList rows={stats.contentMix} labels={SOURCE_LABELS} />
+            </Section>
+            <Section title="Engagement" style={styles.half}>
+              <StatGrid
+                items={[
+                  ['On a streak', stats.engagement.onStreak],
+                  ['Longest ever', stats.engagement.longestEver],
+                  ['Game rounds', stats.engagement.gameRounds],
+                  ['To-dos done', `${stats.engagement.todosDone}/${stats.engagement.todos}`],
+                  ['Reactions', stats.engagement.reactions],
+                  ['Capsules', stats.engagement.capsules],
+                  ['Reflections', stats.engagement.reflections],
+                  ['Via referral', stats.engagement.referred],
+                ]}
+              />
+            </Section>
+          </View>
+
+          <Text style={styles.footnote}>
+            Streak figures read the cached counters on each couple, refreshed when a prompt reveals. Each couple's own
+            screen recomputes from history and is the source of truth.
+          </Text>
+        </>
+      )}
+    </ScrollView>
   );
 }
 
-function Group({ label, children }: { label: string; children: React.ReactNode }) {
+/**
+ * The first thing on the page, because a dashboard that buries breakage under
+ * growth numbers is decoration. Every row is actionable, and rows at zero
+ * disappear rather than sitting there as green noise.
+ */
+function HealthStrip({ health }: { health: Stats['health'] }) {
+  const issues: { label: string; value: number; hint: string }[] = [];
+  if (health.noPushSubscription > 0)
+    issues.push({
+      label: 'no push subscription',
+      value: health.noPushSubscription,
+      hint: `of ${health.totalPeople} people. Every reminder silently skips them.`,
+    });
+  if (health.notificationsOff > 0)
+    issues.push({ label: 'notifications off', value: health.notificationsOff, hint: 'switched off by choice' });
+  if (health.emptySpaces > 0)
+    issues.push({ label: 'empty spaces', value: health.emptySpaces, hint: 'couple rows with no members left' });
+  if (health.unpairedPeople > 0)
+    issues.push({ label: 'people with no space', value: health.unpairedPeople, hint: 'should not be possible' });
+
+  if (issues.length === 0) {
+    return (
+      <View style={[styles.health, { borderColor: colors.positive }]}>
+        <Text style={[styles.healthTitle, { color: colors.positive }]}>Everything looks healthy</Text>
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.group}>
-      <Text style={[text.section, { marginBottom: sp.md }]}>{label}</Text>
+    <View style={styles.health}>
+      <View style={styles.healthHead}>
+        <AlertTriangle size={14} color={colors.danger} strokeWidth={2} />
+        <Text style={styles.healthTitle}>Needs attention</Text>
+      </View>
+      <View style={styles.healthRows}>
+        {issues.map((i) => (
+          <View key={i.label} style={styles.healthRow}>
+            <Text style={styles.healthValue}>{i.value}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.healthLabel}>{i.label}</Text>
+              <Text style={styles.healthHint}>{i.hint}</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+/** Label, value, delta, shape. The order every readable KPI card uses. */
+function KpiCard({
+  label: title,
+  sub,
+  kpi,
+  of,
+  color,
+}: {
+  label: string;
+  sub: string;
+  kpi: Kpi;
+  /** Renders "5 of 7" when the value is a share of something. */
+  of?: number;
+  color: string;
+}) {
+  const d = kpi.deltaPct;
+  const dir = d === null || d === 0 ? 'flat' : d > 0 ? 'up' : 'down';
+  const DeltaIcon = dir === 'up' ? ArrowUpRight : dir === 'down' ? ArrowDownRight : ArrowRight;
+  const deltaColor = dir === 'up' ? colors.positive : dir === 'down' ? colors.danger : colors.inkFaint;
+
+  return (
+    <View style={styles.kpi}>
+      <Text style={styles.kpiLabel}>{title}</Text>
+      <View style={styles.kpiValueRow}>
+        <Text style={styles.kpiValue}>{kpi.value.toLocaleString()}</Text>
+        {of !== undefined && <Text style={styles.kpiOf}>of {of}</Text>}
+      </View>
+      <View style={styles.kpiFooter}>
+        <View style={styles.kpiDelta}>
+          {d === null ? (
+            <Text style={styles.kpiSub}>{sub}</Text>
+          ) : (
+            <>
+              <DeltaIcon size={13} color={deltaColor} strokeWidth={2} />
+              <Text style={[styles.kpiDeltaText, { color: deltaColor }]}>{Math.abs(d)}%</Text>
+              <Text style={styles.kpiSub}>vs prev.</Text>
+            </>
+          )}
+        </View>
+        <Sparkline values={kpi.spark} color={color} width={72} height={24} />
+      </View>
+    </View>
+  );
+}
+
+/**
+ * The leaderboard, which is what this dashboard is really for: which couples
+ * are thriving, and which signed up and vanished. Names are shown deliberately
+ * (see the API's header comment); nothing beside the name is anything but a
+ * count.
+ */
+function CoupleTable({ couples, sources }: { couples: Stats['couples']; sources: string[] }) {
+  const [showEmpty, setShowEmpty] = useState(false);
+  const real = couples.filter((c) => !c.empty);
+  const empty = couples.filter((c) => c.empty);
+  const rows = showEmpty ? [...real, ...empty] : real;
+  const top = Math.max(...real.map((c) => c.total), 1);
+
+  return (
+    <View>
+      <View style={[styles.trow, styles.thead]}>
+        <Text style={[styles.thName, styles.th]}>Couple</Text>
+        <Text style={[styles.thBar, styles.th]}>Makeup</Text>
+        <Text style={[styles.thNum, styles.th]}>Items</Text>
+        <Text style={[styles.thNum, styles.th]}>Streak</Text>
+        <Text style={[styles.thLast, styles.th]}>Last seen</Text>
+      </View>
+
+      {rows.map((c, i) => (
+        <View key={c.id} style={styles.trow}>
+          <View style={styles.thName}>
+            <Text style={styles.cName} numberOfLines={1}>
+              {c.names.length > 0 ? c.names.join(' + ') : 'empty space'}
+            </Text>
+            <Text style={styles.cMeta}>
+              {c.id} · {c.members === 2 ? 'paired' : c.members === 1 ? 'solo' : 'no members'}
+            </Text>
+          </View>
+          <View style={styles.thBar}>
+            <StackStrip counts={c.counts} keys={sources} />
+            <View style={styles.miniTrack}>
+              <View style={{ width: `${(c.total / top) * 100}%`, height: '100%', backgroundColor: colors.inkFaint }} />
+            </View>
+          </View>
+          <Text style={[styles.thNum, styles.cNum, i === 0 && !c.empty && styles.cNumTop]}>{c.total}</Text>
+          <Text style={[styles.thNum, styles.cNum]}>{c.streak > 0 ? c.streak : '·'}</Text>
+          <Text style={[styles.thLast, styles.cLast]}>{ago(c.last_active)}</Text>
+        </View>
+      ))}
+
+      {empty.length > 0 && (
+        <Pressable onPress={() => setShowEmpty((s) => !s)} style={styles.showMore}>
+          <Text style={styles.showMoreText}>
+            {showEmpty ? 'Hide' : 'Show'} {empty.length} empty space{empty.length === 1 ? '' : 's'}
+          </Text>
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
+function StatGrid({ items }: { items: [string, string | number][] }) {
+  return (
+    <View style={styles.statGrid}>
+      {items.map(([l, v]) => (
+        <View key={l} style={styles.statCell}>
+          <Text style={styles.statValue}>{v}</Text>
+          <Text style={styles.statLabel}>{l}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function Section({
+  title,
+  hint,
+  style,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  style?: any;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={[styles.section, style]}>
+      <View style={styles.sectionHead}>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        {hint ? <Text style={styles.sectionHint}>{hint}</Text> : null}
+      </View>
       {children}
     </View>
   );
 }
 
-function Tile({ label, value }: { label: string; value: number | string }) {
-  return (
-    <View style={styles.tile}>
-      <Text style={styles.tileValue}>{typeof value === 'number' ? value.toLocaleString() : value}</Text>
-      <Text style={text.caption}>{label}</Text>
-    </View>
-  );
-}
-
-function AdminGate({ notice, onUnlocked }: { notice: string | null; onUnlocked: (token: string) => void }) {
-  const [password, setPassword] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const submit = async () => {
-    if (!password.trim() || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const data = await adminFetch<{ token: string }>('/api/admin/auth', null, {
-        method: 'POST',
-        body: { password },
-      });
-      onUnlocked(data.token);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong');
-      setBusy(false);
-    }
-    // On success the gate unmounts, so busy is deliberately left set.
-  };
-
-  return (
-    <Screen>
-      <View style={styles.gateWrap}>
-        <Card style={styles.gateCard}>
-          <Text style={[text.title, { marginBottom: sp.xs }]}>Admin</Text>
-          <Text style={[text.caption, { marginBottom: sp.lg }]}>Analytics for Ours. Counts only, never content.</Text>
-          {notice && <Text style={styles.notice}>{notice}</Text>}
-          <TextField
-            label="Password"
-            value={password}
-            onChangeText={setPassword}
-            placeholder="••••••••"
-            secureTextEntry
-            autoFocus
-            onSubmitEditing={submit}
-          />
-          <FormError message={error} />
-          <PrimaryButton title="Enter" onPress={submit} loading={busy} disabled={!password.trim()} />
-        </Card>
-      </View>
-    </Screen>
-  );
-}
-
-function timeOfDay(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return 'just now';
-  const h = d.getHours() % 12 || 12;
-  const m = d.getMinutes().toString().padStart(2, '0');
-  return `${h}:${m} ${d.getHours() >= 12 ? 'pm' : 'am'}`;
-}
+/** Tabular figures keep columns of numbers from jittering as values change. */
+const MONO: TextStyle = { fontVariant: ['tabular-nums'] };
 
 const styles = StyleSheet.create({
-  gateWrap: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: sp.xl,
-  },
-  gateCard: {
-    width: '100%',
-    maxWidth: 360,
-  },
-  notice: {
-    ...text.caption,
-    color: colors.accent,
-    marginBottom: sp.md,
-  },
-  body: {
-    padding: sp.xl,
+  screen: { flex: 1, backgroundColor: colors.surface },
+  content: {
+    padding: sp.base,
     paddingBottom: sp.huge,
     width: '100%',
-    maxWidth: 760,
+    maxWidth: 1100,
     alignSelf: 'center',
+    gap: sp.md,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: sp.xs,
-    marginBottom: sp.xl,
-  },
-  headerBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: radius.pill,
+  loading: { ...text.caption, color: colors.inkMuted, textAlign: 'center', paddingVertical: sp.huge },
+
+  gate: { gap: sp.md, maxWidth: 340, width: '100%', alignSelf: 'center', paddingTop: sp.huge },
+  gateIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.surfaceSealed,
     alignItems: 'center',
     justifyContent: 'center',
+    alignSelf: 'center',
+  },
+  gateTitle: { ...text.title, textAlign: 'center' },
+  gateHint: { ...text.caption, color: colors.inkMuted, textAlign: 'center', marginBottom: sp.sm },
+
+  header: { flexDirection: 'row', alignItems: 'flex-start', gap: sp.md, marginBottom: sp.xs },
+  title: { fontSize: 24, fontWeight: '700', color: colors.ink, letterSpacing: -0.4 },
+  subtitle: { ...text.caption, color: colors.inkMuted, marginTop: 1 },
+  headerBtns: { flexDirection: 'row', alignItems: 'center', gap: sp.sm },
+  segment: {
+    flexDirection: 'row',
     borderWidth: 1,
     borderColor: colors.hairline,
+    borderRadius: radius.pill,
+    overflow: 'hidden',
+    backgroundColor: colors.surfaceRaised,
   },
-  errorCard: {
-    borderColor: colors.danger,
-    marginBottom: sp.lg,
-  },
-  group: {
-    marginBottom: sp.xxl,
-  },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  tile: {
-    width: '33.33%',
-    paddingRight: sp.sm,
-    marginBottom: sp.lg,
-  },
-  tileValue: {
-    ...text.subtitle,
-    fontSize: 22,
-    color: colors.surfaceSealed,
-    fontVariant: ['tabular-nums'],
-  },
-  footnote: {
-    ...text.micro,
-    textTransform: 'none',
-    letterSpacing: 0.2,
-    color: colors.inkFaint,
-    lineHeight: 16,
-  },
-  chartHeader: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    marginBottom: sp.base,
-  },
-  link: {
-    ...text.caption,
-    color: colors.accent,
-  },
-  barsRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    height: CHART_HEIGHT,
-    gap: 2,
-  },
-  barCol: {
-    flex: 1,
-    height: CHART_HEIGHT,
-    justifyContent: 'flex-end',
+  segmentBtn: { paddingHorizontal: sp.md, paddingVertical: 6 },
+  segmentBtnActive: { backgroundColor: colors.surfaceSealed },
+  segmentText: { ...text.micro, textTransform: 'none', letterSpacing: 0, color: colors.inkMuted },
+  segmentTextActive: { color: colors.onSealed, fontWeight: '600' },
+  iconBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.surfaceRaised,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  bar: {
-    width: '100%',
-    maxWidth: 10,
-    borderTopLeftRadius: radius.hairline,
-    borderTopRightRadius: radius.hairline,
-  },
-  axisLine: {
-    height: 1,
-    backgroundColor: colors.hairline,
-  },
-  chartCaption: {
-    ...text.caption,
-    marginTop: sp.sm,
-    textAlign: 'center',
-    color: colors.ink,
-  },
-  chartSub: {
-    ...text.caption,
-    marginTop: sp.xs,
-    textAlign: 'center',
-    color: colors.inkFaint,
-  },
-  barRow: {
+
+  staleBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: sp.sm,
+    padding: sp.sm,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.danger,
   },
-  barLabel: {
-    width: 110,
+  staleText: { ...text.caption, color: colors.danger, flex: 1 },
+
+  health: {
+    borderWidth: 1,
+    borderColor: colors.danger,
+    borderRadius: radius.md,
+    padding: sp.md,
+    backgroundColor: colors.surfaceRaised,
+    gap: sp.sm,
   },
-  track: {
-    flex: 1,
-    height: 10,
-    borderRadius: radius.hairline,
-    backgroundColor: colors.hairline,
-    overflow: 'hidden',
+  healthHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  healthTitle: { ...text.micro, color: colors.danger, fontWeight: '700' },
+  healthRows: { flexDirection: 'row', flexWrap: 'wrap', gap: sp.md },
+  healthRow: { flexDirection: 'row', alignItems: 'flex-start', gap: sp.sm, minWidth: 210, flex: 1 },
+  healthValue: { fontSize: 20, fontWeight: '700', color: colors.danger, lineHeight: 22, ...MONO },
+  healthLabel: { ...text.caption, color: colors.ink, fontWeight: '600' },
+  healthHint: { ...text.micro, textTransform: 'none', letterSpacing: 0, color: colors.inkMuted },
+
+  kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: sp.sm },
+  kpi: {
+    flexGrow: 1,
+    flexBasis: 190,
+    minWidth: 168,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceRaised,
+    padding: sp.md,
+    gap: 2,
   },
-  trackFill: {
-    height: '100%',
-    backgroundColor: colors.surfaceSealed,
-    borderTopRightRadius: radius.hairline,
-    borderBottomRightRadius: radius.hairline,
+  kpiLabel: { ...text.micro, color: colors.inkMuted, fontWeight: '600' },
+  kpiValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 5 },
+  kpiValue: { fontSize: 28, fontWeight: '700', color: colors.ink, letterSpacing: -0.6, ...MONO },
+  kpiOf: { ...text.caption, color: colors.inkFaint },
+  kpiFooter: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 2 },
+  kpiDelta: { flexDirection: 'row', alignItems: 'center', gap: 3, flex: 1 },
+  kpiDeltaText: { ...text.caption, fontWeight: '700', ...MONO },
+  kpiSub: { ...text.micro, textTransform: 'none', letterSpacing: 0, color: colors.inkFaint, flexShrink: 1 },
+
+  section: {
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceRaised,
+    padding: sp.md,
   },
-  barValue: {
-    width: 52,
-    textAlign: 'right',
-    fontVariant: ['tabular-nums'],
+  sectionHead: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: sp.sm,
+    marginBottom: sp.md,
   },
-  coupleRow: {
-    paddingVertical: sp.md,
-  },
-  coupleBorder: {
-    borderTopWidth: 1,
-    borderTopColor: colors.hairline,
-  },
-  coupleHead: {
+  sectionTitle: { ...text.subtitle, fontSize: 15 },
+  sectionHint: { ...text.micro, textTransform: 'none', letterSpacing: 0, color: colors.inkFaint, flexShrink: 1 },
+  twoUp: { flexDirection: 'row', flexWrap: 'wrap', gap: sp.md },
+  half: { flexGrow: 1, flexBasis: 320 },
+
+  trow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: sp.xs,
+    gap: sp.sm,
+    paddingVertical: sp.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairline,
   },
-  coupleId: {
-    ...text.body,
-    fontVariant: ['tabular-nums'],
-    ...(Platform.OS === 'web' ? ({ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' } as any) : null),
-  },
-  coupleTotal: {
-    ...text.subtitle,
-    color: colors.surfaceSealed,
-    fontVariant: ['tabular-nums'],
-  },
-  coupleTrack: {
-    height: 8,
-    borderRadius: radius.hairline,
-    backgroundColor: colors.hairline,
-    overflow: 'hidden',
-  },
-  coupleFill: {
-    height: '100%',
-    backgroundColor: colors.surfaceSealed,
-    borderTopRightRadius: radius.hairline,
-    borderBottomRightRadius: radius.hairline,
-  },
-  coupleMeta: {
-    ...text.micro,
-    textTransform: 'none',
-    letterSpacing: 0.2,
-    color: colors.inkFaint,
-    marginTop: 2,
-  },
-  showAll: {
-    marginTop: sp.md,
-    alignSelf: 'center',
-  },
+  thead: { paddingTop: 0, paddingBottom: 6 },
+  th: { ...text.micro, color: colors.inkFaint },
+  thName: { flex: 3, minWidth: 130 },
+  thBar: { flex: 2, minWidth: 70, gap: 3 },
+  thNum: { width: 52, textAlign: 'right' },
+  thLast: { width: 76, textAlign: 'right' },
+  cName: { ...text.caption, color: colors.ink, fontWeight: '600' },
+  cMeta: { ...text.micro, textTransform: 'none', letterSpacing: 0, color: colors.inkFaint },
+  cNum: { ...text.caption, color: colors.ink, ...MONO },
+  cNumTop: { fontWeight: '700', color: colors.accent },
+  cLast: { ...text.micro, textTransform: 'none', letterSpacing: 0, color: colors.inkMuted },
+  miniTrack: { height: 2, borderRadius: 1, overflow: 'hidden' },
+  showMore: { paddingVertical: sp.sm, alignItems: 'center' },
+  showMoreText: { ...text.micro, textTransform: 'none', letterSpacing: 0, color: colors.accent },
+
+  statGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: sp.md },
+  statCell: { flexGrow: 1, flexBasis: 68, minWidth: 62 },
+  statValue: { fontSize: 18, fontWeight: '700', color: colors.ink, ...MONO },
+  statLabel: { ...text.micro, textTransform: 'none', letterSpacing: 0, color: colors.inkMuted },
+
+  footnote: { ...text.micro, textTransform: 'none', letterSpacing: 0, color: colors.inkFaint, lineHeight: 15 },
 });
