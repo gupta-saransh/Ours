@@ -2,7 +2,12 @@ import { one, q } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
 import { publish } from '../_lib/ably';
 import { notify } from '../_lib/notify';
+import { roundStateFor, type AnswerRow } from '../_lib/game-rounds';
 import { route, HttpError } from '../_lib/respond';
+
+// The round rules now live in _lib/game-rounds.ts so the reminder cron can
+// share them. Re-exported here because this module was their original home.
+export { ROUND_TWO_DELAY_MS, hasUnplayedRound, roundStateFor } from '../_lib/game-rounds';
 
 /**
  * This-or-That: the daily two-tap game. One pair of options per day (static
@@ -86,9 +91,6 @@ function todayUTC(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-/** How long after round one is settled the second question opens. */
-export const ROUND_TWO_DELAY_MS = 12 * 60 * 60 * 1000;
-
 /**
  * Both of the day's pairs. Round two is derived from a salted date so it is
  * deterministic like round one, and nudged along if the hash happens to land on
@@ -105,36 +107,6 @@ export function gamesForToday(): { game_date: string; rounds: [GamePair, GamePai
 export function todaysGame(): { game_date: string } & GamePair {
   const { game_date, rounds } = gamesForToday();
   return { game_date, ...rounds[0] };
-}
-
-interface AnswerRow {
-  user_id: string;
-  pick: 'a' | 'b';
-  guess: 'a' | 'b';
-  pick2: 'a' | 'b' | null;
-  guess2: 'a' | 'b' | null;
-  created_at: string;
-}
-
-/**
- * Which round is in play, and when the next one opens.
- *
- * Round one is always available. Round two opens 12 hours after BOTH partners
- * have answered round one, measured from the later of the two answers, so it
- * arrives as a reward for playing rather than as a second chore.
- */
-export function roundStateFor(rows: AnswerRow[], now = Date.now()) {
-  const bothPlayedOne = rows.length >= 2;
-  if (!bothPlayedOne) return { round: 1 as const, opensAt: null as string | null };
-
-  const times = rows.map((r) => new Date(r.created_at).getTime()).filter((t) => Number.isFinite(t));
-  // No usable timestamp: stay on round one rather than let a NaN comparison
-  // (every comparison with NaN is false) quietly open the second question.
-  if (times.length === 0) return { round: 1 as const, opensAt: null as string | null };
-
-  const opens = Math.max(...times) + ROUND_TWO_DELAY_MS;
-  if (now < opens) return { round: 1 as const, opensAt: new Date(opens).toISOString() };
-  return { round: 2 as const, opensAt: null as string | null };
 }
 
 /**

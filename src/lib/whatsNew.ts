@@ -20,6 +20,15 @@ export interface WhatsNewEntry {
 // Newest first. Add an entry here whenever something user-facing ships.
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: '2026-07-19-chat-and-game',
+    title: 'A tidier chat, a quicker game',
+    bullets: [
+      'Chat now keeps one steady column: photos line up with your words, and long messages wrap without breaking words in half.',
+      'The second This or That question opens three hours after you both play, instead of waiting half a day.',
+      'Your daily question arrives at 9:30 in the morning, and the end-of-day nudge at 9:30 at night.',
+    ],
+  },
+  {
     id: '2026-07-19-countdown',
     title: 'Countdown banners',
     bullets: [

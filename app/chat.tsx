@@ -13,6 +13,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { Redirect, useRouter } from 'expo-router';
@@ -31,6 +32,7 @@ import { Empty, PrimaryButton, SecondaryButton } from '@/components/kit';
 import { Sheet } from '@/components/Sheet';
 import { ReactionPicker } from '@/components/ReactionPicker';
 import { applyReaction, groupReactions, nextReactionAction, QUICK_REACTIONS, type ReactionRow } from '@/lib/chatReactions';
+import { BUBBLE_TEXT_WRAP, bubbleImageSize, bubbleMaxWidth } from '@/lib/bubbleLayout';
 import { colors, font, radius, sp, text } from '@/theme';
 import { formatTime } from '@/lib/format';
 
@@ -49,6 +51,9 @@ interface Message {
 /** How far a bubble must be dragged right before releasing it triggers a reply. */
 const SWIPE_TRIGGER = 44;
 const SWIPE_MAX = 64;
+
+/** The thread's centred content column (the list, reply bar, and composer all share it). */
+const LIST_MAX_WIDTH = 680;
 
 // Bubbles now open on a plain tap rather than a long-press, but a slightly
 // dragged tap or a double-tap can still read as a text-selection gesture on
@@ -108,6 +113,12 @@ export default function Chat() {
   const { status, user, partner } = useAuth();
   const router = useRouter();
   const toast = useToast();
+  // ONE width budget for the whole thread. Every bubble caps at the same pixel
+  // width and every photo fills exactly that width, so the column has a single
+  // straight edge instead of sizing itself per message.
+  const { width } = useWindowDimensions();
+  const maxBubble = bubbleMaxWidth(Math.min(width, LIST_MAX_WIDTH) - sp.base * 2);
+  const imageSize = bubbleImageSize(maxBubble);
   // `msgs` is newest-first to feed an inverted list (newest at the bottom).
   const [msgs, setMsgs] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -365,6 +376,8 @@ export default function Chat() {
                     quoted={item.reply_to_id ? msgs.find((x) => x.id === item.reply_to_id) ?? null : null}
                     quotedName={(sid) => (sid === user?.id ? 'You' : partner?.display_name ?? 'Them')}
                     reactions={groupReactions(item.reactions ?? [], user?.id)}
+                    maxWidth={maxBubble}
+                    imageSize={imageSize}
                     onOpenImage={() => item.image_thumb && setViewer({ id: item.id, thumb: item.image_thumb })}
                     onAddToTimeline={() => addToTimeline(item)}
                     onOpenActions={() => !item.pending && setActionsFor(item)}
@@ -613,6 +626,8 @@ function Bubble({
   quoted,
   quotedName,
   reactions,
+  maxWidth,
+  imageSize,
   onOpenImage,
   onAddToTimeline,
   onOpenActions,
@@ -627,6 +642,10 @@ function Bubble({
   quoted: Message | null;
   quotedName: (senderId: string) => string;
   reactions: { emoji: string; count: number; mine: boolean }[];
+  /** Shared by every bubble in the thread, so the column has one straight edge. */
+  maxWidth: number;
+  /** The image frame, sized from maxWidth so photos end where text does. */
+  imageSize: { width: number; height: number };
   onOpenImage: () => void;
   onAddToTimeline: () => void;
   /** A tap on the bubble opens the React / Reply / Delete sheet (the small ✦ mark is the hint). */
@@ -636,9 +655,11 @@ function Bubble({
   const hasImage = !!message.image_thumb;
   return (
     <View style={[styles.bubbleRow, mine ? styles.rowMine : styles.rowTheirs, { marginTop: grouped ? 2 : sp.md }]}>
-      {/* flexShrink keeps the bubble inside its 80% cap even when a long
-          unbroken token (a URL) would otherwise push it off screen. */}
-      <View style={{ maxWidth: '80%', flexShrink: 1, alignItems: mine ? 'flex-end' : 'flex-start' }}>
+      {/* One shared pixel cap for the whole thread (not a percentage of the
+          screen, which made every bubble a different width). flexShrink +
+          minWidth 0 let a bubble holding one long unbroken token shrink below
+          its min-content width instead of pushing past that cap. */}
+      <View style={{ maxWidth, flexShrink: 1, minWidth: 0, alignItems: mine ? 'flex-end' : 'flex-start' }}>
         <Pressable
           onPress={onOpenActions}
           style={[
@@ -660,13 +681,25 @@ function Bubble({
           ) : null}
           {hasImage && (
             <Pressable onPress={onOpenImage}>
-              <Image source={{ uri: message.image_thumb! }} style={styles.bubbleImage} contentFit="cover" transition={120} />
+              <Image
+                source={{ uri: message.image_thumb! }}
+                style={[styles.bubbleImage, imageSize]}
+                contentFit="cover"
+                transition={120}
+              />
             </Pressable>
           )}
           {message.body ? (
             <LinkedText
               body={message.body}
-              style={[styles.bubbleText, hasImage && { marginTop: sp.sm }, mine && { color: colors.onSealed }, noSelect]}
+              style={[
+                styles.bubbleText,
+                // A captioned photo already sets the bubble's width, so the
+                // caption gets that width to wrap inside rather than widening it.
+                hasImage && { marginTop: sp.sm, width: imageSize.width },
+                mine && { color: colors.onSealed },
+                noSelect,
+              ]}
               linkColor={mine ? colors.onSealed : colors.accent}
             />
           ) : null}
@@ -769,7 +802,7 @@ const styles = StyleSheet.create({
     paddingBottom: sp.lg,
     flexGrow: 1,
     width: '100%',
-    maxWidth: 680,
+    maxWidth: LIST_MAX_WIDTH,
     alignSelf: 'center',
   },
   emptyWrap: {
@@ -813,8 +846,8 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: radius.hairline,
   },
   bubbleImage: {
-    width: 220,
-    height: 220,
+    // width/height come from bubbleImageSize(), so a photo is exactly as wide
+    // as the widest line of text can be. Do not hardcode a size here.
     borderRadius: radius.sm,
     backgroundColor: colors.blushSoft,
   },
@@ -824,10 +857,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 22,
     paddingHorizontal: sp.xs,
-    // Long unbroken tokens (URLs) must wrap inside the bubble. 'anywhere'
-    // affects min-content sizing, which plain break-word does not, so without
-    // it a pasted URL stretches the bubble past the screen edge.
-    ...(Platform.OS === 'web' ? ({ wordBreak: 'break-word', overflowWrap: 'anywhere' } as any) : null),
+    // Ordinary words flow WHOLE onto the next line; only a token too long to
+    // fit a line by itself is ever split. See BUBBLE_TEXT_WRAP for why this is
+    // no longer 'anywhere', which split words mid-word.
+    ...(Platform.OS === 'web' ? (BUBBLE_TEXT_WRAP as any) : null),
   },
   quote: {
     borderLeftWidth: 2,
@@ -860,7 +893,7 @@ const styles = StyleSheet.create({
     borderTopColor: colors.hairline,
     backgroundColor: colors.surfaceRaised,
     width: '100%',
-    maxWidth: 680,
+    maxWidth: LIST_MAX_WIDTH,
     alignSelf: 'center',
   },
   replyBarName: {
@@ -999,7 +1032,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.hairline,
     width: '100%',
-    maxWidth: 680,
+    maxWidth: LIST_MAX_WIDTH,
     alignSelf: 'center',
   },
   imageBtn: {

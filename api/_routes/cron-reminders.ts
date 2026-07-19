@@ -2,6 +2,7 @@ import { q, one } from '../_lib/db';
 import { missingVapidVars, sendPush } from '../_lib/push';
 import { pickDateReminder } from '../_lib/date-reminders';
 import { dueForCountdown, type MilestoneRow } from '../_lib/milestone-countdown';
+import { hasUnplayedRound, type AnswerRow } from '../_lib/game-rounds';
 import { log } from '../_lib/log';
 import { route, HttpError } from '../_lib/respond';
 
@@ -20,6 +21,12 @@ import { route, HttpError } from '../_lib/respond';
  *   ?kind=prompt morning nudge: anyone who has not answered today's question
  *                yet gets a push pointing at it. Run once a day, in the
  *                morning of your timezone.
+ *   ?kind=game   This-or-That nudge: anyone whose couple has a round of the
+ *                daily game open that THEY have not played yet gets a push.
+ *                Run twice a day (afternoon and evening); the second round
+ *                opens a few hours after the first is settled, so the two runs
+ *                naturally cover one round each without ever nudging someone
+ *                about a question they already answered.
  *   ?kind=milestone countdown reminders: for every milestone whose countdown
  *                window is open (see api/_lib/milestone-countdown.ts,
  *                notify_days_before, 0 = off, 7 by default), both partners get
@@ -187,6 +194,93 @@ export default route(['POST', 'GET'], async (req, res) => {
           url: '/prompts',
         },
         'cron:prompt'
+      );
+      if (result.delivered) sent += 1;
+      else failed.push(result.reason);
+    }
+
+    const report = {
+      kind,
+      users: users.length,
+      eligible: users.length - skipped.length,
+      sent,
+      skipped: tally(skipped),
+      failed: tally(failed),
+      missing_vapid_env: missingVapid,
+      duration_ms: Date.now() - startedAt,
+    };
+    log(sent === 0 && report.eligible > 0 ? 'warn' : 'info', 'cron.summary', report);
+    res.status(200).json(report);
+    return;
+  }
+
+  if (kind === 'game') {
+    // Two runs a day cover the day's two questions. Whether a person actually
+    // has something to play is decided by hasUnplayedRound (pure, shared with
+    // the game route), so a run that lands between rounds nudges nobody rather
+    // than nagging people about a question they already answered.
+    const gameDate = new Date().toISOString().slice(0, 10);
+
+    const users = await q<{
+      id: string;
+      couple_id: string;
+      notifications_enabled: boolean;
+      has_subscription: boolean;
+      members: number;
+    }>(
+      `SELECT u.id, u.couple_id, u.notifications_enabled,
+              (u.push_token IS NOT NULL) AS has_subscription,
+              (SELECT count(*) FROM users m WHERE m.couple_id = u.couple_id) AS members
+       FROM users u
+       WHERE u.couple_id IS NOT NULL`
+    );
+
+    // One query for every answer of the day, grouped in JS. Never one query per
+    // couple (see the admin dashboard's N+1 lesson in CLAUDE.md).
+    const answers = await q<AnswerRow & { couple_id: string }>(
+      `SELECT couple_id, user_id, pick, guess, pick2, guess2, created_at::STRING AS created_at
+       FROM daily_game_answers WHERE game_date = $1`,
+      [gameDate]
+    ).catch(() => [] as (AnswerRow & { couple_id: string })[]); // pre-v16/v18 deploy
+
+    const byCouple = new Map<string, AnswerRow[]>();
+    for (const a of answers) {
+      const list = byCouple.get(a.couple_id) ?? [];
+      list.push(a);
+      byCouple.set(a.couple_id, list);
+    }
+
+    const skipped: string[] = [];
+    const failed: (string | undefined)[] = [];
+    let sent = 0;
+
+    for (const u of users) {
+      if (!u.notifications_enabled) {
+        skipped.push('notifications-off');
+        continue;
+      }
+      if (!u.has_subscription) {
+        skipped.push('no-subscription');
+        continue;
+      }
+      // The game only pays off when both of you play, so never invite someone
+      // to play it alone.
+      if (Number(u.members) < 2) {
+        skipped.push('solo-space');
+        continue;
+      }
+      if (!hasUnplayedRound(byCouple.get(u.couple_id) ?? [], u.id)) {
+        skipped.push('nothing-open');
+        continue;
+      }
+      const result = await sendPush(
+        u.id,
+        {
+          title: 'Ours',
+          body: 'This or That is waiting. Two taps, then see how well you know each other. ♥',
+          url: '/',
+        },
+        'cron:game'
       );
       if (result.delivered) sent += 1;
       else failed.push(result.reason);

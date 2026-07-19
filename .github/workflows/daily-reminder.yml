@@ -15,8 +15,8 @@ name: Daily reminder
 
 on:
   schedule:
-    # 01:00 UTC daily. Change to land in your own evening.
-    - cron: '0 1 * * *'
+    # 16:00 UTC = 9:30 PM IST. Change to land in your own evening.
+    - cron: '0 16 * * *'
   workflow_dispatch: {} # lets you run it by hand from the Actions tab to test
 
 jobs:

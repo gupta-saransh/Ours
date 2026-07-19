@@ -1,21 +1,31 @@
-name: Daily prompt reminder
+name: This or That reminder
 
-# Morning nudge for the daily question: anyone who has not answered today's
-# prompt yet gets a Web Push pointing at it. Same setup as daily-reminder.yml
-# (repo secrets APP_URL + CRON_SECRET, matching CRON_SECRET in Vercel).
+# Twice-a-day nudge for the daily game: anyone whose couple has a round open
+# that THEY have not played yet gets a Web Push. The endpoint decides who is
+# actually waiting on a question (see hasUnplayedRound in
+# api/_lib/game-rounds.ts), so a run that lands between rounds simply reports
+# "nothing-open" and sends nothing rather than nagging.
 #
-# GitHub cron is UTC. 04:00 UTC = 9:30 AM IST. Adjust to your own morning.
+# Same setup as daily-reminder.yml / prompt-reminder.yml (repo secrets APP_URL
+# + CRON_SECRET, matching CRON_SECRET in Vercel).
+#
+# GitHub cron is UTC.
+#   09:00 UTC = 2:30 PM IST  (afternoon)
+#   15:00 UTC = 8:30 PM IST  (evening, ahead of the 9:30 PM daily reminder)
+# The day's second question opens a few hours after the first is settled, so
+# these two runs naturally cover one round each.
 
 on:
   schedule:
-    - cron: '0 4 * * *'
+    - cron: '0 9 * * *'
+    - cron: '0 15 * * *'
   workflow_dispatch: {} # lets you run it by hand from the Actions tab to test
 
 jobs:
   remind:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping morning prompt reminder
+      - name: Ping This or That reminder
         env:
           APP_URL: ${{ secrets.APP_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
@@ -27,7 +37,7 @@ jobs:
           # Print the endpoint's report (who was skipped and why), fail the job
           # on a non-2xx, and warn when nothing was delivered.
           response=$(curl -sS -w '\n%{http_code}' -X POST \
-            "$APP_URL/api/cron/reminders?kind=prompt" \
+            "$APP_URL/api/cron/reminders?kind=game" \
             -H "Authorization: Bearer $CRON_SECRET")
           status=$(echo "$response" | tail -n1)
           body=$(echo "$response" | sed '$d')
@@ -38,5 +48,5 @@ jobs:
             exit 1
           fi
           if echo "$body" | grep -q '"sent":0'; then
-            echo "::warning::No pushes were delivered. Check the skipped/failed counts above."
+            echo "::warning::No pushes were delivered. Check the skipped/failed counts above (nothing-open is normal between rounds)."
           fi
