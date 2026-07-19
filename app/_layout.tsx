@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { View } from 'react-native';
+import { View, Platform } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import {
@@ -16,6 +16,12 @@ import { registerServiceWorker } from '@/lib/push-web';
 import { installGlobalLogging } from '@/lib/log';
 import { captureInstallPrompt } from '@/lib/install';
 import { colors } from '@/theme';
+
+// Import Vercel Analytics for web only
+let Analytics: React.ComponentType<any> | null = null;
+if (Platform.OS === 'web') {
+  Analytics = require('@vercel/analytics/react').Analytics;
+}
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
@@ -50,6 +56,7 @@ export default function RootLayout() {
               contentStyle: { backgroundColor: colors.cream },
             }}
           />
+          {Analytics && <Analytics />}
         </ToastProvider>
       </RealtimeProvider>
     </AuthProvider>
