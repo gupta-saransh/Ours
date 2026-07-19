@@ -166,6 +166,10 @@ export default function Timeline() {
   // wordless entry then stays a note); `withPhoto` opens the picker straight
   // away, for the trigger row's photo shortcut.
   const [composer, setComposer] = useState<{ date: string | null; withPhoto?: boolean } | null>(null);
+  // The calendar is a BROWSER: tapping a day selects it and lists that day
+  // below, rather than jumping straight into the composer. Starts on today so
+  // the space under the calendar is never empty.
+  const [selectedDay, setSelectedDay] = useState<string>(today());
   const [viewer, setViewer] = useState<Memory | null>(null);
   const [reveal, setReveal] = useState<Note | null>(null);
   // Cards with their comment thread expanded inline (Facebook-style, below the
@@ -271,6 +275,28 @@ export default function Timeline() {
     }
     return out;
   }, [memories, notes]);
+
+  /**
+   * Everything that belongs to the selected calendar day, newest first. Uses
+   * the same "day it is about" rule as the feed (memory_date for photos,
+   * created_at for notes) so the list under the calendar always agrees with
+   * the ♥ on the cell above it. Pinned notes are INCLUDED here, unlike in the
+   * feed: the question this panel answers is "what is from this day", and a
+   * pinned note is still from its day.
+   */
+  const dayEntries = useMemo<Entry[]>(() => {
+    if (!memories || !notes) return [];
+    const items: Exclude<Entry, { type: 'header' }>[] = [
+      ...memories
+        .filter((m) => m.memory_date.slice(0, 10) === selectedDay)
+        .map((m) => ({ type: 'memory' as const, key: `dm${m.id}`, day: selectedDay, at: m.created_at, memory: m })),
+      ...notes
+        .filter((n) => n.created_at.slice(0, 10) === selectedDay)
+        .map((n) => ({ type: 'note' as const, key: `dn${n.id}`, day: selectedDay, at: n.created_at, note: n })),
+    ];
+    items.sort((a, b) => b.at.localeCompare(a.at));
+    return items;
+  }, [selectedDay, memories, notes]);
 
   /** A day lights up on the calendar when it holds a memory OR a note. */
   const daysWithSomething = useMemo(() => {
@@ -525,6 +551,27 @@ export default function Timeline() {
     />
   );
 
+  /** What the calendar view shows under the month grid: the selected day. */
+  const dayPanel = (
+    <View style={styles.dayPanel}>
+      <View style={styles.dayPanelHead}>
+        <Text style={text.subtitle}>{formatDay(selectedDay)}</Text>
+        <Pressable onPress={() => setComposer({ date: selectedDay })} hitSlop={8}>
+          <Text style={styles.dayPanelAdd}>+ Add to this day</Text>
+        </Pressable>
+      </View>
+      {dayEntries.length === 0 ? (
+        <Card>
+          <Text style={[text.caption, { textAlign: 'center' }]}>
+            Nothing kept from this day.
+          </Text>
+        </Card>
+      ) : (
+        dayEntries.map((e) => <View key={e.key}>{renderEntry({ item: e })}</View>)
+      )}
+    </View>
+  );
+
   const onDeleted = (id: string) => {
     setMemories((prev) => (prev ? prev.filter((m) => m.id !== id) : prev));
     setViewer(null);
@@ -567,7 +614,8 @@ export default function Timeline() {
         <View style={styles.wideRow}>
           <ScrollView style={styles.wideLeft} contentContainerStyle={{ padding: sp.xl }}>
             <Text style={[text.title, { marginBottom: sp.md }]}>Timeline</Text>
-            <TimelineCalendar days={daysWithSomething} onPickDate={(d) => setComposer({ date: d })} />
+            <TimelineCalendar days={daysWithSomething} selected={selectedDay} onPickDate={setSelectedDay} />
+            {dayPanel}
           </ScrollView>
           <View style={styles.wideRight}>
             <FlatList
@@ -606,7 +654,8 @@ export default function Timeline() {
       </View>
       {view === 'calendar' ? (
         <ScrollView contentContainerStyle={styles.list}>
-          <TimelineCalendar days={daysWithSomething} onPickDate={(d) => setComposer({ date: d })} />
+          <TimelineCalendar days={daysWithSomething} selected={selectedDay} onPickDate={setSelectedDay} />
+          {dayPanel}
         </ScrollView>
       ) : (
         <KeyboardAvoidingView
@@ -691,6 +740,7 @@ function MomentComposer({
   const [sparkIndex, setSparkIndex] = useState(new Date().getDate() % SPARKS.length);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [focused, setFocused] = useState(false);
   // Guards the "open the picker immediately" shortcut so it fires once per
   // opening, not on every re-render while the sheet is up.
   const autoPickedFor = useRef<string | null>(null);
@@ -819,22 +869,26 @@ function MomentComposer({
       <TextInput
         value={draft}
         onChangeText={setDraft}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
         placeholder={photo ? 'Say something about it, or leave it be...' : SPARKS[sparkIndex]}
         placeholderTextColor={colors.inkFaint}
         multiline
         autoFocus={!open?.withPhoto}
-        style={styles.composerInput}
+        style={[styles.composerInput, focused && styles.composerInputFocused]}
       />
 
       {sealOpen && (
-        <TextField
-          label="Seal until (YYYY-MM-DD)"
-          value={sealDate}
-          onChangeText={setSealDate}
-          placeholder="2027-02-14"
-          autoCapitalize="none"
-          style={{ height: 40 }}
-        />
+        <View style={{ marginTop: sp.base }}>
+          <TextField
+            label="Seal until (YYYY-MM-DD)"
+            value={sealDate}
+            onChangeText={setSealDate}
+            placeholder="2027-02-14"
+            autoCapitalize="none"
+            style={{ height: 40 }}
+          />
+        </View>
       )}
 
       <View style={styles.composerRow}>
@@ -1001,8 +1055,21 @@ function MemoryImage({ memory, onPress }: { memory: Memory; onPress: () => void 
   );
 }
 
-/** Month grid. Days holding a memory or a note show a ♥ instead of their number. */
-function TimelineCalendar({ days, onPickDate }: { days: Set<string>; onPickDate: (date: string) => void }) {
+/**
+ * Month grid. Days holding a memory or a note show a ♥ instead of their
+ * number, and tapping one SELECTS it: the day's entries are listed below the
+ * calendar rather than the tap opening a composer. Adding to a day is the
+ * "+ Add to this day" action in that panel.
+ */
+function TimelineCalendar({
+  days,
+  selected,
+  onPickDate,
+}: {
+  days: Set<string>;
+  selected: string;
+  onPickDate: (date: string) => void;
+}) {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
@@ -1049,29 +1116,43 @@ function TimelineCalendar({ days, onPickDate }: { days: Set<string>; onPickDate:
           const key = dayKey(year, month, day);
           const has = days.has(key);
           const isToday = isCurrentMonth && day === now.getDate();
+          const isSelected = key === selected;
           const future = new Date(year, month, day).getTime() > now.getTime();
           return (
             <Pressable
               key={key}
               disabled={future}
-              onPress={() => onPickDate(key)}
+              onPress={() => {
+                tapHaptic();
+                onPickDate(key);
+              }}
               style={({ pressed }) => [
                 styles.cell,
                 isToday && styles.cellToday,
+                isSelected && styles.cellSelected,
                 pressed && { backgroundColor: colors.blushSoft },
               ]}
             >
               {has ? (
-                <Text style={styles.cellHeart}>♥</Text>
+                <Text style={[styles.cellHeart, isSelected && { color: colors.onSealed }]}>♥</Text>
               ) : (
-                <Text style={[text.caption, { color: colors.ink }, future && { opacity: 0.3 }]}>{day}</Text>
+                <Text
+                  style={[
+                    text.caption,
+                    { color: colors.ink },
+                    future && { opacity: 0.3 },
+                    isSelected && { color: colors.onSealed, fontWeight: '600' },
+                  ]}
+                >
+                  {day}
+                </Text>
               )}
             </Pressable>
           );
         })}
       </View>
       <Text style={[text.caption, { textAlign: 'center', marginTop: sp.sm }]}>
-        Tap a day to keep a memory of it. ♥ marks the days you already have.
+        Tap a day to see what is from it. ♥ marks the days you already have.
       </Text>
     </Card>
   );
@@ -1270,7 +1351,19 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
   },
   cellToday: { borderWidth: 1, borderColor: colors.accent },
+  // The selected day is the one whose entries are listed below, so it reads as
+  // filled rather than merely outlined like today's ring.
+  cellSelected: { backgroundColor: colors.surfaceSealed, borderColor: colors.surfaceSealed },
   cellHeart: { fontSize: 15, color: colors.surfaceSealed },
+  dayPanel: { marginTop: sp.xl },
+  dayPanelHead: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginBottom: sp.md,
+    gap: sp.md,
+  },
+  dayPanelAdd: { ...text.caption, color: colors.accent, fontWeight: '600' },
   memory: { marginBottom: sp.lg },
   note: {
     ...text.bodySerif,
@@ -1363,20 +1456,34 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(28, 18, 12, 0.6)',
   },
   composerIconOn: { backgroundColor: colors.blushSoft },
+  // A real bordered field, not bare text. The old inline composer sat inside a
+  // Card that supplied this padding; in the Sheet the input is on its own, and
+  // without a container the text ran flush into the edge while the BROWSER's
+  // focus ring drew itself tight around the glyphs, which read as a bug.
+  // `outlineStyle: none` drops that ring so the gold focus border below is the
+  // only focus signal, matching TextField in the kit.
   composerInput: {
     ...text.bodySerif,
     fontSize: 17,
     lineHeight: 26,
-    minHeight: 64,
-    maxHeight: 160,
+    minHeight: 104,
+    maxHeight: 180,
     textAlignVertical: 'top',
-    paddingTop: 0,
+    paddingHorizontal: sp.base,
+    paddingTop: sp.md,
+    paddingBottom: sp.md,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceRaised,
+    ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : null),
   },
+  composerInputFocused: { borderColor: colors.accent },
   composerRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: sp.md,
+    marginTop: sp.base,
   },
   composerTools: { flexDirection: 'row', alignItems: 'center', gap: sp.sm },
   composerIcon: {
