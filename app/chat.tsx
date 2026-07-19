@@ -20,7 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { ChevronLeft, ImagePlus, ImageDown, Plus, Reply, Send, Trash2, X } from 'lucide-react-native';
+import { ChevronLeft, ImagePlus, ImageDown, MoreHorizontal, Plus, Reply, Send, Trash2, X } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useChatPresence, useCoupleEvent } from '@/lib/realtime';
@@ -49,6 +49,18 @@ interface Message {
 /** How far a bubble must be dragged right before releasing it triggers a reply. */
 const SWIPE_TRIGGER = 44;
 const SWIPE_MAX = 64;
+
+// Without this, a long-press on a bubble's TEXT on iOS/Android Safari & Chrome
+// triggers the browser's own text-selection UI (blue highlight + a native
+// Copy/Look Up/Translate callout) racing against our own onLongPress, which
+// is what opens the actions sheet. That native callout is the "screen turns
+// blue" bug: it is real OS chrome sitting on top of everything, not our app.
+// -webkit-touch-callout suppresses the callout itself; userSelect suppresses
+// the highlight. Native (iOS/Android app, not a browser) ignores these.
+const noSelect =
+  Platform.OS === 'web'
+    ? ({ userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none' } as any)
+    : null;
 
 // Matches http(s) links and bare www. ones; trailing punctuation is not part
 // of the link ("check https://a.co/x!" should not include the bang).
@@ -621,22 +633,37 @@ function Bubble({
   onToggleReaction: (emoji: string) => void;
 }) {
   const hasImage = !!message.image_thumb;
+  const moreButton = (
+    <Pressable onPress={onLongPress} hitSlop={10} style={styles.moreButton}>
+      <MoreHorizontal size={15} color={colors.inkFaint} strokeWidth={1.75} />
+    </Pressable>
+  );
   return (
     <View style={[styles.bubbleRow, mine ? styles.rowMine : styles.rowTheirs, { marginTop: grouped ? 2 : sp.md }]}>
+      {/* The small "..." button sits on the OUTER side of the bubble (away
+          from the edge it hugs) so it never overlaps the bubble itself; a
+          plain tap opens the same sheet long-press does, without depending on
+          a gesture that fights the browser's own text-selection UI. */}
+      {mine && moreButton}
       {/* flexShrink keeps the bubble inside its 80% cap even when a long
           unbroken token (a URL) would otherwise push it off screen. */}
       <View style={{ maxWidth: '80%', flexShrink: 1, alignItems: mine ? 'flex-end' : 'flex-start' }}>
         <Pressable
           onLongPress={onLongPress}
           delayLongPress={280}
-          style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs, hasImage && styles.bubbleWithImage]}
+          style={[
+            styles.bubble,
+            mine ? styles.bubbleMine : styles.bubbleTheirs,
+            hasImage && styles.bubbleWithImage,
+            noSelect,
+          ]}
         >
           {message.reply_to_id ? (
             <View style={[styles.quote, mine ? styles.quoteMine : styles.quoteTheirs]}>
-              <Text style={[styles.quoteName, mine && { color: colors.onSealed }]} numberOfLines={1}>
+              <Text style={[styles.quoteName, mine && { color: colors.onSealed }, noSelect]} numberOfLines={1}>
                 {quoted ? quotedName(quoted.sender_id) : 'Earlier'}
               </Text>
-              <Text style={[styles.quoteBody, mine && { color: colors.onSealed, opacity: 0.75 }]} numberOfLines={1}>
+              <Text style={[styles.quoteBody, mine && { color: colors.onSealed, opacity: 0.75 }, noSelect]} numberOfLines={1}>
                 {quoted ? quoted.body || 'Photo' : 'An earlier message'}
               </Text>
             </View>
@@ -649,11 +676,11 @@ function Bubble({
           {message.body ? (
             <LinkedText
               body={message.body}
-              style={[styles.bubbleText, hasImage && { marginTop: sp.sm }, mine && { color: colors.onSealed }]}
+              style={[styles.bubbleText, hasImage && { marginTop: sp.sm }, mine && { color: colors.onSealed }, noSelect]}
               linkColor={mine ? colors.onSealed : colors.accent}
             />
           ) : null}
-          <Text style={[styles.time, mine ? { color: colors.onSealed } : { color: colors.inkFaint }]}>
+          <Text style={[styles.time, mine ? { color: colors.onSealed } : { color: colors.inkFaint }, noSelect]}>
             {message.pending ? 'Sending…' : formatTime(message.created_at)}
           </Text>
         </Pressable>
@@ -681,6 +708,7 @@ function Bubble({
         )}
         {seen && <Text style={styles.seen}>Seen</Text>}
       </View>
+      {!mine && moreButton}
     </View>
   );
 }
@@ -942,6 +970,15 @@ const styles = StyleSheet.create({
     bottom: 0,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  moreButton: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+    marginBottom: sp.lg,
   },
   addText: {
     ...text.micro,
