@@ -20,7 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { ChevronLeft, ImagePlus, ImageDown, MoreHorizontal, Plus, Reply, Send, Trash2, X } from 'lucide-react-native';
+import { ChevronLeft, ImagePlus, ImageDown, Plus, Reply, Send, Trash2, X } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useChatPresence, useCoupleEvent } from '@/lib/realtime';
@@ -50,11 +50,11 @@ interface Message {
 const SWIPE_TRIGGER = 44;
 const SWIPE_MAX = 64;
 
-// Without this, a long-press on a bubble's TEXT on iOS/Android Safari & Chrome
-// triggers the browser's own text-selection UI (blue highlight + a native
-// Copy/Look Up/Translate callout) racing against our own onLongPress, which
-// is what opens the actions sheet. That native callout is the "screen turns
-// blue" bug: it is real OS chrome sitting on top of everything, not our app.
+// Bubbles now open on a plain tap rather than a long-press, but a slightly
+// dragged tap or a double-tap can still read as a text-selection gesture on
+// iOS/Android Safari & Chrome, triggering the browser's own text-selection UI
+// (blue highlight + a native Copy/Look Up/Translate callout) on top of
+// everything. That native callout was the original "screen turns blue" bug.
 // -webkit-touch-callout suppresses the callout itself; userSelect suppresses
 // the highlight. Native (iOS/Android app, not a browser) ignores these.
 const noSelect =
@@ -367,7 +367,7 @@ export default function Chat() {
                     reactions={groupReactions(item.reactions ?? [], user?.id)}
                     onOpenImage={() => item.image_thumb && setViewer({ id: item.id, thumb: item.image_thumb })}
                     onAddToTimeline={() => addToTimeline(item)}
-                    onLongPress={() => !item.pending && setActionsFor(item)}
+                    onOpenActions={() => !item.pending && setActionsFor(item)}
                     onToggleReaction={(emoji) => toggleReaction(item, emoji)}
                   />
                 </SwipeToReply>
@@ -449,11 +449,12 @@ export default function Chat() {
 }
 
 /**
- * Long-press a bubble: a quick-reaction bar (the six common emoji, tap one to
- * react immediately, tap + for the full keyboard) up top, then Reply, and
- * (own messages only) Delete. Delete flips the same sheet into an inline
- * two-step confirm rather than Alert.alert, which does not work on web (see
- * CLAUDE.md's Gotchas).
+ * Tapping a bubble (the small ✦ mark next to its timestamp is the hint) opens
+ * this: a quick-reaction bar (the six common emoji, tap one to react
+ * immediately, tap + for the full keyboard) up top, then Reply, and (own
+ * messages only) Delete. Delete flips the same sheet into an inline two-step
+ * confirm rather than Alert.alert, which does not work on web (see CLAUDE.md's
+ * Gotchas).
  */
 function MessageActionsSheet({
   visible,
@@ -614,7 +615,7 @@ function Bubble({
   reactions,
   onOpenImage,
   onAddToTimeline,
-  onLongPress,
+  onOpenActions,
   onToggleReaction,
 }: {
   message: Message;
@@ -628,29 +629,18 @@ function Bubble({
   reactions: { emoji: string; count: number; mine: boolean }[];
   onOpenImage: () => void;
   onAddToTimeline: () => void;
-  /** Opens the React / Reply / Delete sheet. */
-  onLongPress: () => void;
+  /** A tap on the bubble opens the React / Reply / Delete sheet (the small ✦ mark is the hint). */
+  onOpenActions: () => void;
   onToggleReaction: (emoji: string) => void;
 }) {
   const hasImage = !!message.image_thumb;
-  const moreButton = (
-    <Pressable onPress={onLongPress} hitSlop={10} style={styles.moreButton}>
-      <MoreHorizontal size={15} color={colors.inkFaint} strokeWidth={1.75} />
-    </Pressable>
-  );
   return (
     <View style={[styles.bubbleRow, mine ? styles.rowMine : styles.rowTheirs, { marginTop: grouped ? 2 : sp.md }]}>
-      {/* The small "..." button sits on the OUTER side of the bubble (away
-          from the edge it hugs) so it never overlaps the bubble itself; a
-          plain tap opens the same sheet long-press does, without depending on
-          a gesture that fights the browser's own text-selection UI. */}
-      {mine && moreButton}
       {/* flexShrink keeps the bubble inside its 80% cap even when a long
           unbroken token (a URL) would otherwise push it off screen. */}
       <View style={{ maxWidth: '80%', flexShrink: 1, alignItems: mine ? 'flex-end' : 'flex-start' }}>
         <Pressable
-          onLongPress={onLongPress}
-          delayLongPress={280}
+          onPress={onOpenActions}
           style={[
             styles.bubble,
             mine ? styles.bubbleMine : styles.bubbleTheirs,
@@ -680,9 +670,16 @@ function Bubble({
               linkColor={mine ? colors.onSealed : colors.accent}
             />
           ) : null}
-          <Text style={[styles.time, mine ? { color: colors.onSealed } : { color: colors.inkFaint }, noSelect]}>
-            {message.pending ? 'Sending…' : formatTime(message.created_at)}
-          </Text>
+          <View style={styles.bubbleFooter}>
+            {/* The hint that tapping this bubble opens the actions sheet, in
+                the app's own decorative mark rather than a floating UI icon. */}
+            <Text style={[styles.tapHint, mine ? { color: 'rgba(249, 239, 220, 0.55)' } : { color: colors.accent }]}>
+              ✦
+            </Text>
+            <Text style={[styles.time, mine ? { color: colors.onSealed } : { color: colors.inkFaint }, noSelect]}>
+              {message.pending ? 'Sending…' : formatTime(message.created_at)}
+            </Text>
+          </View>
         </Pressable>
         {reactions.length > 0 && (
           <View style={[styles.reactionsRow, mine && { justifyContent: 'flex-end' }]}>
@@ -708,7 +705,6 @@ function Bubble({
         )}
         {seen && <Text style={styles.seen}>Seen</Text>}
       </View>
-      {!mine && moreButton}
     </View>
   );
 }
@@ -878,13 +874,21 @@ const styles = StyleSheet.create({
     ...text.caption,
     color: colors.inkMuted,
   },
+  bubbleFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    alignSelf: 'flex-end',
+    marginTop: 3,
+    marginRight: sp.xs,
+  },
+  tapHint: {
+    fontSize: 9,
+  },
   time: {
     ...text.micro,
     textTransform: 'none',
     letterSpacing: 0,
-    marginTop: 3,
-    marginRight: sp.xs,
-    alignSelf: 'flex-end',
   },
   addRow: {
     flexDirection: 'row',
@@ -970,15 +974,6 @@ const styles = StyleSheet.create({
     bottom: 0,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  moreButton: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'flex-end',
-    marginBottom: sp.lg,
   },
   addText: {
     ...text.micro,

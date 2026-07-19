@@ -1,17 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Animated, Easing, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { LockKeyhole, RefreshCw } from 'lucide-react-native';
 import { apiUrl } from '@/lib/api';
 import { formatDay } from '@/lib/format';
-import {
-  Card,
-  ErrorState,
-  FormError,
-  PrimaryButton,
-  Screen,
-  Section,
-  Skeleton,
-  TextField,
-} from '@/components/kit';
+import { Card, FormError, PrimaryButton, Screen, SecondaryButton, Skeleton, TextField } from '@/components/kit';
 import { colors, radius, sp, text } from '@/theme';
 
 /**
@@ -20,66 +12,58 @@ import { colors, radius, sp, text } from '@/theme';
  * it never touches, or is touched by, a couple's own session: the admin token
  * lives only in this screen's state (never localStorage, never the shared
  * api() client), and is checked server-side by api/_lib/admin.ts.
+ *
+ * Rebuilt from scratch. The bugs the previous version shipped, each of which
+ * has a guard here now, so do not undo them:
+ *   1. An expired admin token (12h) landed on a retry-only error screen with no
+ *      way back to the password gate, so the page was stuck until a full
+ *      reload. A 401 now returns to the gate with an explanatory message.
+ *   2. A failed REFRESH left stale numbers on screen with no indication, since
+ *      the error state only rendered when there was no data at all. A refresh
+ *      failure now shows a banner and keeps the (clearly labelled) old data.
+ *   3. Charts stored the highlighted bar as an ARRAY INDEX. The 30-day window
+ *      shifts every day, so after a refresh an index could point past the end
+ *      of the series and crash the render. Selection is now the day STRING,
+ *      which is either found or falls back to the peak.
  */
 
-interface Totals {
-  couples: number;
-  users: number;
-  encrypted_couples: number;
-  memories: number;
-  notes: number;
-  milestones: number;
-  prompt_answers: number;
-  comments: number;
-  dates: number;
-  wishlist: number;
-  messages: number;
-  bucket_total: number;
-  bucket_done: number;
-}
-interface Membership {
-  paired: number;
-  solo: number;
-}
-interface Streaks {
-  on_streak: number;
-  longest_ever: number;
-  avg_current: number;
-}
-interface ActivityDay {
-  day: string;
-  memories: number;
-  notes: number;
-  prompts: number;
-  comments: number;
-  dates: number;
-  messages: number;
-  total: number;
-}
-interface CoupleRow {
-  id: string;
-  created_at: string;
-  members: number;
-  memories: number;
-  notes: number;
-  messages: number;
-  dates: number;
-  prompts: number;
-  comments: number;
-  bucket: number;
-  wishlist: number;
-  last_active: string | null;
-  total: number;
-}
+const WINDOW_LABEL = 'last 30 days';
+
+/** Display names for the source keys the server sends in `sources`. */
+const SOURCE_LABELS: Record<string, string> = {
+  memories: 'Memories',
+  notes: 'Notes',
+  messages: 'Chat messages',
+  prompts: 'Prompt answers',
+  comments: 'Comments',
+  dates: 'Dates',
+  todos: 'To-dos',
+  bucket: 'Bucket list',
+  wishlist: 'Wishlist',
+};
+
 interface Stats {
-  totals: Totals;
-  membership: Membership;
-  streaks: Streaks;
+  generatedAt: string;
+  sources: string[];
+  totals: Record<string, number>;
+  membership: { paired: number; solo: number };
+  streaks: { on_streak: number; longest_ever: number; avg_current: number };
   activeCouples: number;
   signups: { day: string; n: number }[];
-  activity: ActivityDay[];
-  couples: CoupleRow[];
+  activity: { day: string; counts: Record<string, number>; total: number }[];
+  couples: {
+    id: string;
+    created_at: string;
+    members: number;
+    encrypted: boolean;
+    counts: Record<string, number>;
+    total: number;
+    last_active: string | null;
+  }[];
 }
+
+/** Thrown for a 401 so callers can tell "token expired" from "request failed". */
+class UnauthorizedError extends Error {}
 
 async function adminFetch<T>(
   path: string,
@@ -98,177 +82,300 @@ async function adminFetch<T>(
   try {
     data = await res.json();
   } catch {
-    // non-JSON response body
+    // non-JSON body (a gateway error page, say); fall through to the status
   }
+  if (res.status === 401) throw new UnauthorizedError(data?.error ?? 'Session expired');
   if (!res.ok) throw new Error(data?.error ?? `Request failed (${res.status})`);
   return data as T;
 }
 
 export default function AdminDashboard() {
   const [token, setToken] = useState<string | null>(null);
+  const [gateNotice, setGateNotice] = useState<string | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (t: string) => {
-    setFailed(false);
-    try {
-      const data = await adminFetch<Stats>('/api/admin/stats', t);
-      setStats(data);
-    } catch {
-      setFailed(true);
-    }
+  const lock = useCallback((notice: string | null) => {
+    setToken(null);
+    setStats(null);
+    setError(null);
+    setGateNotice(notice);
   }, []);
+
+  const load = useCallback(
+    async (t: string) => {
+      setLoading(true);
+      try {
+        const data = await adminFetch<Stats>('/api/admin/stats', t);
+        setStats(data);
+        setError(null);
+      } catch (err) {
+        if (err instanceof UnauthorizedError) {
+          lock('That session expired. Sign in again.');
+          return;
+        }
+        // Keep whatever is already on screen; the banner says it is stale.
+        setError(err instanceof Error ? err.message : 'Could not load the numbers.');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [lock]
+  );
 
   useEffect(() => {
     if (token) load(token);
   }, [token, load]);
 
-  if (!token) return <AdminGate onUnlocked={setToken} />;
-
-  if (failed && !stats) {
+  if (!token) {
     return (
-      <Screen>
-        <ErrorState onRetry={() => load(token)} />
-      </Screen>
+      <AdminGate
+        notice={gateNotice}
+        onUnlocked={(t) => {
+          setGateNotice(null);
+          setToken(t);
+        }}
+      />
     );
   }
-
-  if (!stats) {
-    return (
-      <Screen>
-        <View style={styles.body}>
-          <Skeleton height={120} style={{ marginBottom: sp.lg }} />
-          <Skeleton height={120} style={{ marginBottom: sp.lg }} />
-          <Skeleton height={200} />
-        </View>
-      </Screen>
-    );
-  }
-
-  const contentItems = [
-    { label: 'Memories', value: stats.totals.memories },
-    { label: 'Notes', value: stats.totals.notes },
-    { label: 'Chat messages', value: stats.totals.messages },
-    { label: 'Milestones', value: stats.totals.milestones },
-    { label: 'Prompt answers', value: stats.totals.prompt_answers },
-    { label: 'Comments', value: stats.totals.comments },
-    { label: 'Dates proposed', value: stats.totals.dates },
-    { label: 'Wishlist items', value: stats.totals.wishlist },
-    { label: 'Bucket items', value: stats.totals.bucket_total },
-  ].sort((a, b) => b.value - a.value);
 
   return (
     <Screen>
       <ScrollView contentContainerStyle={styles.body}>
         <View style={styles.header}>
-          <Text style={text.title}>Analytics</Text>
-          <Pressable
-            onPress={() => {
-              setToken(null);
-              setStats(null);
-            }}
-            hitSlop={8}
-          >
-            <Text style={[text.caption, { color: colors.accent }]}>Lock</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={text.title}>Analytics</Text>
+            <Text style={text.caption}>
+              {stats ? `As of ${timeOfDay(stats.generatedAt)}` : loading ? 'Loading…' : 'Not loaded'}
+            </Text>
+          </View>
+          <RefreshButton spinning={loading} onPress={() => !loading && load(token)} />
+          <Pressable onPress={() => lock(null)} hitSlop={8} style={styles.headerBtn}>
+            <LockKeyhole size={18} color={colors.inkMuted} strokeWidth={1.75} />
           </Pressable>
         </View>
 
-        <Section label="Overview">
-          <View style={styles.grid}>
-            <StatTile label="Couples" value={stats.totals.couples} />
-            <StatTile label="Paired" value={stats.membership.paired} />
-            <StatTile label="Solo" value={stats.membership.solo} />
-            <StatTile label="People" value={stats.totals.users} />
-            <StatTile label="Encrypted couples" value={stats.totals.encrypted_couples} />
-            <StatTile label="Active this week" value={stats.activeCouples} />
-          </View>
-        </Section>
+        {error && (
+          <Card style={styles.errorCard}>
+            <Text style={[text.caption, { color: colors.danger }]}>
+              {error}
+              {stats ? ' Showing the last numbers that loaded.' : ''}
+            </Text>
+            {!stats && <SecondaryButton title="Try again" onPress={() => load(token)} style={{ marginTop: sp.md }} />}
+          </Card>
+        )}
 
-        <Section label="Streaks">
-          <View style={styles.grid}>
-            <StatTile label="Couples on a streak" value={stats.streaks.on_streak} />
-            <StatTile label="Longest streak ever" value={stats.streaks.longest_ever} />
-            <StatTile label="Avg. current streak" value={stats.streaks.avg_current} />
-          </View>
-        </Section>
-
-        <Section label="Growth">
-          <SignupsChart series={stats.signups} />
-        </Section>
-
-        <Section label="Activity over time">
-          <ActivityChart series={stats.activity ?? []} />
-        </Section>
-
-        <Section label="Content">
-          <ContentBars items={contentItems} bucketDone={stats.totals.bucket_done} bucketTotal={stats.totals.bucket_total} />
-        </Section>
-
-        <Section label="By couple">
-          <CoupleList couples={stats.couples ?? []} />
-        </Section>
+        {!stats ? (
+          loading ? (
+            <View>
+              <Skeleton height={120} style={{ marginBottom: sp.lg }} />
+              <Skeleton height={160} style={{ marginBottom: sp.lg }} />
+              <Skeleton height={200} />
+            </View>
+          ) : null
+        ) : (
+          <Report stats={stats} />
+        )}
       </ScrollView>
     </Screen>
   );
 }
 
-/** Total content the couples made each day, over 30 days. Toggle between the
- * daily count and the running (cumulative) total to read the trend. */
-function ActivityChart({ series }: { series: ActivityDay[] }) {
-  const [cumulative, setCumulative] = useState(false);
-  const [selected, setSelected] = useState<number | null>(null);
+function Report({ stats }: { stats: Stats }) {
+  const t = stats.totals;
+  const sources = stats.sources?.length ? stats.sources : Object.keys(SOURCE_LABELS);
+
+  const contentItems = sources
+    .map((src) => ({ label: SOURCE_LABELS[src] ?? src, value: t[src] ?? 0 }))
+    .concat([{ label: 'Milestones', value: t.milestones ?? 0 }])
+    .filter((i) => i.value > 0)
+    .sort((a, b) => b.value - a.value);
+
+  return (
+    <View>
+      <Group label="Who is here">
+        <View style={styles.grid}>
+          <Tile label="Couples" value={t.couples ?? 0} />
+          <Tile label="People" value={t.users ?? 0} />
+          <Tile label="Paired" value={stats.membership.paired} />
+          <Tile label="Solo" value={stats.membership.solo} />
+          <Tile label="Active this week" value={stats.activeCouples} />
+          <Tile label="Encrypted" value={t.encrypted_couples ?? 0} />
+        </View>
+      </Group>
+
+      <Group label="Engagement">
+        <View style={styles.grid}>
+          <Tile label="On a streak" value={stats.streaks.on_streak} />
+          <Tile label="Longest ever" value={stats.streaks.longest_ever} />
+          <Tile label="Avg. streak" value={stats.streaks.avg_current} />
+          <Tile label="Game rounds" value={t.game_rounds ?? 0} />
+          <Tile label="To-dos done" value={`${t.todos_done ?? 0}/${t.todos ?? 0}`} />
+          <Tile label="Reactions" value={t.reactions ?? 0} />
+          <Tile label="Time capsules" value={t.capsules ?? 0} />
+          <Tile label="Reflections saved" value={t.reflections ?? 0} />
+          <Tile label="Joined via referral" value={t.referred ?? 0} />
+        </View>
+        <Text style={styles.footnote}>
+          Streak figures come from the cached counters on each couple, refreshed when a prompt reveals. The couple's own
+          screen recomputes from history and is the source of truth.
+        </Text>
+      </Group>
+
+      <Group label="New signups">
+        <BarChart
+          series={stats.signups.map((s) => ({ day: s.day, value: s.n }))}
+          caption={(d, v) => `${formatDay(d)} · ${v} ${v === 1 ? 'signup' : 'signups'}`}
+          empty="Nobody has signed up yet."
+        />
+      </Group>
+
+      <Group label="Activity">
+        <ActivityChart series={stats.activity ?? []} />
+      </Group>
+
+      <Group label="What has been made">
+        <MagnitudeBars
+          items={contentItems}
+          footer={
+            (t.bucket ?? 0) > 0 ? `${t.bucket_done ?? 0} of ${t.bucket} bucket-list items marked done.` : undefined
+          }
+        />
+      </Group>
+
+      <Group label="By couple">
+        <CoupleList couples={stats.couples ?? []} sources={sources} />
+      </Group>
+    </View>
+  );
+}
+
+/* ---------------------------------- charts --------------------------------- */
+
+const CHART_HEIGHT = 96;
+
+interface Point {
+  day: string;
+  value: number;
+}
+
+/**
+ * Vertical bars, one per day. The highlighted bar is tracked by DAY STRING,
+ * never by index: the window slides every day, so an index kept across a
+ * refresh can point past the end of a newly loaded series (that was a real
+ * crash). An unknown day simply falls back to the peak.
+ */
+function BarChart({
+  series,
+  caption,
+  empty,
+  header,
+}: {
+  series: Point[];
+  caption: (day: string, value: number) => string;
+  empty: string;
+  header?: React.ReactNode;
+}) {
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+
   if (series.length === 0) {
     return (
       <Card>
-        <Text style={text.caption}>No activity yet.</Text>
+        {header}
+        <Text style={text.caption}>{empty}</Text>
       </Card>
     );
   }
 
-  let running = 0;
-  const points = series.map((d) => {
-    running += d.total;
-    return { day: d.day, value: cumulative ? running : d.total };
-  });
-  const max = Math.max(1, ...points.map((p) => p.value));
-  const peakIdx = cumulative ? points.length - 1 : points.reduce((best, p, i) => (p.value > points[best].value ? i : best), 0);
-  const shown = selected ?? peakIdx;
-  const shownEntry = points[shown];
-  const grandTotal = series.reduce((s, d) => s + d.total, 0);
+  const max = Math.max(1, ...series.map((p) => p.value));
+  const peak = series.reduce((best, p) => (p.value > best.value ? p : best), series[0]);
+  const shown = (selectedDay && series.find((p) => p.day === selectedDay)) || peak;
 
   return (
     <Card>
-      <View style={styles.chartHeader}>
-        <Text style={text.subtitle}>{cumulative ? 'Everything made, running total' : 'Made each day'}</Text>
-        <Pressable onPress={() => setCumulative((c) => !c)} hitSlop={8}>
-          <Text style={[text.caption, { color: colors.accent }]}>{cumulative ? 'Show daily' : 'Show cumulative'}</Text>
-        </Pressable>
-      </View>
+      {header}
       <View style={styles.barsRow}>
-        {points.map((p, i) => {
+        {series.map((p) => {
           const h = Math.max(2, Math.round((p.value / max) * CHART_HEIGHT));
-          const isShown = i === shown;
+          const isShown = p.day === shown.day;
           return (
-            <Pressable key={p.day} onPress={() => setSelected(i)} style={styles.barCol}>
-              <View style={[styles.bar, { height: h, backgroundColor: isShown ? colors.surfaceSealed : colors.inkFaint }]} />
+            <Pressable key={p.day} onPress={() => setSelectedDay(p.day)} style={styles.barCol}>
+              <View
+                style={[styles.bar, { height: h, backgroundColor: isShown ? colors.surfaceSealed : colors.inkFaint }]}
+              />
             </Pressable>
           );
         })}
       </View>
       <View style={styles.axisLine} />
-      <Text style={[text.caption, { marginTop: sp.sm, textAlign: 'center' }]}>
-        {formatDay(shownEntry.day)} · {shownEntry.value.toLocaleString()} {cumulative ? 'made so far' : 'that day'}
-      </Text>
-      <Text style={[text.caption, { marginTop: sp.xs, textAlign: 'center', color: colors.inkFaint }]}>
-        {grandTotal.toLocaleString()} things made in 30 days
+      <Text style={styles.chartCaption}>{caption(shown.day, shown.value)}</Text>
+      <Text style={styles.chartSub}>
+        {series.reduce((s, p) => s + p.value, 0).toLocaleString()} total over the {WINDOW_LABEL}
       </Text>
     </Card>
   );
 }
 
-/** Per-couple data volume, biggest first. Counts only, no content. */
-function CoupleList({ couples }: { couples: CoupleRow[] }) {
+/** Everything made per day, with a daily/cumulative toggle. */
+function ActivityChart({ series }: { series: Stats['activity'] }) {
+  const [cumulative, setCumulative] = useState(false);
+
+  let running = 0;
+  const points: Point[] = series.map((d) => {
+    running += d.total;
+    return { day: d.day, value: cumulative ? running : d.total };
+  });
+
+  return (
+    <BarChart
+      series={points}
+      empty="Nothing has been made yet."
+      header={
+        <View style={styles.chartHeader}>
+          <Text style={text.subtitle}>{cumulative ? 'Running total' : 'Made each day'}</Text>
+          <Pressable onPress={() => setCumulative((c) => !c)} hitSlop={8}>
+            <Text style={styles.link}>{cumulative ? 'Show daily' : 'Show cumulative'}</Text>
+          </Pressable>
+        </View>
+      }
+      caption={(d, v) => `${formatDay(d)} · ${v.toLocaleString()} ${cumulative ? 'made so far' : 'that day'}`}
+    />
+  );
+}
+
+/** Horizontal magnitude bars, sorted high to low, value printed past the tip. */
+function MagnitudeBars({ items, footer }: { items: { label: string; value: number }[]; footer?: string }) {
+  if (items.length === 0) {
+    return (
+      <Card>
+        <Text style={text.caption}>Nothing has been made yet.</Text>
+      </Card>
+    );
+  }
+  const max = Math.max(1, ...items.map((i) => i.value));
+  return (
+    <Card>
+      {items.map((item, i) => (
+        <View key={item.label} style={[styles.barRow, i > 0 && { marginTop: sp.sm }]}>
+          <Text style={[text.caption, styles.barLabel]} numberOfLines={1}>
+            {item.label}
+          </Text>
+          <View style={styles.track}>
+            <View style={[styles.trackFill, { width: `${Math.max(2, (item.value / max) * 100)}%` }]} />
+          </View>
+          <Text style={[text.caption, styles.barValue]}>{item.value.toLocaleString()}</Text>
+        </View>
+      ))}
+      {footer && <Text style={[text.caption, { marginTop: sp.lg }]}>{footer}</Text>}
+    </Card>
+  );
+}
+
+/** Per-couple volume, biggest first. Counts only, never content. */
+function CoupleList({ couples, sources }: { couples: Stats['couples']; sources: string[] }) {
   const [showAll, setShowAll] = useState(false);
+
   if (couples.length === 0) {
     return (
       <Card>
@@ -276,45 +383,95 @@ function CoupleList({ couples }: { couples: CoupleRow[] }) {
       </Card>
     );
   }
-  const shown = showAll ? couples : couples.slice(0, 12);
-  const maxTotal = Math.max(1, ...couples.map((c) => c.total));
+
+  const shown = showAll ? couples : couples.slice(0, 10);
+  const max = Math.max(1, ...couples.map((c) => c.total));
 
   return (
     <Card>
-      <Text style={[text.subtitle, { marginBottom: sp.base }]}>Who is building the most</Text>
-      {shown.map((c, i) => (
-        <View key={c.id} style={[styles.coupleRow, i > 0 && styles.coupleBorder]}>
-          <View style={styles.coupleHead}>
-            <Text style={[text.body, { fontVariant: ['tabular-nums'] }]}>
-              {c.id}
-              <Text style={text.caption}>{c.members === 2 ? '  paired' : '  solo'}</Text>
+      {shown.map((c, i) => {
+        // Only the kinds this couple actually used, so the line stays short.
+        const parts = sources
+          .filter((src) => (c.counts?.[src] ?? 0) > 0)
+          .map((src) => `${c.counts[src]} ${(SOURCE_LABELS[src] ?? src).toLowerCase()}`);
+        return (
+          <View key={c.id} style={[styles.coupleRow, i > 0 && styles.coupleBorder]}>
+            <View style={styles.coupleHead}>
+              <Text style={styles.coupleId}>{c.id}</Text>
+              <Text style={styles.coupleTotal}>{c.total.toLocaleString()}</Text>
+            </View>
+            <View style={styles.coupleTrack}>
+              <View style={[styles.coupleFill, { width: `${Math.max(2, (c.total / max) * 100)}%` }]} />
+            </View>
+            <Text style={[text.caption, { marginTop: sp.xs }]}>
+              {c.members === 2 ? 'Paired' : c.members === 1 ? 'Solo' : 'Empty'}
+              {parts.length > 0 ? ` · ${parts.join(' · ')}` : ' · nothing yet'}
             </Text>
-            <Text style={[text.subtitle, { color: colors.surfaceSealed }]}>{c.total.toLocaleString()}</Text>
+            <Text style={styles.coupleMeta}>
+              joined {formatDay(c.created_at)}
+              {c.last_active ? ` · last active ${formatDay(c.last_active)}` : ' · never active'}
+            </Text>
           </View>
-          <View style={styles.coupleTrack}>
-            <View style={[styles.coupleFill, { width: `${Math.max(2, (c.total / maxTotal) * 100)}%` }]} />
-          </View>
-          <Text style={[text.caption, { marginTop: sp.xs }]} numberOfLines={1}>
-            {c.memories}m · {c.notes} notes · {c.messages} msgs · {c.dates} dates · {c.prompts} prompts
-          </Text>
-          <Text style={[text.micro, { color: colors.inkFaint, marginTop: 2 }]}>
-            joined {formatDay(c.created_at)}
-            {c.last_active ? ` · last active ${formatDay(c.last_active)}` : ' · no activity yet'}
-          </Text>
-        </View>
-      ))}
-      {couples.length > 12 && (
-        <Pressable onPress={() => setShowAll((s) => !s)} hitSlop={8} style={{ marginTop: sp.md, alignSelf: 'center' }}>
-          <Text style={[text.caption, { color: colors.accent }]}>
-            {showAll ? 'Show fewer' : `Show all ${couples.length}`}
-          </Text>
+        );
+      })}
+      {couples.length > 10 && (
+        <Pressable onPress={() => setShowAll((s) => !s)} hitSlop={8} style={styles.showAll}>
+          <Text style={styles.link}>{showAll ? 'Show fewer' : `Show all ${couples.length}`}</Text>
         </Pressable>
       )}
     </Card>
   );
 }
 
-function AdminGate({ onUnlocked }: { onUnlocked: (token: string) => void }) {
+/* ----------------------------------- bits ---------------------------------- */
+
+/** Spins while a refresh is in flight, so a slow request still feels answered. */
+function RefreshButton({ spinning, onPress }: { spinning: boolean; onPress: () => void }) {
+  const spin = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!spinning) {
+      spin.stopAnimation();
+      spin.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.timing(spin, { toValue: 1, duration: 900, easing: Easing.linear, useNativeDriver: true })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [spinning, spin]);
+
+  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+
+  return (
+    <Pressable onPress={onPress} disabled={spinning} hitSlop={8} style={styles.headerBtn}>
+      <Animated.View style={{ transform: [{ rotate }] }}>
+        <RefreshCw size={18} color={spinning ? colors.inkFaint : colors.accent} strokeWidth={1.75} />
+      </Animated.View>
+    </Pressable>
+  );
+}
+
+function Group({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <View style={styles.group}>
+      <Text style={[text.section, { marginBottom: sp.md }]}>{label}</Text>
+      {children}
+    </View>
+  );
+}
+
+function Tile({ label, value }: { label: string; value: number | string }) {
+  return (
+    <View style={styles.tile}>
+      <Text style={styles.tileValue}>{typeof value === 'number' ? value.toLocaleString() : value}</Text>
+      <Text style={text.caption}>{label}</Text>
+    </View>
+  );
+}
+
+function AdminGate({ notice, onUnlocked }: { notice: string | null; onUnlocked: (token: string) => void }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -329,11 +486,11 @@ function AdminGate({ onUnlocked }: { onUnlocked: (token: string) => void }) {
         body: { password },
       });
       onUnlocked(data.token);
-    } catch (err: any) {
-      setError(err?.message ?? 'Something went wrong');
-    } finally {
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong');
       setBusy(false);
     }
+    // On success the gate unmounts, so busy is deliberately left set.
   };
 
   return (
@@ -341,7 +498,8 @@ function AdminGate({ onUnlocked }: { onUnlocked: (token: string) => void }) {
       <View style={styles.gateWrap}>
         <Card style={styles.gateCard}>
           <Text style={[text.title, { marginBottom: sp.xs }]}>Admin</Text>
-          <Text style={[text.caption, { marginBottom: sp.lg }]}>Analytics for Ours. Not for your partner.</Text>
+          <Text style={[text.caption, { marginBottom: sp.lg }]}>Analytics for Ours. Counts only, never content.</Text>
+          {notice && <Text style={styles.notice}>{notice}</Text>}
           <TextField
             label="Password"
             value={password}
@@ -359,87 +517,12 @@ function AdminGate({ onUnlocked }: { onUnlocked: (token: string) => void }) {
   );
 }
 
-function StatTile({ label, value }: { label: string; value: number | string }) {
-  return (
-    <View style={styles.tile}>
-      <Text style={styles.tileValue}>{typeof value === 'number' ? value.toLocaleString() : value}</Text>
-      <Text style={text.caption}>{label}</Text>
-    </View>
-  );
-}
-
-const CHART_HEIGHT = 96;
-const BAR_WIDTH = 6;
-
-/** Vertical bar chart, one bar per day. Emphasis form: the peak (or a tapped
- * bar) carries the brand hue, every other bar sits in de-emphasis gray. */
-function SignupsChart({ series }: { series: { day: string; n: number }[] }) {
-  const [selected, setSelected] = useState<number | null>(null);
-  const max = Math.max(1, ...series.map((s) => s.n));
-  const peakIdx = series.reduce((best, s, i) => (s.n > series[best].n ? i : best), 0);
-  const shown = selected ?? peakIdx;
-  const shownEntry = series[shown];
-
-  return (
-    <Card>
-      <View style={styles.chartHeader}>
-        <Text style={text.subtitle}>New signups</Text>
-        <Text style={text.caption}>
-          {formatDay(series[0].day)} – {formatDay(series[series.length - 1].day)}
-        </Text>
-      </View>
-      <View style={styles.barsRow}>
-        {series.map((s, i) => {
-          const h = Math.max(2, Math.round((s.n / max) * CHART_HEIGHT));
-          const isShown = i === shown;
-          return (
-            <Pressable key={s.day} onPress={() => setSelected(i)} style={styles.barCol}>
-              <View style={[styles.bar, { height: h, backgroundColor: isShown ? colors.surfaceSealed : colors.inkFaint }]} />
-            </Pressable>
-          );
-        })}
-      </View>
-      <View style={styles.axisLine} />
-      <Text style={[text.caption, { marginTop: sp.sm, textAlign: 'center' }]}>
-        {formatDay(shownEntry.day)} · {shownEntry.n} {shownEntry.n === 1 ? 'signup' : 'signups'}
-      </Text>
-    </Card>
-  );
-}
-
-/** Horizontal magnitude bars, one hue, sorted high to low; value printed at
- * the tip rather than inside the fill so it never gets clipped on short bars. */
-function ContentBars({
-  items,
-  bucketDone,
-  bucketTotal,
-}: {
-  items: { label: string; value: number }[];
-  bucketDone: number;
-  bucketTotal: number;
-}) {
-  const max = Math.max(1, ...items.map((i) => i.value));
-  return (
-    <Card>
-      <Text style={[text.subtitle, { marginBottom: sp.base }]}>What you two have made</Text>
-      {items.map((item, i) => (
-        <View key={item.label} style={[styles.barRow, i > 0 && { marginTop: sp.sm }]}>
-          <Text style={[text.caption, styles.barLabel]} numberOfLines={1}>
-            {item.label}
-          </Text>
-          <View style={styles.track}>
-            <View style={[styles.trackFill, { width: `${Math.max(2, (item.value / max) * 100)}%` }]} />
-          </View>
-          <Text style={[text.caption, styles.barValue]}>{item.value.toLocaleString()}</Text>
-        </View>
-      ))}
-      {bucketTotal > 0 && (
-        <Text style={[text.caption, { marginTop: sp.lg }]}>
-          {bucketDone} of {bucketTotal} bucket-list items marked done.
-        </Text>
-      )}
-    </Card>
-  );
+function timeOfDay(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 'just now';
+  const h = d.getHours() % 12 || 12;
+  const m = d.getMinutes().toString().padStart(2, '0');
+  return `${h}:${m} ${d.getHours() >= 12 ? 'pm' : 'am'}`;
 }
 
 const styles = StyleSheet.create({
@@ -453,37 +536,71 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 360,
   },
+  notice: {
+    ...text.caption,
+    color: colors.accent,
+    marginBottom: sp.md,
+  },
   body: {
     padding: sp.xl,
     paddingBottom: sp.huge,
     width: '100%',
-    maxWidth: 720,
+    maxWidth: 760,
     alignSelf: 'center',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: sp.xs,
     marginBottom: sp.xl,
+  },
+  headerBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.hairline,
+  },
+  errorCard: {
+    borderColor: colors.danger,
+    marginBottom: sp.lg,
+  },
+  group: {
+    marginBottom: sp.xxl,
   },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
   },
   tile: {
-    width: '50%',
+    width: '33.33%',
+    paddingRight: sp.sm,
     marginBottom: sp.lg,
   },
   tileValue: {
-    ...text.title,
+    ...text.subtitle,
+    fontSize: 22,
     color: colors.surfaceSealed,
     fontVariant: ['tabular-nums'],
+  },
+  footnote: {
+    ...text.micro,
+    textTransform: 'none',
+    letterSpacing: 0.2,
+    color: colors.inkFaint,
+    lineHeight: 16,
   },
   chartHeader: {
     flexDirection: 'row',
     alignItems: 'baseline',
     justifyContent: 'space-between',
     marginBottom: sp.base,
+  },
+  link: {
+    ...text.caption,
+    color: colors.accent,
   },
   barsRow: {
     flexDirection: 'row',
@@ -498,7 +615,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   bar: {
-    width: BAR_WIDTH,
+    width: '100%',
+    maxWidth: 10,
     borderTopLeftRadius: radius.hairline,
     borderTopRightRadius: radius.hairline,
   },
@@ -506,13 +624,25 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: colors.hairline,
   },
+  chartCaption: {
+    ...text.caption,
+    marginTop: sp.sm,
+    textAlign: 'center',
+    color: colors.ink,
+  },
+  chartSub: {
+    ...text.caption,
+    marginTop: sp.xs,
+    textAlign: 'center',
+    color: colors.inkFaint,
+  },
   barRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: sp.sm,
   },
   barLabel: {
-    width: 128,
+    width: 110,
   },
   track: {
     flex: 1,
@@ -528,8 +658,9 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: radius.hairline,
   },
   barValue: {
-    width: 40,
+    width: 52,
     textAlign: 'right',
+    fontVariant: ['tabular-nums'],
   },
   coupleRow: {
     paddingVertical: sp.md,
@@ -544,6 +675,16 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: sp.xs,
   },
+  coupleId: {
+    ...text.body,
+    fontVariant: ['tabular-nums'],
+    ...(Platform.OS === 'web' ? ({ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' } as any) : null),
+  },
+  coupleTotal: {
+    ...text.subtitle,
+    color: colors.surfaceSealed,
+    fontVariant: ['tabular-nums'],
+  },
   coupleTrack: {
     height: 8,
     borderRadius: radius.hairline,
@@ -555,5 +696,16 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceSealed,
     borderTopRightRadius: radius.hairline,
     borderBottomRightRadius: radius.hairline,
+  },
+  coupleMeta: {
+    ...text.micro,
+    textTransform: 'none',
+    letterSpacing: 0.2,
+    color: colors.inkFaint,
+    marginTop: 2,
+  },
+  showAll: {
+    marginTop: sp.md,
+    alignSelf: 'center',
   },
 });
