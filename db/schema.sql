@@ -391,3 +391,17 @@ CREATE INDEX IF NOT EXISTS todos_by_couple_day ON todos (couple_id, due_date);
 --     sends for the same day.
 ALTER TABLE milestones ADD COLUMN IF NOT EXISTS notify_days_before INT NOT NULL DEFAULT 7;
 ALTER TABLE milestones ADD COLUMN IF NOT EXISTS last_reminded_date DATE;
+
+-- v21: chat reactions + deletion, turning the chat into a proper WhatsApp/
+-- Telegram-style thread. One reaction per user per message (tapping a second
+-- emoji replaces your first, matching every mainstream chat app); the row is
+-- simply deleted when a reaction is removed. No FK/cascade in this schema (see
+-- every other table), so message deletion clears this table for that message
+-- id explicitly in the route rather than relying on the database to do it.
+CREATE TABLE IF NOT EXISTS message_reactions (
+  message_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  emoji STRING NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (message_id, user_id)
+);

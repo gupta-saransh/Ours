@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ChevronLeft, ChevronRight, Trash2 } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -193,7 +193,7 @@ export default function Todos() {
 
   return (
     <Screen>
-      <View style={styles.body}>
+      <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         <View style={styles.dayNav}>
           <Pressable onPress={() => goto(addDays(date, -1))} hitSlop={10} style={styles.navArrow}>
             <ChevronLeft size={20} color={colors.ink} strokeWidth={1.75} />
@@ -244,7 +244,7 @@ export default function Todos() {
             />
           ))
         )}
-      </View>
+      </ScrollView>
 
       {/* The action sheet hides itself once "Pick a day" hands off to the
           calendar below, so the two can never be visible at once. */}

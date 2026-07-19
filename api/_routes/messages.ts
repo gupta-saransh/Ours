@@ -1,6 +1,6 @@
 import { one, q } from '../_lib/db';
 import { requirePairedUser } from '../_lib/auth';
-import { publish } from '../_lib/ably';
+import { publish, isActiveInChat } from '../_lib/ably';
 import { sendPush } from '../_lib/push';
 import { notify } from '../_lib/notify';
 import { encryptField, readField } from '../_lib/envelope';
@@ -9,21 +9,28 @@ import { errorFields, log } from '../_lib/log';
 
 /**
  * Partner chat.
- *   GET  /api/messages[?before=<ISO>]  list (ascending), unread count, partner's read cursor
- *   POST /api/messages { body?, imageData?, imageThumb?, replyToId? }  send (text and/or photo, optionally quoting)
- *   POST /api/messages/seen            mark the thread read (advance the cursor, tell the partner)
- *   GET  /api/messages/unread          just the unread count (for the badge)
- *   GET  /api/messages/:id             the full-resolution image of one message
- *   POST /api/messages/:id { action: 'to-timeline', note? }  copy a photo message into the timeline
+ *   GET    /api/messages[?before=<ISO>]  list (ascending), unread count, partner's read cursor, reactions
+ *   POST   /api/messages { body?, imageData?, imageThumb?, replyToId? }  send (text and/or photo, optionally quoting)
+ *   POST   /api/messages/seen            mark the thread read (advance the cursor, tell the partner)
+ *   GET    /api/messages/unread          just the unread count (for the badge)
+ *   GET    /api/messages/:id             the full-resolution image of one message
+ *   POST   /api/messages/:id { action: 'to-timeline', note? }  copy a photo message into the timeline
+ *   POST   /api/messages/:id { action: 'react', emoji }        set your reaction (replaces any earlier one)
+ *   POST   /api/messages/:id { action: 'unreact' }              remove your reaction
+ *   DELETE /api/messages/:id             remove your own message (for both of you; no per-side "delete for me")
  *
  * Bodies are encrypted at rest (envelope.ts); images are plaintext base64 like
  * memory photos. Delivery is live over Ably (`message.created`, plaintext body +
  * the small thumbnail over the TLS + subscribe-only channel) plus a best-effort
- * Web Push to the away partner. Chat writes NO notification rows (it would flood
- * the bell); saving a photo to the timeline is a memory, so that one does.
+ * Web Push to the away partner, SKIPPED when the recipient is already sitting on
+ * the chat screen (see isActiveInChat in _lib/ably.ts) since the live event is
+ * about to show them the message anyway. Chat writes NO notification rows (it
+ * would flood the bell); saving a photo to the timeline is a memory, so that
+ * one does.
  */
 
 const PAGE = 40;
+const MAX_EMOJI_LEN = 16;
 
 interface Row {
   id: string;
@@ -34,6 +41,12 @@ interface Row {
   has_image: boolean;
   reply_to_id: string | null;
   created_at: string;
+}
+
+interface ReactionRow {
+  message_id: string;
+  user_id: string;
+  emoji: string;
 }
 
 async function unreadCount(coupleId: string, userId: string): Promise<number> {
@@ -54,7 +67,7 @@ async function partnerSeenAt(coupleId: string, userId: string): Promise<string |
   return row?.chat_seen_at ?? null;
 }
 
-export default route(['GET', 'POST'], async (req, res) => {
+export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
   const user = await requirePairedUser(req);
   const cid = user.couple_id;
   const sub = (req.url ?? '').split('?')[0].replace(/\/+$/, '');
@@ -73,6 +86,18 @@ export default route(['GET', 'POST'], async (req, res) => {
       return;
     }
 
+    if (req.method === 'DELETE') {
+      // No "delete for me" / "delete for everyone" split: same own-content
+      // rule as everywhere else in the app, and with only two people in the
+      // thread a partner-only hide would not mean much anyway.
+      if (msg.sender_id !== user.id) throw new HttpError(403, 'You can only delete your own messages');
+      await one('DELETE FROM message_reactions WHERE message_id = $1', [id]);
+      await one('DELETE FROM messages WHERE id = $1 AND couple_id = $2', [id, cid]);
+      await publish(cid, 'message.deleted', { id, by: user.id });
+      res.status(200).json({ ok: true });
+      return;
+    }
+
     // POST: copy a photo message into the shared timeline as a memory.
     if (req.body?.action === 'to-timeline') {
       if (!msg.image_data && !msg.image_thumb) throw new HttpError(400, 'That message has no photo');
@@ -86,6 +111,27 @@ export default route(['GET', 'POST'], async (req, res) => {
       await publish(cid, 'memory.created', { id: mem!.id, author_id: user.id });
       await notify(cid, user.id, 'memory', `${user.display_name} saved a photo to your memories`);
       res.status(201).json({ memory: { id: mem!.id } });
+      return;
+    }
+
+    // POST: react/unreact. One reaction per person per message; setting a new
+    // emoji replaces whatever you had. Never notifies (would flood the bell
+    // for a tap), just the live event so the other side's bubble updates.
+    if (req.body?.action === 'react') {
+      const emoji = requireString(req.body.emoji, 'Emoji', MAX_EMOJI_LEN);
+      await one(
+        `INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3)
+         ON CONFLICT (message_id, user_id) DO UPDATE SET emoji = excluded.emoji, created_at = now()`,
+        [id, user.id, emoji]
+      );
+      await publish(cid, 'message.reacted', { message_id: id, user_id: user.id, emoji });
+      res.status(200).json({ ok: true });
+      return;
+    }
+    if (req.body?.action === 'unreact') {
+      await one('DELETE FROM message_reactions WHERE message_id = $1 AND user_id = $2', [id, user.id]);
+      await publish(cid, 'message.reacted', { message_id: id, user_id: user.id, emoji: null });
+      res.status(200).json({ ok: true });
       return;
     }
     throw new HttpError(400, 'Unknown action');
@@ -148,6 +194,13 @@ export default route(['GET', 'POST'], async (req, res) => {
       const others = await q<{ id: string }>('SELECT id FROM users WHERE couple_id = $1 AND id != $2', [cid, user.id]);
       const push = imageData && !body ? `${user.display_name} sent you a photo` : `${user.display_name} sent you a message`;
       for (const o of others) {
+        // Skip the push for whoever is already sitting on the chat screen:
+        // they're about to see this arrive live over Ably, and a push on top
+        // of that is exactly the "notified while already looking at it" bug.
+        if (await isActiveInChat(cid, o.id)) {
+          log('info', 'chat.push_skipped_active', { couple_id: cid, user_id: o.id });
+          continue;
+        }
         await sendPush(o.id, { title: 'Ours', body: push, url: '/chat' }, 'chat');
       }
     } catch (err) {
@@ -170,12 +223,25 @@ export default route(['GET', 'POST'], async (req, res) => {
     before ? [cid, before] : [cid]
   );
   const hasMore = rows.length === PAGE;
-  const messages = await Promise.all(
+  const decoded = await Promise.all(
     rows
       .slice()
       .reverse()
       .map(async ({ body_ct, ...m }) => ({ ...m, body: (await readField(cid, body_ct, m.body)) ?? '' }))
   );
+
+  // One batched reaction query for the whole page rather than N+1.
+  const ids = decoded.map((m) => m.id);
+  const reactionRows = ids.length
+    ? await q<ReactionRow>('SELECT message_id, user_id, emoji FROM message_reactions WHERE message_id = ANY($1::UUID[])', [ids])
+    : [];
+  const reactionsByMessage = new Map<string, { user_id: string; emoji: string }[]>();
+  for (const r of reactionRows) {
+    const list = reactionsByMessage.get(r.message_id) ?? [];
+    list.push({ user_id: r.user_id, emoji: r.emoji });
+    reactionsByMessage.set(r.message_id, list);
+  }
+  const messages = decoded.map((m) => ({ ...m, reactions: reactionsByMessage.get(m.id) ?? [] }));
 
   res.status(200).json({
     messages,

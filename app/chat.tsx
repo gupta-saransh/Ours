@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  AppState,
   FlatList,
   KeyboardAvoidingView,
   Linking,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   StyleSheet,
@@ -17,14 +20,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { ChevronLeft, ImagePlus, ImageDown, Reply, Send, X } from 'lucide-react-native';
+import { ChevronLeft, ImagePlus, ImageDown, Plus, Reply, Send, Trash2, X } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { useCoupleEvent } from '@/lib/realtime';
+import { useChatPresence, useCoupleEvent } from '@/lib/realtime';
 import { useToast } from '@/lib/toast';
-import { successHaptic } from '@/lib/haptics';
+import { successHaptic, tapHaptic } from '@/lib/haptics';
 import { Avatar } from '@/components/Avatar';
-import { Empty } from '@/components/kit';
+import { Empty, PrimaryButton, SecondaryButton } from '@/components/kit';
+import { Sheet } from '@/components/Sheet';
+import { ReactionPicker } from '@/components/ReactionPicker';
+import { applyReaction, groupReactions, nextReactionAction, QUICK_REACTIONS, type ReactionRow } from '@/lib/chatReactions';
 import { colors, font, radius, sp, text } from '@/theme';
 import { formatTime } from '@/lib/format';
 
@@ -35,9 +41,14 @@ interface Message {
   image_thumb?: string | null;
   has_image?: boolean;
   reply_to_id?: string | null;
+  reactions?: ReactionRow[];
   created_at: string;
   pending?: boolean;
 }
+
+/** How far a bubble must be dragged right before releasing it triggers a reply. */
+const SWIPE_TRIGGER = 44;
+const SWIPE_MAX = 64;
 
 // Matches http(s) links and bare www. ones; trailing punctuation is not part
 // of the link ("check https://a.co/x!" should not include the bang).
@@ -96,6 +107,28 @@ export default function Chat() {
   const [viewer, setViewer] = useState<{ id: string; thumb: string | null } | null>(null);
   // The message being quoted by the next send (long-press a bubble to set it).
   const [replyTo, setReplyTo] = useState<Message | null>(null);
+  // Long-press opens this: React / Reply / Delete for one message.
+  const [actionsFor, setActionsFor] = useState<Message | null>(null);
+  // React (from the menu, or tapping an existing pill someone else started) opens this.
+  const [reactFor, setReactFor] = useState<Message | null>(null);
+
+  // Am I actually looking at this screen right now? Combines "this route is
+  // mounted" with "the tab/app is foregrounded", so backgrounding the app
+  // while on /chat correctly leaves presence (and re-entering foregrounds it
+  // again) instead of pinning "in chat" for as long as the screen stays
+  // mounted in the background.
+  const [foregrounded, setForegrounded] = useState(true);
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      const onVis = () => setForegrounded(document.visibilityState === 'visible');
+      onVis();
+      document.addEventListener('visibilitychange', onVis);
+      return () => document.removeEventListener('visibilitychange', onVis);
+    }
+    const sub = AppState.addEventListener('change', (state) => setForegrounded(state === 'active'));
+    return () => sub.remove();
+  }, []);
+  useChatPresence(foregrounded, { screen: 'chat' });
 
   const markSeen = useCallback(() => {
     api('/api/messages/seen', { method: 'POST' }).catch(() => {});
@@ -124,6 +157,18 @@ export default function Chat() {
   // The partner opened the thread: light up our "Seen" receipt.
   useCoupleEvent('chat.seen', (d: { by?: string; at?: string }) => {
     if (d?.by && d.by === partner?.id && d.at) setPartnerSeen(d.at);
+  });
+  // A reaction was set or cleared, by either of us (own echo just re-applies
+  // the same state, which is harmless). id-only over the wire, settled here.
+  useCoupleEvent('message.reacted', (d: { message_id?: string; user_id?: string; emoji?: string | null }) => {
+    if (!d?.message_id || !d.user_id) return;
+    setMsgs((prev) => prev.map((m) => (m.id === d.message_id ? applyReaction(m, d.user_id!, d.emoji ?? null) : m)));
+  });
+  useCoupleEvent('message.deleted', (d: { id?: string }) => {
+    if (!d?.id) return;
+    setMsgs((prev) => prev.filter((m) => m.id !== d.id));
+    setActionsFor((cur) => (cur?.id === d.id ? null : cur));
+    setReplyTo((cur) => (cur?.id === d.id ? null : cur));
   });
 
   const loadMore = async () => {
@@ -206,6 +251,33 @@ export default function Chat() {
     }
   };
 
+  const toggleReaction = async (message: Message, emoji: string) => {
+    const mine = message.reactions?.find((r) => r.user_id === user?.id)?.emoji ?? null;
+    const decision = nextReactionAction(mine, emoji);
+    const nextEmoji = decision.action === 'react' ? decision.emoji : null;
+    setMsgs((prev) => prev.map((m) => (m.id === message.id ? applyReaction(m, user!.id, nextEmoji) : m)));
+    try {
+      await api(`/api/messages/${message.id}`, {
+        method: 'POST',
+        body: decision.action === 'react' ? { action: 'react', emoji: decision.emoji } : { action: 'unreact' },
+      });
+    } catch {
+      // reconcile with the server rather than leave a reaction that never saved
+      load().catch(() => {});
+    }
+  };
+
+  const deleteMessage = async (message: Message) => {
+    setActionsFor(null);
+    setMsgs((prev) => prev.filter((m) => m.id !== message.id));
+    try {
+      await api(`/api/messages/${message.id}`, { method: 'DELETE' });
+    } catch {
+      toast.show('Could not delete that. Try again.');
+      load().catch(() => {});
+    }
+  };
+
   const addToTimeline = async (m: Message) => {
     if (m.pending || m.id.startsWith('temp-') || addedIds.has(m.id)) return;
     setAddedIds((s) => new Set(s).add(m.id));
@@ -271,18 +343,22 @@ export default function Chat() {
               const prev = msgs[index + 1];
               const grouped = prev && prev.sender_id === item.sender_id;
               return (
-                <Bubble
-                  message={item}
-                  mine={mine}
-                  grouped={!!grouped}
-                  seen={item.id === seenReceiptId}
-                  added={addedIds.has(item.id)}
-                  quoted={item.reply_to_id ? msgs.find((x) => x.id === item.reply_to_id) ?? null : null}
-                  quotedName={(sid) => (sid === user?.id ? 'You' : partner?.display_name ?? 'Them')}
-                  onOpenImage={() => item.image_thumb && setViewer({ id: item.id, thumb: item.image_thumb })}
-                  onAddToTimeline={() => addToTimeline(item)}
-                  onReply={() => setReplyTo(item)}
-                />
+                <SwipeToReply onReply={() => setReplyTo(item)} disabled={item.pending} mine={mine}>
+                  <Bubble
+                    message={item}
+                    mine={mine}
+                    grouped={!!grouped}
+                    seen={item.id === seenReceiptId}
+                    added={addedIds.has(item.id)}
+                    quoted={item.reply_to_id ? msgs.find((x) => x.id === item.reply_to_id) ?? null : null}
+                    quotedName={(sid) => (sid === user?.id ? 'You' : partner?.display_name ?? 'Them')}
+                    reactions={groupReactions(item.reactions ?? [], user?.id)}
+                    onOpenImage={() => item.image_thumb && setViewer({ id: item.id, thumb: item.image_thumb })}
+                    onAddToTimeline={() => addToTimeline(item)}
+                    onLongPress={() => !item.pending && setActionsFor(item)}
+                    onToggleReaction={(emoji) => toggleReaction(item, emoji)}
+                  />
+                </SwipeToReply>
               );
             }}
           />
@@ -328,7 +404,190 @@ export default function Chat() {
       )}
 
       <ImageViewer viewer={viewer} onClose={() => setViewer(null)} />
+
+      <MessageActionsSheet
+        visible={!!actionsFor}
+        message={actionsFor}
+        mine={actionsFor?.sender_id === user?.id}
+        onClose={() => setActionsFor(null)}
+        onReply={() => {
+          if (actionsFor) setReplyTo(actionsFor);
+          setActionsFor(null);
+        }}
+        onQuickReact={(emoji) => {
+          if (actionsFor) toggleReaction(actionsFor, emoji);
+          setActionsFor(null);
+        }}
+        onOpenFullPicker={() => {
+          setReactFor(actionsFor);
+          setActionsFor(null);
+        }}
+        onDelete={() => actionsFor && deleteMessage(actionsFor)}
+      />
+      <ReactionPicker
+        visible={!!reactFor}
+        onClose={() => setReactFor(null)}
+        onSelect={(emoji) => {
+          if (reactFor) toggleReaction(reactFor, emoji);
+          setReactFor(null);
+        }}
+      />
     </SafeAreaView>
+  );
+}
+
+/**
+ * Long-press a bubble: a quick-reaction bar (the six common emoji, tap one to
+ * react immediately, tap + for the full keyboard) up top, then Reply, and
+ * (own messages only) Delete. Delete flips the same sheet into an inline
+ * two-step confirm rather than Alert.alert, which does not work on web (see
+ * CLAUDE.md's Gotchas).
+ */
+function MessageActionsSheet({
+  visible,
+  message,
+  mine,
+  onClose,
+  onReply,
+  onQuickReact,
+  onOpenFullPicker,
+  onDelete,
+}: {
+  visible: boolean;
+  message: Message | null;
+  mine: boolean;
+  onClose: () => void;
+  onReply: () => void;
+  onQuickReact: (emoji: string) => void;
+  onOpenFullPicker: () => void;
+  onDelete: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    if (visible) setConfirming(false);
+  }, [visible, message?.id]);
+
+  const { user } = useAuth();
+  const myReaction = message?.reactions?.find((r) => r.user_id === user?.id)?.emoji ?? null;
+
+  return (
+    <Sheet visible={visible} onClose={onClose} title={confirming ? 'Delete this message?' : 'Message'}>
+      {confirming ? (
+        <View>
+          <Text style={[text.body, { color: colors.inkMuted, marginBottom: sp.lg }]}>
+            This removes it for both of you. It can't be undone.
+          </Text>
+          <SecondaryButton title="Cancel" onPress={() => setConfirming(false)} style={{ marginBottom: sp.sm }} />
+          <PrimaryButton title="Delete" onPress={onDelete} style={{ backgroundColor: colors.danger }} />
+        </View>
+      ) : (
+        <View>
+          <View style={styles.quickReactRow}>
+            {QUICK_REACTIONS.map((e) => (
+              <Pressable
+                key={e}
+                onPress={() => onQuickReact(e)}
+                hitSlop={4}
+                style={[styles.quickReactCell, e === myReaction && styles.quickReactCellActive]}
+              >
+                <Text style={styles.quickReactEmoji}>{e}</Text>
+              </Pressable>
+            ))}
+            <Pressable onPress={onOpenFullPicker} hitSlop={4} style={styles.quickReactPlus}>
+              <Plus size={18} color={colors.ink} strokeWidth={1.75} />
+            </Pressable>
+          </View>
+          <Pressable style={[styles.actionRow, !mine && { borderBottomWidth: 0 }]} onPress={onReply}>
+            <Reply size={19} color={colors.ink} strokeWidth={1.75} />
+            <Text style={text.body}>Reply</Text>
+          </Pressable>
+          {mine && (
+            <Pressable style={[styles.actionRow, { borderBottomWidth: 0 }]} onPress={() => setConfirming(true)}>
+              <Trash2 size={19} color={colors.danger} strokeWidth={1.75} />
+              <Text style={[text.body, { color: colors.danger }]}>Delete</Text>
+            </Pressable>
+          )}
+        </View>
+      )}
+    </Sheet>
+  );
+}
+
+/**
+ * Swipe a bubble right to reply, WhatsApp-style. Built on PanResponder (the
+ * same core RN gesture API AddMenu already uses for its scrim swipe-down),
+ * not a new gesture-handler dependency. Only claims the responder once a drag
+ * reads as clearly horizontal, so the surrounding FlatList keeps its vertical
+ * scroll.
+ */
+function SwipeToReply({
+  onReply,
+  disabled,
+  mine,
+  children,
+}: {
+  onReply: () => void;
+  disabled?: boolean;
+  /** Which edge the bubble hugs, so the hidden-behind-it icon anchors to its LEADING (left) edge either way. */
+  mine: boolean;
+  children: React.ReactNode;
+}) {
+  const translateX = useRef(new Animated.Value(0)).current;
+  const armed = useRef(false);
+
+  const pan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_evt, g) => !disabled && g.dx > 8 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+      onPanResponderGrant: () => {
+        armed.current = false;
+      },
+      onPanResponderMove: (_evt, g) => {
+        const dx = Math.max(0, Math.min(g.dx, SWIPE_MAX));
+        translateX.setValue(dx);
+        if (dx >= SWIPE_TRIGGER && !armed.current) {
+          armed.current = true;
+          tapHaptic();
+        } else if (dx < SWIPE_TRIGGER) {
+          armed.current = false;
+        }
+      },
+      onPanResponderRelease: (_evt, g) => {
+        const triggered = g.dx >= SWIPE_TRIGGER;
+        Animated.spring(translateX, { toValue: 0, useNativeDriver: true, stiffness: 260, damping: 22 }).start();
+        if (triggered) onReply();
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(translateX, { toValue: 0, useNativeDriver: true, stiffness: 260, damping: 22 }).start();
+      },
+    })
+  ).current;
+
+  const iconOpacity = translateX.interpolate({
+    inputRange: [0, SWIPE_TRIGGER],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+
+  return (
+    // The icon anchor is a ZERO-WIDTH box placed right before the bubble in
+    // flex order. justifyContent packs [anchor, bubble] together to whichever
+    // edge "mine" points at, so the anchor always lands exactly at the
+    // bubble's own leading edge, regardless of the bubble's rendered width
+    // (no onLayout measurement needed). The icon itself is absolutely
+    // positioned inside that zero-width anchor, so it takes no row space and
+    // starts out hidden BEHIND the bubble (a later sibling paints on top);
+    // sliding the bubble away by translateX reveals it.
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: mine ? 'flex-end' : 'flex-start' }}>
+      <View style={{ width: 0 }}>
+        <Animated.View style={[styles.swipeIcon, { opacity: iconOpacity }]}>
+          <Reply size={16} color={colors.accent} strokeWidth={1.75} />
+        </Animated.View>
+      </View>
+      <Animated.View style={{ transform: [{ translateX }], maxWidth: '100%' }} {...pan.panHandlers}>
+        {children}
+      </Animated.View>
+    </View>
   );
 }
 
@@ -340,9 +599,11 @@ function Bubble({
   added,
   quoted,
   quotedName,
+  reactions,
   onOpenImage,
   onAddToTimeline,
-  onReply,
+  onLongPress,
+  onToggleReaction,
 }: {
   message: Message;
   mine: boolean;
@@ -352,9 +613,12 @@ function Bubble({
   /** The message this one replies to, if it is loaded in the thread. */
   quoted: Message | null;
   quotedName: (senderId: string) => string;
+  reactions: { emoji: string; count: number; mine: boolean }[];
   onOpenImage: () => void;
   onAddToTimeline: () => void;
-  onReply: () => void;
+  /** Opens the React / Reply / Delete sheet. */
+  onLongPress: () => void;
+  onToggleReaction: (emoji: string) => void;
 }) {
   const hasImage = !!message.image_thumb;
   return (
@@ -363,8 +627,8 @@ function Bubble({
           unbroken token (a URL) would otherwise push it off screen. */}
       <View style={{ maxWidth: '80%', flexShrink: 1, alignItems: mine ? 'flex-end' : 'flex-start' }}>
         <Pressable
-          onLongPress={onReply}
-          delayLongPress={250}
+          onLongPress={onLongPress}
+          delayLongPress={280}
           style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs, hasImage && styles.bubbleWithImage]}
         >
           {message.reply_to_id ? (
@@ -393,6 +657,20 @@ function Bubble({
             {message.pending ? 'Sending…' : formatTime(message.created_at)}
           </Text>
         </Pressable>
+        {reactions.length > 0 && (
+          <View style={[styles.reactionsRow, mine && { justifyContent: 'flex-end' }]}>
+            {reactions.map((r) => (
+              <Pressable
+                key={r.emoji}
+                onPress={() => onToggleReaction(r.emoji)}
+                style={[styles.reactionPill, r.mine && styles.reactionPillMine]}
+              >
+                <Text style={styles.reactionEmoji}>{r.emoji}</Text>
+                {r.count > 1 && <Text style={styles.reactionCount}>{r.count}</Text>}
+              </Pressable>
+            ))}
+          </View>
+        )}
         {hasImage && !message.pending && (
           <Pressable onPress={onAddToTimeline} hitSlop={6} style={styles.addRow} disabled={added}>
             <ImageDown size={13} color={added ? colors.positive : colors.inkMuted} strokeWidth={1.75} />
@@ -586,6 +864,84 @@ const styles = StyleSheet.create({
     gap: sp.xs,
     marginTop: sp.xs,
     paddingHorizontal: sp.xs,
+  },
+  reactionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: sp.xs,
+    marginTop: sp.xs,
+    paddingHorizontal: sp.xs,
+  },
+  reactionPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: sp.sm,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.surfaceRaised,
+  },
+  reactionPillMine: {
+    borderColor: colors.accent,
+    backgroundColor: colors.blushSoft,
+  },
+  reactionEmoji: {
+    fontSize: 13,
+  },
+  reactionCount: {
+    ...text.micro,
+    textTransform: 'none',
+    letterSpacing: 0,
+    color: colors.inkMuted,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.md,
+    paddingVertical: sp.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairline,
+  },
+  quickReactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: sp.sm,
+    marginBottom: sp.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairline,
+  },
+  quickReactCell: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickReactCellActive: {
+    backgroundColor: colors.blushSoft,
+  },
+  quickReactEmoji: {
+    fontSize: 24,
+  },
+  quickReactPlus: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  swipeIcon: {
+    position: 'absolute',
+    width: SWIPE_TRIGGER,
+    top: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   addText: {
     ...text.micro,
