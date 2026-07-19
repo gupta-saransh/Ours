@@ -20,6 +20,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import {
   ChevronLeft,
   ChevronRight,
+  ImagePlus,
   Keyboard as KeyboardIcon,
   Lock,
   MessageCircle,
@@ -55,6 +56,7 @@ import { MemoryComments } from '@/components/MemoryComments';
 import { colors, radius, sp, text } from '@/theme';
 import { formatDay } from '@/lib/format';
 import { useComposeParam } from '@/lib/useComposeParam';
+import { momentTarget } from '@/lib/momentTarget';
 
 /**
  * The Timeline: photos and notes in ONE feed, the merge of what used to be the
@@ -68,6 +70,13 @@ import { useComposeParam } from '@/lib/useComposeParam';
  *
  * PINNED notes are the exception and float above the flow in their own block:
  * pinning something means you want it in front of you, not filed by date.
+ *
+ * ONE COMPOSER. Since the two tabs merged, "add a note" and "add a memory" are
+ * no longer separate acts: `MomentComposer` takes words, a photo, or both, the
+ * way a LinkedIn post does. Two tables still back it (see momentTarget.ts for
+ * the routing rule and why the date matters), but that is storage detail the
+ * writer never sees. The feed's top row is a slim TRIGGER, not a live input,
+ * so the composer markup exists exactly once and the feed keeps its space.
  */
 
 interface Memory {
@@ -153,22 +162,20 @@ export default function Timeline() {
   const [notes, setNotes] = useState<Note[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [view, setView] = useState<'calendar' | 'timeline'>('timeline');
-  const [composerDate, setComposerDate] = useState<string | null>(null);
+  // The one composer. `date` pins it to a calendar day (null = today, and a
+  // wordless entry then stays a note); `withPhoto` opens the picker straight
+  // away, for the trigger row's photo shortcut.
+  const [composer, setComposer] = useState<{ date: string | null; withPhoto?: boolean } | null>(null);
   const [viewer, setViewer] = useState<Memory | null>(null);
   const [reveal, setReveal] = useState<Note | null>(null);
   // Cards with their comment thread expanded inline (Facebook-style, below the
   // card). Tapping the photo still opens the full viewer.
   const [openThreads, setOpenThreads] = useState<Set<string>>(new Set());
-  const inputRef = useRef<TextInput>(null);
 
-  // The universal add button sends ?kind=memory alongside the compose nonce
-  // when it means "add a photo"; anything else (including the plain note
-  // action) focuses the note composer, the lighter of the two.
-  const { kind } = useLocalSearchParams<{ kind?: string }>();
-  useComposeParam(() => {
-    if (kind === 'memory') setComposerDate(today());
-    else inputRef.current?.focus();
-  });
+  // The universal add button now has a single Timeline action, so there is no
+  // `kind` to disambiguate any more: any compose request opens the one
+  // composer, undated (today).
+  useComposeParam(() => setComposer({ date: null }));
 
   const load = useCallback(async () => {
     setFailed(false);
@@ -336,9 +343,11 @@ export default function Timeline() {
     }
   };
 
-  const onMemoryCreated = (m: Memory) => {
-    setMemories((prev) => [m, ...(prev ?? [])]);
-    setComposerDate(null);
+  /** One callback for both shapes; the composer decides which table it used. */
+  const onMomentCreated = (created: { type: 'memory'; memory: Memory } | { type: 'note'; note: Note }) => {
+    if (created.type === 'memory') setMemories((prev) => [created.memory, ...(prev ?? [])]);
+    else setNotes((prev) => [created.note, ...(prev ?? [])]);
+    setComposer(null);
   };
 
   const openMemory = (m: Memory) => {
@@ -493,7 +502,12 @@ export default function Timeline() {
 
   const listHeader = (
     <>
-      <Composer inputRef={inputRef} onCreated={(n) => setNotes((prev) => [n, ...(prev ?? [])])} />
+      <ComposerTrigger
+        name={user?.display_name}
+        avatar={user?.avatar}
+        onWrite={() => setComposer({ date: null })}
+        onPhoto={() => setComposer({ date: null, withPhoto: true })}
+      />
       {pinned.length > 0 && (
         <View style={styles.pinnedBlock}>
           <Text style={styles.blockLabel}>Kept close</Text>
@@ -506,8 +520,8 @@ export default function Timeline() {
   const emptyState = (
     <Empty
       line={`Nothing here yet. A photo or a line to ${partner?.display_name ?? 'them'} starts it.`}
-      actionTitle="Add a photo for today"
-      onAction={() => setComposerDate(today())}
+      actionTitle="Add the first"
+      onAction={() => setComposer({ date: null })}
     />
   );
 
@@ -518,7 +532,12 @@ export default function Timeline() {
 
   const overlays = (
     <>
-      <MemoryComposer date={composerDate} onClose={() => setComposerDate(null)} onCreated={onMemoryCreated} />
+      <MomentComposer
+        open={composer}
+        onClose={() => setComposer(null)}
+        onCreated={onMomentCreated}
+        authorName={user?.display_name ?? ''}
+      />
       <RevealViewer
         memory={viewer}
         myId={user?.id ?? ''}
@@ -548,7 +567,7 @@ export default function Timeline() {
         <View style={styles.wideRow}>
           <ScrollView style={styles.wideLeft} contentContainerStyle={{ padding: sp.xl }}>
             <Text style={[text.title, { marginBottom: sp.md }]}>Timeline</Text>
-            <TimelineCalendar days={daysWithSomething} onPickDate={setComposerDate} />
+            <TimelineCalendar days={daysWithSomething} onPickDate={(d) => setComposer({ date: d })} />
           </ScrollView>
           <View style={styles.wideRight}>
             <FlatList
@@ -587,7 +606,7 @@ export default function Timeline() {
       </View>
       {view === 'calendar' ? (
         <ScrollView contentContainerStyle={styles.list}>
-          <TimelineCalendar days={daysWithSomething} onPickDate={setComposerDate} />
+          <TimelineCalendar days={daysWithSomething} onPickDate={(d) => setComposer({ date: d })} />
         </ScrollView>
       ) : (
         <KeyboardAvoidingView
@@ -612,112 +631,255 @@ export default function Timeline() {
 }
 
 /**
- * The writing desk at the top of the feed. Serif input with a rotating spark
- * placeholder, emoji palette, and the time-capsule seal, ending in a wax-seal
- * send disc.
+ * The slim row at the top of the feed. Deliberately NOT a live input: it is a
+ * one-tap doorway into the real composer, the same shape LinkedIn uses. That
+ * keeps the composer defined once (no duplicated seal/emoji/photo logic) and
+ * gives the feed its vertical space back.
  */
-function Composer({
-  inputRef,
-  onCreated,
+function ComposerTrigger({
+  name,
+  avatar,
+  onWrite,
+  onPhoto,
 }: {
-  inputRef: React.RefObject<TextInput | null>;
-  onCreated: (note: Note) => void;
+  name?: string;
+  avatar?: string | null;
+  onWrite: () => void;
+  onPhoto: () => void;
+}) {
+  return (
+    <View style={styles.triggerBlock}>
+      <Card style={styles.triggerCard}>
+        <Avatar id={avatar} name={name ?? ''} size={34} />
+        <Pressable onPress={onWrite} style={styles.triggerField} hitSlop={6}>
+          <Text style={styles.triggerText} numberOfLines={1}>
+            Share a moment...
+          </Text>
+        </Pressable>
+        <Pressable onPress={onPhoto} style={styles.triggerPhoto} hitSlop={6}>
+          <ImagePlus size={19} color={colors.accent} strokeWidth={1.75} />
+        </Pressable>
+      </Card>
+    </View>
+  );
+}
+
+/**
+ * The one composer: words, a photo, or both. Which table it lands in is
+ * decided by momentTarget() and never surfaced to the writer.
+ *
+ * Tools, left to right: photo, a fresh spark (placeholder only, never inserted
+ * text), the emoji palette, and the time-capsule seal.
+ */
+function MomentComposer({
+  open,
+  onClose,
+  onCreated,
+  authorName,
+}: {
+  open: { date: string | null; withPhoto?: boolean } | null;
+  onClose: () => void;
+  onCreated: (created: { type: 'memory'; memory: Memory } | { type: 'note'; note: Note }) => void;
+  authorName: string;
 }) {
   const [draft, setDraft] = useState('');
-  const [sending, setSending] = useState(false);
+  const [photo, setPhoto] = useState<string | null>(null);
+  const [thumb, setThumb] = useState<string | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [sealOpen, setSealOpen] = useState(false);
   const [sealDate, setSealDate] = useState('');
   const [sparkIndex, setSparkIndex] = useState(new Date().getDate() % SPARKS.length);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  // Guards the "open the picker immediately" shortcut so it fires once per
+  // opening, not on every re-render while the sheet is up.
+  const autoPickedFor = useRef<string | null>(null);
+
+  const date = open?.date ?? null;
+  const visible = !!open;
+
+  const reset = useCallback(() => {
+    setDraft('');
+    setPhoto(null);
+    setThumb(null);
+    setEmojiOpen(false);
+    setSealOpen(false);
+    setSealDate('');
+    setError(null);
+    setBusy(false);
+  }, []);
+
+  const pickPhoto = useCallback(async () => {
+    setError(null);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.9 });
+      if (result.canceled || !result.assets?.[0]) return;
+      const uri = result.assets[0].uri;
+      // Two sizes: full for the viewer, small thumb for lists. Keeps every
+      // list request tiny, which is most of what makes the app feel fast.
+      const [full, small] = await Promise.all([
+        ImageManipulator.manipulateAsync(uri, [{ resize: { width: 1200 } }], {
+          compress: 0.7,
+          format: ImageManipulator.SaveFormat.JPEG,
+          base64: true,
+        }),
+        ImageManipulator.manipulateAsync(uri, [{ resize: { width: 360 } }], {
+          compress: 0.55,
+          format: ImageManipulator.SaveFormat.JPEG,
+          base64: true,
+        }),
+      ]);
+      setPhoto(`data:image/jpeg;base64,${full.base64}`);
+      setThumb(`data:image/jpeg;base64,${small.base64}`);
+    } catch {
+      setError('Could not read that photo, try another one.');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!visible) {
+      autoPickedFor.current = null;
+      reset();
+      return;
+    }
+    const token = `${open?.date ?? 'today'}:${open?.withPhoto ? 'photo' : 'write'}`;
+    if (open?.withPhoto && autoPickedFor.current !== token) {
+      autoPickedFor.current = token;
+      pickPhoto();
+    }
+  }, [visible, open?.date, open?.withPhoto, pickPhoto, reset]);
+
+  const body = draft.trim();
+  const canSend = (body.length > 0 || !!photo) && !busy;
 
   const send = async () => {
-    const body = draft.trim();
-    if (!body || sending) return;
-    if (sealOpen && sealDate.trim() && !/^\d{4}-\d{2}-\d{2}$/.test(sealDate.trim())) return;
-    setSending(true);
+    if (!canSend) return;
+    const sealed = sealOpen && sealDate.trim() ? sealDate.trim() : undefined;
+    if (sealed && !/^\d{4}-\d{2}-\d{2}$/.test(sealed)) {
+      setError('Seal date should look like 2027-02-14 (YYYY-MM-DD)');
+      return;
+    }
+    setError(null);
+    setBusy(true);
     try {
-      const data = await api<{ note: Note }>('/api/notes', {
-        method: 'POST',
-        body: { body, sealedUntil: sealOpen && sealDate.trim() ? sealDate.trim() : undefined },
-      });
-      successHaptic();
-      setDraft('');
-      setSealDate('');
-      setSealOpen(false);
-      setEmojiOpen(false);
-      onCreated({ ...data.note, hearts: data.note.hearts ?? 0, hearted_by_me: data.note.hearted_by_me ?? false });
-    } catch {
-      // keep the draft so nothing is lost
-    } finally {
-      setSending(false);
+      const target = momentTarget({ hasPhoto: !!photo, date, today: today() });
+      if (target === 'note') {
+        const data = await api<{ note: Note }>('/api/notes', {
+          method: 'POST',
+          body: { body, sealedUntil: sealed },
+        });
+        successHaptic();
+        onCreated({
+          type: 'note',
+          note: { ...data.note, hearts: data.note.hearts ?? 0, hearted_by_me: data.note.hearted_by_me ?? false },
+        });
+      } else {
+        const data = await api<{ memory: Memory }>('/api/memories', {
+          method: 'POST',
+          body: {
+            note: body,
+            photoData: photo ?? undefined,
+            thumbData: thumb ?? undefined,
+            memoryDate: date ?? undefined,
+            sealedUntil: sealed,
+          },
+        });
+        successHaptic();
+        onCreated({ type: 'memory', memory: { ...data.memory, author_name: data.memory.author_name ?? authorName } });
+      }
+      reset();
+    } catch (err: any) {
+      setError(err?.message ?? 'Something went wrong');
+      setBusy(false);
     }
   };
 
+  const backdated = !!date && date !== today();
+
   return (
-    <View style={styles.composerBlock}>
-      <Card style={styles.composerCard}>
-        <TextInput
-          ref={inputRef}
-          value={draft}
-          onChangeText={setDraft}
-          placeholder={SPARKS[sparkIndex]}
-          placeholderTextColor={colors.inkFaint}
-          multiline
-          style={styles.composerInput}
-        />
-        {sealOpen && (
-          <TextField
-            label="Seal until (YYYY-MM-DD)"
-            value={sealDate}
-            onChangeText={setSealDate}
-            placeholder="2027-02-14"
-            autoCapitalize="none"
-            style={{ height: 40 }}
-          />
-        )}
-        <View style={styles.composerRow}>
-          <View style={styles.composerTools}>
-            <Pressable
-              onPress={() => {
-                tapHaptic();
-                setSparkIndex((i) => (i + 1) % SPARKS.length);
-              }}
-              style={styles.composerIcon}
-              hitSlop={4}
-            >
-              <Sparkles size={18} color={colors.accent} strokeWidth={1.75} />
-            </Pressable>
-            <Pressable
-              onPress={() => setEmojiOpen((o) => !o)}
-              style={[styles.composerIcon, emojiOpen && { backgroundColor: colors.blushSoft }]}
-              hitSlop={4}
-            >
-              {emojiOpen ? (
-                <KeyboardIcon size={18} color={colors.ink} strokeWidth={1.75} />
-              ) : (
-                <Smile size={18} color={colors.ink} strokeWidth={1.75} />
-              )}
-            </Pressable>
-            <Pressable
-              onPress={() => setSealOpen((o) => !o)}
-              style={[styles.composerIcon, sealOpen && { backgroundColor: colors.blushSoft }]}
-              hitSlop={4}
-            >
-              <Lock size={16} color={sealOpen ? colors.accent : colors.ink} strokeWidth={1.75} />
-            </Pressable>
-          </View>
-          <AppPressable
-            onPress={send}
-            disabled={!draft.trim() || sending}
-            style={[styles.send, (!draft.trim() || sending) && { opacity: 0.5 }]}
+    <Sheet visible={visible} onClose={onClose} title="Share a moment">
+      {backdated && <Text style={styles.composerDate}>{formatDay(date!)}</Text>}
+
+      {thumb && (
+        <View style={styles.photoWrap}>
+          <Image source={{ uri: thumb }} style={styles.photoPreview} contentFit="cover" />
+          <Pressable
+            onPress={() => {
+              setPhoto(null);
+              setThumb(null);
+            }}
+            style={styles.photoRemove}
+            hitSlop={8}
           >
-            <Text style={{ color: colors.onSealed, fontSize: 18 }}>♥</Text>
-          </AppPressable>
+            <X size={16} color={colors.onSealed} strokeWidth={2} />
+          </Pressable>
         </View>
-        {emojiOpen && <EmojiPicker onPick={(e) => setDraft((d) => d + e)} />}
-      </Card>
-      <LockBadge style={{ marginTop: sp.sm, alignSelf: 'center' }} />
-    </View>
+      )}
+
+      <TextInput
+        value={draft}
+        onChangeText={setDraft}
+        placeholder={photo ? 'Say something about it, or leave it be...' : SPARKS[sparkIndex]}
+        placeholderTextColor={colors.inkFaint}
+        multiline
+        autoFocus={!open?.withPhoto}
+        style={styles.composerInput}
+      />
+
+      {sealOpen && (
+        <TextField
+          label="Seal until (YYYY-MM-DD)"
+          value={sealDate}
+          onChangeText={setSealDate}
+          placeholder="2027-02-14"
+          autoCapitalize="none"
+          style={{ height: 40 }}
+        />
+      )}
+
+      <View style={styles.composerRow}>
+        <View style={styles.composerTools}>
+          <Pressable onPress={pickPhoto} style={[styles.composerIcon, !!photo && styles.composerIconOn]} hitSlop={4}>
+            <ImagePlus size={18} color={photo ? colors.accent : colors.ink} strokeWidth={1.75} />
+          </Pressable>
+          <Pressable
+            onPress={() => {
+              tapHaptic();
+              setSparkIndex((i) => (i + 1) % SPARKS.length);
+            }}
+            style={styles.composerIcon}
+            hitSlop={4}
+          >
+            <Sparkles size={18} color={colors.accent} strokeWidth={1.75} />
+          </Pressable>
+          <Pressable
+            onPress={() => setEmojiOpen((o) => !o)}
+            style={[styles.composerIcon, emojiOpen && styles.composerIconOn]}
+            hitSlop={4}
+          >
+            {emojiOpen ? (
+              <KeyboardIcon size={18} color={colors.ink} strokeWidth={1.75} />
+            ) : (
+              <Smile size={18} color={colors.ink} strokeWidth={1.75} />
+            )}
+          </Pressable>
+          <Pressable
+            onPress={() => setSealOpen((o) => !o)}
+            style={[styles.composerIcon, sealOpen && styles.composerIconOn]}
+            hitSlop={4}
+          >
+            <Lock size={16} color={sealOpen ? colors.accent : colors.ink} strokeWidth={1.75} />
+          </Pressable>
+        </View>
+        <AppPressable onPress={send} disabled={!canSend} style={[styles.send, !canSend && { opacity: 0.5 }]}>
+          <Text style={{ color: colors.onSealed, fontSize: 18 }}>♥</Text>
+        </AppPressable>
+      </View>
+
+      {emojiOpen && <EmojiPicker onPick={(e) => setDraft((d) => d + e)} />}
+      <FormError message={error} />
+      <LockBadge style={{ marginTop: sp.base, alignSelf: 'center' }} />
+    </Sheet>
   );
 }
 
@@ -912,126 +1074,6 @@ function TimelineCalendar({ days, onPickDate }: { days: Set<string>; onPickDate:
         Tap a day to keep a memory of it. ♥ marks the days you already have.
       </Text>
     </Card>
-  );
-}
-
-function MemoryComposer({
-  date,
-  onClose,
-  onCreated,
-}: {
-  date: string | null;
-  onClose: () => void;
-  onCreated: (m: Memory) => void;
-}) {
-  const [note, setNote] = useState('');
-  const [photo, setPhoto] = useState<string | null>(null);
-  const [thumb, setThumb] = useState<string | null>(null);
-  const [sealOpen, setSealOpen] = useState(false);
-  const [sealDate, setSealDate] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const pickPhoto = async () => {
-    setError(null);
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.9 });
-      if (result.canceled || !result.assets?.[0]) return;
-      const uri = result.assets[0].uri;
-      // Two sizes: full for the viewer, small thumb for lists. Keeps every
-      // list request tiny, which is most of what makes the app feel fast.
-      const [full, small] = await Promise.all([
-        ImageManipulator.manipulateAsync(uri, [{ resize: { width: 1200 } }], {
-          compress: 0.7,
-          format: ImageManipulator.SaveFormat.JPEG,
-          base64: true,
-        }),
-        ImageManipulator.manipulateAsync(uri, [{ resize: { width: 360 } }], {
-          compress: 0.55,
-          format: ImageManipulator.SaveFormat.JPEG,
-          base64: true,
-        }),
-      ]);
-      setPhoto(`data:image/jpeg;base64,${full.base64}`);
-      setThumb(`data:image/jpeg;base64,${small.base64}`);
-    } catch {
-      setError('Could not read that photo, try another one.');
-    }
-  };
-
-  const save = async () => {
-    setError(null);
-    if (sealOpen && sealDate.trim() && !/^\d{4}-\d{2}-\d{2}$/.test(sealDate.trim())) {
-      setError('Seal date should look like 2027-02-14 (YYYY-MM-DD)');
-      return;
-    }
-    setBusy(true);
-    try {
-      const data = await api<{ memory: Memory }>('/api/memories', {
-        method: 'POST',
-        body: {
-          note,
-          photoData: photo ?? undefined,
-          thumbData: thumb ?? undefined,
-          memoryDate: date ?? undefined,
-          sealedUntil: sealOpen && sealDate.trim() ? sealDate.trim() : undefined,
-        },
-      });
-      successHaptic();
-      setNote('');
-      setPhoto(null);
-      setThumb(null);
-      setSealDate('');
-      setSealOpen(false);
-      onCreated(data.memory);
-    } catch (err: any) {
-      setError(err?.message ?? 'Something went wrong');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Sheet visible={!!date} onClose={onClose} title="A moment worth keeping">
-      {date && <Text style={[text.caption, { color: colors.accent, marginBottom: sp.base }]}>{formatDay(date)}</Text>}
-      <Pressable onPress={pickPhoto} style={styles.photoPick}>
-        {thumb ? (
-          <Image source={{ uri: thumb }} style={styles.photoPreview} contentFit="cover" />
-        ) : (
-          <Text style={[text.body, { color: colors.inkMuted }]}>✧ Add a photo</Text>
-        )}
-      </Pressable>
-      <TextInput
-        value={note}
-        onChangeText={setNote}
-        placeholder="What happened? How did it feel?"
-        placeholderTextColor={colors.inkFaint}
-        multiline
-        style={styles.noteInput}
-      />
-      <Pressable onPress={() => setSealOpen((o) => !o)} style={styles.sealToggle} hitSlop={6}>
-        <Lock size={14} color={sealOpen ? colors.accent : colors.inkFaint} strokeWidth={1.75} />
-        <Text style={[text.caption, sealOpen && { color: colors.accent }]}>Seal until a future date</Text>
-      </Pressable>
-      {sealOpen && (
-        <TextField
-          label="Reveal date (YYYY-MM-DD)"
-          value={sealDate}
-          onChangeText={setSealDate}
-          placeholder="2027-02-14"
-          autoCapitalize="none"
-        />
-      )}
-      <FormError message={error} />
-      <PrimaryButton
-        title={sealOpen && sealDate.trim() ? 'Seal this memory' : 'Keep this memory'}
-        onPress={save}
-        loading={busy}
-        disabled={note.trim().length === 0}
-      />
-      <SecondaryButton title="Not now" onPress={onClose} style={{ marginTop: sp.md }} />
-      <LockBadge style={{ marginTop: sp.base, alignSelf: 'center' }} />
-    </Sheet>
   );
 }
 
@@ -1265,38 +1307,62 @@ const styles = StyleSheet.create({
   commentButton: { flexDirection: 'row', alignItems: 'center', gap: sp.xs },
   heartButton: { flexDirection: 'row', alignItems: 'center', gap: sp.xs },
   heartGlyph: { fontSize: 19, color: colors.inkMuted },
-  photoPick: {
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderStyle: 'dashed',
-    borderRadius: radius.md,
-    minHeight: 120,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: sp.base,
-    overflow: 'hidden',
-    backgroundColor: colors.surfaceRaised,
-  },
   photoPreview: { width: '100%', aspectRatio: 16 / 10 },
-  noteInput: {
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: radius.sm,
-    backgroundColor: colors.surfaceRaised,
-    padding: sp.md,
-    minHeight: 96,
-    ...text.body,
-    textAlignVertical: 'top',
-    marginBottom: sp.md,
-  },
-  sealToggle: {
+  triggerBlock: { marginBottom: sp.xl },
+  triggerCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: sp.sm,
+    gap: sp.md,
+    paddingVertical: sp.md,
+  },
+  triggerField: {
+    flex: 1,
+    height: 38,
+    justifyContent: 'center',
+    paddingHorizontal: sp.base,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.surface,
+  },
+  triggerText: {
+    ...text.bodySerif,
+    fontStyle: 'italic',
+    color: colors.inkFaint,
+  },
+  triggerPhoto: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.surface,
+  },
+  composerDate: {
+    ...text.caption,
+    color: colors.accent,
     marginBottom: sp.base,
   },
-  composerBlock: { marginBottom: sp.xl },
-  composerCard: { paddingBottom: sp.md },
+  photoWrap: {
+    marginBottom: sp.base,
+    borderRadius: radius.sm,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  photoRemove: {
+    position: 'absolute',
+    top: sp.sm,
+    right: sp.sm,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(28, 18, 12, 0.6)',
+  },
+  composerIconOn: { backgroundColor: colors.blushSoft },
   composerInput: {
     ...text.bodySerif,
     fontSize: 17,

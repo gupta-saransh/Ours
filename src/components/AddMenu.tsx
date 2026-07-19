@@ -18,7 +18,6 @@ import {
   Image as ImageIcon,
   Plus,
   Star,
-  StickyNote,
   type LucideIcon,
 } from 'lucide-react-native';
 import { tapHaptic } from '@/lib/haptics';
@@ -42,15 +41,15 @@ interface Action {
   params?: Record<string, string>;
 }
 
-// Bottom-up: index 0 sits closest to the FAB. Note and Memory both open the
-// merged Timeline; `kind` tells it which composer to focus (see timeline.tsx).
+// Bottom-up: index 0 sits closest to the FAB. There is ONE Timeline action:
+// the composer it opens takes words, a photo, or both, so the old Note/Memory
+// split (and its `kind` param) is gone. Five actions, not six.
 const ACTIONS: Action[] = [
   { key: 'milestone', label: 'Add a milestone', Icon: Star, path: '/milestones' },
   { key: 'date', label: 'Propose a date', Icon: CalendarHeart, path: '/dates' },
   { key: 'wish', label: 'Make a wish', Icon: Gift, path: '/wishlist' },
   { key: 'todo', label: 'Add a to-do', Icon: CheckSquare, path: '/todos' },
-  { key: 'note', label: 'Add note', Icon: StickyNote, path: '/timeline' },
-  { key: 'memory', label: 'Add memory', Icon: ImageIcon, path: '/timeline', params: { kind: 'memory' } },
+  { key: 'memory', label: 'Share a moment', Icon: ImageIcon, path: '/timeline' },
 ];
 
 // Routes that show the FAB. Hidden elsewhere (Settings, Notifications, etc.).

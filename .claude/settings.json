@@ -18,7 +18,8 @@
       "Bash(npm run *)",
       "Bash(npm test *)",
       "Bash(python -)",
-      "Read(//c/Users/Srg/.claude/uploads/84e45cef-b5ef-4a70-a358-6f2ae7399a95/**)"
+      "Read(//c/Users/Srg/.claude/uploads/84e45cef-b5ef-4a70-a358-6f2ae7399a95/**)",
+      "Bash(grep -n \"^function MemoryComposer\\\\|^function RevealViewer\\\\|^/\\\\*\\\\*\" \"app/\\(tabs\\)/timeline.tsx\")"
     ],
     "additionalDirectories": [
       "d:\\Coding\\NewProjects\\RelationshipHQ\\api"

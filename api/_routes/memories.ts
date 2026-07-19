@@ -64,9 +64,15 @@ export default route(['GET', 'POST'], async (req, res) => {
     return;
   }
 
-  const note = requireString(req.body?.note, 'Note', 4000);
+  // A moment needs SOMETHING, but either half alone is a complete thought: a
+  // photo with no caption is a memory, and words with no photo are one too
+  // (the client sends wordless-and-undated entries to /api/notes instead, so
+  // what arrives here without a photo is a deliberately backdated one).
   const photoData = req.body?.photoData ? validImage(req.body.photoData, 3_500_000) : null;
   const thumbData = req.body?.thumbData ? validImage(req.body.thumbData, 200_000) : null;
+  const hasNote = typeof req.body?.note === 'string' && req.body.note.trim().length > 0;
+  if (!hasNote && !photoData) throw new HttpError(400, 'Add a photo or a few words');
+  const note = hasNote ? requireString(req.body.note, 'Note', 4000) : '';
   let memoryDate: string | null = null;
   if (req.body?.memoryDate) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.body.memoryDate)) {
@@ -84,8 +90,10 @@ export default route(['GET', 'POST'], async (req, res) => {
   }
 
   // Encrypt the note at rest; when encryption is on the plaintext column is
-  // stored empty and the ciphertext lives in note_ct.
-  const noteCt = await encryptField(user.couple_id, note);
+  // stored empty and the ciphertext lives in note_ct. A captionless photo has
+  // nothing to encrypt, so both columns stay empty rather than storing the
+  // ciphertext of an empty string.
+  const noteCt = note ? await encryptField(user.couple_id, note) : null;
   const created = await one(
     `INSERT INTO memories (couple_id, author_id, photo_data, thumb_data, note, note_ct, memory_date, sealed_until)
      VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::DATE, now()::DATE), $8)
@@ -108,7 +116,11 @@ export default route(['GET', 'POST'], async (req, res) => {
     user.couple_id,
     user.id,
     sealedUntil ? 'capsule' : 'memory',
-    sealedUntil ? `${user.display_name} sealed a time capsule` : `${user.display_name} added a memory`
+    sealedUntil
+      ? `${user.display_name} sealed a time capsule`
+      : photoData
+        ? `${user.display_name} added a photo`
+        : `${user.display_name} added a memory`
   );
   res.status(201).json({ memory });
 });
