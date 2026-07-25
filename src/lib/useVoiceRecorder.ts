@@ -22,9 +22,16 @@ import { downsampleWaveform, meteringToLevel, MAX_VOICE_NOTE_MS, MIN_VOICE_NOTE_
  * - Web: expo-audio implements NO metering at all (confirmed by reading its
  *   web source; RecorderState.metering is simply never set there), so a
  *   small AnalyserNode is run alongside the recorder purely to sample levels.
- *   It shares the mic stream only in the sense that it opens its own
- *   getUserMedia (a second concurrent stream from the same device, which
- *   browsers allow once permission is granted); if it fails for any reason
+ *   It REUSES the exact MediaStream expo-audio's own recorder already opened
+ *   (reached via its internal `mediaRecorder.stream`, a private field but a
+ *   standard MediaRecorder property once you have the instance) rather than
+ *   opening a second one. This used to be a real bug: a fresh getUserMedia
+ *   call here, ON TOP OF expo-audio's own and an explicit permission
+ *   pre-check in start(), meant every single recording fired three separate
+ *   mic-access requests, which is likely why some browsers/PWA contexts kept
+ *   re-showing "wants to access your microphone" instead of remembering the
+ *   grant. Falls back to opening its own stream only if the reach-around ever
+ *   comes back empty (a future expo-audio version, say); if even THAT fails
  *   the recording itself is unaffected, only the waveform ends up flatter.
  *
  * Format at the RECORDING step: expo-audio's HIGH_QUALITY preset defaults to
@@ -100,22 +107,30 @@ export function useVoiceRecorder() {
   }, [state.isRecording, state.metering]);
 
   // Web: expo-audio reports no metering, so run our own analyser purely for
-  // level sampling. Best-effort: any failure here just leaves the waveform
-  // flatter, it never blocks or breaks the actual recording.
+  // level sampling, reusing the recorder's OWN stream (see the module doc
+  // comment for why: opening a second getUserMedia stream here used to mean
+  // three separate mic-access requests per recording). Best-effort: any
+  // failure here just leaves the waveform flatter, it never blocks or
+  // breaks the actual recording.
   const recordingFlag = Platform.OS === 'web' && state.isRecording;
   useEffect(() => {
     if (!recordingFlag) return;
     let rafId = 0;
     let cancelled = false;
-    let stream: MediaStream | null = null;
+    let ownedStream: MediaStream | null = null; // only set if WE opened a fallback stream
     let ctx: any = null;
 
     (async () => {
       try {
-        const nav: any = (globalThis as any).navigator;
-        stream = await nav.mediaDevices.getUserMedia({ audio: true });
+        const reused: MediaStream | undefined = (recorder as any)?.mediaRecorder?.stream;
+        let stream: MediaStream | null = reused ?? null;
+        if (!stream) {
+          const nav: any = (globalThis as any).navigator;
+          stream = await nav.mediaDevices.getUserMedia({ audio: true });
+          ownedStream = stream;
+        }
         if (cancelled || !stream) {
-          stream?.getTracks().forEach((t) => t.stop());
+          ownedStream?.getTracks().forEach((t) => t.stop());
           return;
         }
         const AudioCtx = (globalThis as any).AudioContext || (globalThis as any).webkitAudioContext;
@@ -149,22 +164,35 @@ export function useVoiceRecorder() {
     return () => {
       cancelled = true;
       if (rafId) (globalThis as any).cancelAnimationFrame?.(rafId);
-      stream?.getTracks().forEach((t) => t.stop());
+      // Only stop tracks WE opened (the fallback path): the reused stream
+      // belongs to the recorder and must keep running until it stops itself.
+      ownedStream?.getTracks().forEach((t) => t.stop());
       ctx?.close?.().catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recordingFlag]);
 
   const start = useCallback(async (): Promise<boolean> => {
-    const perm = await requestRecordingPermissionsAsync().catch(() => null);
-    if (!perm?.granted) return false;
+    // Native has a real permission-status API worth checking up front. On web
+    // there is no separate check: expo-audio's own getUserMedia call below
+    // IS the permission request, and a second explicit one first (as this
+    // used to do) is a redundant mic-access round trip for no benefit, since
+    // we would proceed to record() regardless of what it reported.
+    if (Platform.OS !== 'web') {
+      const perm = await requestRecordingPermissionsAsync().catch(() => null);
+      if (!perm?.granted) return false;
+    }
     await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true }).catch(() => {});
     samplesRef.current = [];
     startedAtRef.current = Date.now();
     setElapsedMs(0);
     setLevel(0);
-    await recorder.prepareToRecordAsync();
-    recorder.record();
+    try {
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+    } catch {
+      return false; // permission denied, or no mic available
+    }
     return true;
   }, [recorder]);
 

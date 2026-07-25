@@ -20,6 +20,15 @@ export interface WhatsNewEntry {
 // Newest first. Add an entry here whenever something user-facing ships.
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: '2026-07-26-voice-notes',
+    title: 'Send a voice note',
+    bullets: [
+      'Tap the mic in chat to record a voice note. It sends with a little waveform you can tap to play back.',
+      "You'll now see when your person is typing or recording, right above the message box.",
+      "Forgot your password? There's a way back in now, no need to ask us for help.",
+    ],
+  },
+  {
     id: '2026-07-19-chat-and-game',
     title: 'A tidier chat, a quicker game',
     bullets: [

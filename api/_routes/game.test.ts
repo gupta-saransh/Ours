@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
     created_at?: string;
   }[],
   insertReturns: { id: 'g1' } as Record<string, unknown> | null,
+  agreement: null as { agreed: number; total: number } | null,
   published: [] as { event: string; data: Record<string, unknown> }[],
   notified: [] as string[],
 }));
@@ -35,9 +36,10 @@ vi.mock('../_lib/notify', () => ({
 }));
 vi.mock('../_lib/db', () => ({
   q: vi.fn(async () => h.rows),
-  one: vi.fn(async () => h.insertReturns),
+  one: vi.fn(async (text: string) => (text.includes('FROM daily_game_answers a') ? h.agreement : h.insertReturns)),
 }));
 
+import { one } from '../_lib/db';
 import handler, { GAME_POOL, gamesForToday, roundStateFor, ROUND_TWO_DELAY_MS, todaysGame } from './game';
 
 function makeRes() {
@@ -64,6 +66,7 @@ describe('This-or-That', () => {
   beforeEach(() => {
     h.rows = [];
     h.insertReturns = { id: 'g1' };
+    h.agreement = null;
     h.published.length = 0;
     h.notified.length = 0;
   });
@@ -97,7 +100,28 @@ describe('This-or-That', () => {
       partnerPick: 'b',
       iGuessedRight: true, // I guessed b, they picked b
       theyGuessedRight: false, // they guessed b, I picked a
+      agreement: null,
     });
+  });
+
+  it('surfaces the all-time agreement stat only at the reveal moment', async () => {
+    h.rows = [
+      { user_id: 'user-A', pick: 'a', guess: 'b' },
+      { user_id: 'user-B', pick: 'b', guess: 'b' },
+    ];
+    h.agreement = { agreed: 3, total: 5 };
+    const res = makeRes();
+    await handler({ method: 'GET', query: {}, headers: {}, url: '/api/game/today' } as any, res);
+    expect(res.body.reveal.agreement).toEqual({ agreed: 3, total: 5 });
+  });
+
+  it('never runs the agreement query before both have played (no wasted query)', async () => {
+    h.rows = [{ user_id: 'user-B', pick: 'a', guess: 'b' }]; // only the partner played
+    (one as any).mockClear();
+    const res = makeRes();
+    await handler({ method: 'GET', query: {}, headers: {}, url: '/api/game/today' } as any, res);
+    expect(res.body.reveal).toBeNull();
+    expect((one as any).mock.calls.some((c: unknown[]) => String(c[0]).includes('FROM daily_game_answers a'))).toBe(false);
   });
 
   it('rejects playing twice (409) via the conflict-free insert', async () => {
@@ -219,6 +243,7 @@ describe('the second round of the day', () => {
       partnerPick: 'a', // their pick2
       iGuessedRight: true, // I guessed a, they picked a
       theyGuessedRight: true, // they guessed b, I picked b
+      agreement: null,
     });
   });
 });

@@ -110,6 +110,34 @@ export function todaysGame(): { game_date: string } & GamePair {
 }
 
 /**
+ * How often you two pick the SAME either/or, across every round either of
+ * you has ever played. Pure arithmetic over `daily_game_answers`, the table
+ * the route already writes to on every play; nothing new is stored for this.
+ * `b.user_id > a.user_id` (an ordered pair, not just `!=`) is what keeps each
+ * day counted ONCE rather than twice, since "did A match B" and "did B match
+ * A" are the same fact (unlike the correct-guess count elsewhere in
+ * home.ts, where the two directions are genuinely different events and both
+ * should count). Catch-guarded like every other daily_game_answers query
+ * (v16/v18 table), so a pre-migration deploy degrades to "no stat" instead
+ * of a 500.
+ */
+async function agreementStatsFor(coupleId: string): Promise<{ agreed: number; total: number } | null> {
+  const row = await one<{ agreed: number; total: number }>(
+    `SELECT
+       (count(*) FILTER (WHERE a.pick = b.pick)
+      + count(*) FILTER (WHERE a.pick2 IS NOT NULL AND b.pick2 IS NOT NULL AND a.pick2 = b.pick2))::int AS agreed,
+       (count(*)
+      + count(*) FILTER (WHERE a.pick2 IS NOT NULL AND b.pick2 IS NOT NULL))::int AS total
+     FROM daily_game_answers a
+     JOIN daily_game_answers b
+       ON b.couple_id = a.couple_id AND b.game_date = a.game_date AND b.user_id > a.user_id
+     WHERE a.couple_id = $1`,
+    [coupleId]
+  ).catch(() => undefined);
+  return row ?? null;
+}
+
+/**
  * The game state one partner is allowed to see. Before both have played a
  * round, the partner's row is reduced to a boolean; picks and guesses stay
  * server-side (same privacy shape as prompt answers).
@@ -132,6 +160,9 @@ export async function gameStateFor(coupleId: string, userId: string) {
   const theirPick = round === 1 ? theirs?.pick ?? null : theirs?.pick2 ?? null;
   const theirGuess = round === 1 ? theirs?.guess ?? null : theirs?.guess2 ?? null;
   const both = !!myPick && !!theirPick;
+  // Only computed at the reveal moment (an extra query, but just the one
+  // moment it is actually shown), never on every idle poll.
+  const agreement = both ? await agreementStatsFor(coupleId) : null;
 
   return {
     game: { game_date, round, ...rounds[round - 1] },
@@ -146,6 +177,8 @@ export async function gameStateFor(coupleId: string, userId: string) {
           partnerPick: theirPick!,
           iGuessedRight: myGuess === theirPick,
           theyGuessedRight: theirGuess === myPick,
+          /** How often you two pick the same either/or, all-time. Null pre-migration. */
+          agreement,
         }
       : null,
   };

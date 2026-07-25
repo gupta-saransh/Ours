@@ -74,7 +74,13 @@ interface GameState {
   played: boolean;
   partnerPlayed: boolean;
   mine: { pick: 'a' | 'b'; guess: 'a' | 'b' } | null;
-  reveal: { partnerPick: 'a' | 'b'; iGuessedRight: boolean; theyGuessedRight: boolean } | null;
+  reveal: {
+    partnerPick: 'a' | 'b';
+    iGuessedRight: boolean;
+    theyGuessedRight: boolean;
+    /** How often you two pick the same either/or, all-time. Null pre-migration. */
+    agreement: { agreed: number; total: number } | null;
+  } | null;
 }
 
 /**
@@ -771,6 +777,18 @@ function opensIn(iso: string): string {
 }
 
 /**
+ * "You've agreed on 12 of your 18 either/ors." A real count, not a score,
+ * same "no numbers as scores, but real counts are fine" rule the path
+ * ceremony's madeOfSummary follows. Skipped under 2 rounds of history: "1 of
+ * 1" reads as an odd, oddly definitive thing to lead with on day one.
+ */
+function agreementLine(agreement: { agreed: number; total: number } | null): string | null {
+  if (!agreement || agreement.total < 2) return null;
+  const noun = agreement.total === 1 ? 'either/or' : 'either/ors';
+  return `You've agreed on ${agreement.agreed} of your ${agreement.total} ${noun} ✦`;
+}
+
+/**
  * The daily This-or-That, styled as the prompt card's sibling: the unplayed
  * game is a SEALED (oxblood) card with two parchment options and a gold "or",
  * the reveal is a light card with both partners' marks facing each other over
@@ -876,6 +894,11 @@ function GameCard({
                 ? `They had you pegged from the start! Caught you off guard, didn't they? ${HEART}`
                 : 'Plot twist! You managed to completely catch each other by surprise.'}
         </Text>
+        {agreementLine(reveal.agreement) && (
+          <Text style={[text.caption, { marginTop: sp.md, textAlign: 'center', color: colors.inkMuted }]}>
+            {agreementLine(reveal.agreement)}
+          </Text>
+        )}
         <Text style={[text.micro, { marginTop: sp.sm, textAlign: 'center' }]}>
           {state.nextRoundAt ? `One more opens ${opensIn(state.nextRoundAt)} ✦` : 'A new one tomorrow ✦'}
         </Text>

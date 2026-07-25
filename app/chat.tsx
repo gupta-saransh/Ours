@@ -26,7 +26,7 @@ import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { ChevronLeft, ImagePlus, ImageDown, Mic, Pause, Play, Plus, Reply, Send, Trash2, X } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { useChatPresence, useCoupleEvent } from '@/lib/realtime';
+import { useChatPresence, useCoupleEvent, usePartnerPresence } from '@/lib/realtime';
 import { useToast } from '@/lib/toast';
 import { successHaptic, tapHaptic } from '@/lib/haptics';
 import { Avatar } from '@/components/Avatar';
@@ -37,7 +37,7 @@ import { applyReaction, groupReactions, nextReactionAction, QUICK_REACTIONS, typ
 import { BUBBLE_TEXT_WRAP, bubbleImageSize, bubbleMaxWidth, bubbleQuoteWidth, bubbleVoiceWidth } from '@/lib/bubbleLayout';
 import { colors, font, radius, sp, text } from '@/theme';
 import { formatChatDay, formatTime, sameLocalDay } from '@/lib/format';
-import { formatClipDuration } from '@/lib/audioWaveform';
+import { formatClipDuration, WAVEFORM_BARS } from '@/lib/audioWaveform';
 import { useVoiceRecorder } from '@/lib/useVoiceRecorder';
 
 interface Message {
@@ -203,7 +203,27 @@ export default function Chat() {
     const sub = AppState.addEventListener('change', (state) => setForegrounded(state === 'active'));
     return () => sub.remove();
   }, []);
-  useChatPresence(foregrounded, { screen: 'chat' });
+  const updateMyActivity = useChatPresence(foregrounded, { screen: 'chat' });
+  const partnerPresence = usePartnerPresence();
+  const partnerActivity =
+    partnerPresence?.screen === 'chat' ? (partnerPresence.activity as 'typing' | 'recording' | null) : null;
+
+  // Tells the partner "typing…" live, WITHOUT ever writing to the database
+  // (Ably presence only; it clears itself the moment this side goes quiet or
+  // leaves). Marks typing on the first keystroke of a burst, then clears
+  // itself after a pause, the same debounce shape every chat app uses.
+  const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notifyTyping = useCallback(() => {
+    updateMyActivity({ activity: 'typing' });
+    if (typingTimeout.current) clearTimeout(typingTimeout.current);
+    typingTimeout.current = setTimeout(() => updateMyActivity({ activity: null }), 3000);
+  }, [updateMyActivity]);
+  const clearTyping = useCallback(() => {
+    if (typingTimeout.current) clearTimeout(typingTimeout.current);
+    typingTimeout.current = null;
+    updateMyActivity({ activity: null });
+  }, [updateMyActivity]);
+  useEffect(() => () => clearTyping(), [clearTyping]);
 
   const markSeen = useCallback(() => {
     api('/api/messages/seen', { method: 'POST' }).catch(() => {});
@@ -271,6 +291,7 @@ export default function Chat() {
   }) => {
     const bodyText = (opts.body ?? '').trim();
     if (!bodyText && !opts.imageData && !opts.audio) return;
+    clearTyping();
     const quoted = replyTo;
     setInput('');
     setReplyTo(null);
@@ -341,16 +362,23 @@ export default function Chat() {
   const [sendingVoice, setSendingVoice] = useState(false);
 
   const startRecording = async () => {
+    clearTyping();
     const started = await voice.start();
-    if (!started) toast.show('Ours needs microphone access to record a voice note.');
+    if (!started) {
+      toast.show('Ours needs microphone access to record a voice note.');
+      return;
+    }
+    updateMyActivity({ activity: 'recording' });
   };
 
   const cancelRecording = async () => {
     await voice.cancel();
+    updateMyActivity({ activity: null });
   };
 
   const sendRecording = async () => {
     setSendingVoice(true);
+    updateMyActivity({ activity: null });
     try {
       const clip = await voice.finish();
       if (!clip) return; // too short to bother with; recorder already stopped
@@ -518,6 +546,15 @@ export default function Chat() {
               </Pressable>
             </View>
           )}
+          {partnerActivity && (
+            <View style={styles.activityBar}>
+              <Text style={styles.activityText}>
+                {partnerActivity === 'recording'
+                  ? `${partner?.display_name ?? 'They'} is recording a voice note…`
+                  : `${partner?.display_name ?? 'They'} is typing…`}
+              </Text>
+            </View>
+          )}
           {voice.isRecording ? (
             <RecordingBar
               elapsedMs={voice.elapsedMs}
@@ -533,7 +570,11 @@ export default function Chat() {
               </Pressable>
               <TextInput
                 value={input}
-                onChangeText={setInput}
+                onChangeText={(t) => {
+                  setInput(t);
+                  if (t.trim()) notifyTyping();
+                  else clearTyping();
+                }}
                 placeholder="Message"
                 placeholderTextColor={colors.inkFaint}
                 style={styles.input}
@@ -1004,8 +1045,12 @@ function VoiceBubble({
   const totalSeconds = status.duration > 0 ? status.duration : durationMs / 1000;
   const playedRatio = totalSeconds > 0 ? Math.min(1, status.currentTime / totalSeconds) : 0;
   const playedBars = Math.round(playedRatio * waveform.length);
-  const barColor = mine ? 'rgba(249, 239, 220, 0.9)' : colors.accent;
-  const barColorFaint = mine ? 'rgba(249, 239, 220, 0.35)' : colors.hairline;
+  // "Played" is always the strongest color available on that bubble;
+  // "unplayed" needs real contrast against the bubble fill too, not just a
+  // 1px-border-strength tint (colors.hairline, tried first, was so faint at
+  // this size it read as an almost-invisible dotted line, the reported bug).
+  const barColor = mine ? 'rgba(249, 239, 220, 0.95)' : colors.surfaceSealed;
+  const barColorFaint = mine ? 'rgba(249, 239, 220, 0.5)' : colors.inkFaint;
 
   return (
     <View style={[styles.voiceRow, { width }]}>
@@ -1019,13 +1064,13 @@ function VoiceBubble({
         )}
       </Pressable>
       <View style={styles.voiceBars}>
-        {(waveform.length ? waveform : new Array(24).fill(0.15)).map((v, i) => (
+        {(waveform.length ? waveform : new Array(WAVEFORM_BARS).fill(0.15)).map((v, i) => (
           <View
             key={i}
             style={[
               styles.voiceBar,
               {
-                height: Math.max(3, Math.round(v * 22)),
+                height: Math.max(4, Math.round(v * 24)),
                 backgroundColor: i < playedBars ? barColor : barColorFaint,
               },
             ]}
@@ -1194,13 +1239,13 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 2,
-    height: 22,
+    gap: 1.5,
+    height: 24,
   },
   voiceBar: {
     flex: 1,
-    minWidth: 2,
-    borderRadius: 1,
+    minWidth: 3,
+    borderRadius: 1.5,
   },
   voiceDuration: {
     ...text.micro,
@@ -1262,6 +1307,18 @@ const styles = StyleSheet.create({
   },
   replyBarBody: {
     ...text.caption,
+    color: colors.inkMuted,
+  },
+  activityBar: {
+    paddingHorizontal: sp.base,
+    paddingTop: sp.xs,
+    width: '100%',
+    maxWidth: LIST_MAX_WIDTH,
+    alignSelf: 'center',
+  },
+  activityText: {
+    ...text.caption,
+    fontStyle: 'italic',
     color: colors.inkMuted,
   },
   bubbleFooter: {

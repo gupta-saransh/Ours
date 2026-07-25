@@ -11,8 +11,15 @@
  * the app's "no stubs, no mock states" rule.
  */
 
-/** Bars rendered in a sent voice-note bubble. */
-export const WAVEFORM_BARS = 40;
+/**
+ * Bars rendered in a sent voice-note bubble. Deliberately modest: the bubble
+ * itself is only ~140px of actual bar-drawing width once the play button and
+ * duration label are accounted for (see BUBBLE_VOICE_WIDTH), and packing 40
+ * thin bars plus their gaps into that space left each bar under 2px wide, a
+ * near-invisible dotted line rather than a readable waveform (a real reported
+ * bug). Fewer, thicker bars read clearly at this size.
+ */
+export const WAVEFORM_BARS = 27;
 
 /** A recording longer than this is cut off (3 minutes; a voice NOTE, not a memo). */
 export const MAX_VOICE_NOTE_MS = 180_000;

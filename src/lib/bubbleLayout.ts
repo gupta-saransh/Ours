@@ -32,8 +32,14 @@ export const BUBBLE_IMAGE_INSET = 8;
 export const BUBBLE_QUOTE_INSET = 16;
 /** Images render in a consistent 4:3 frame, cropped to fill (contentFit cover). */
 export const BUBBLE_IMAGE_RATIO = 3 / 4;
-/** A voice bubble's own width, independent of clip length (WhatsApp does this too: a 3-second and a 3-minute note look the same size, only the timer differs). */
-export const BUBBLE_VOICE_WIDTH = 220;
+/**
+ * A voice bubble's own width, independent of clip length (WhatsApp does this
+ * too: a 3-second and a 3-minute note look the same size, only the timer
+ * differs). Wider than the original 220: the play button + duration label
+ * eat a fixed ~80px regardless of bubble width, so a narrow bubble squeezed
+ * the actual waveform-drawing area down to single-pixel bars.
+ */
+export const BUBBLE_VOICE_WIDTH = 248;
 
 /**
  * The width cap shared by every bubble in the thread. Derived from the width
