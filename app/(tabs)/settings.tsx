@@ -9,6 +9,7 @@ import {
   Heart,
   KeyRound,
   Lock,
+  LockKeyhole,
   Mail,
   Palette,
   Share2,
@@ -17,6 +18,8 @@ import {
 import { useAuth } from '@/lib/auth';
 import { api } from '@/lib/api';
 import { disableWebPush, enableWebPush } from '@/lib/push-web';
+import { successHaptic } from '@/lib/haptics';
+import { Sheet } from '@/components/Sheet';
 import {
   AppPressable,
   Card,
@@ -71,7 +74,8 @@ function reasonCopy(reason?: string): string {
 }
 
 export default function Settings() {
-  const { user, couple, partner, encryption, encryptionCode, updateProfile, refresh, signOut, deleteAccount } = useAuth();
+  const { user, couple, partner, encryption, encryptionCode, updateProfile, refresh, signOut, deleteAccount, changePassword } =
+    useAuth();
   const router = useRouter();
   const [name, setName] = useState(user?.display_name ?? '');
   const [savingName, setSavingName] = useState(false);
@@ -87,6 +91,13 @@ export default function Settings() {
   const [testingPush, setTestingPush] = useState(false);
   const [referral, setReferral] = useState<{ code: string | null; joined: number } | null>(null);
   const [referralCopied, setReferralCopied] = useState(false);
+  const [showPwSheet, setShowPwSheet] = useState(false);
+  const [curPw, setCurPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwError, setPwError] = useState<string | null>(null);
+  const [pwSaved, setPwSaved] = useState(false);
 
   useEffect(() => {
     api<{ code: string | null; joined: number }>('/api/referral')
@@ -242,6 +253,38 @@ export default function Settings() {
     } catch (err: any) {
       setError(err?.message ?? 'Something went wrong');
       setDeleting(false);
+    }
+  };
+
+  const openPwSheet = () => {
+    setCurPw('');
+    setNewPw('');
+    setConfirmPw('');
+    setPwError(null);
+    setPwSaved(false);
+    setShowPwSheet(true);
+  };
+
+  const submitPassword = async () => {
+    setPwError(null);
+    if (newPw.length < 8) {
+      setPwError('New password needs at least 8 characters');
+      return;
+    }
+    if (newPw !== confirmPw) {
+      setPwError('Those passwords do not match');
+      return;
+    }
+    setPwBusy(true);
+    try {
+      await changePassword(curPw, newPw);
+      successHaptic();
+      setPwSaved(true);
+      setTimeout(() => setShowPwSheet(false), 1200);
+    } catch (err: any) {
+      setPwError(err?.message ?? 'Something went wrong');
+    } finally {
+      setPwBusy(false);
     }
   };
 
@@ -473,6 +516,16 @@ export default function Settings() {
         </Section>
 
         <Section label="Account">
+          <Card style={{ marginBottom: sp.md }}>
+            <ListRow
+              leading={<LockKeyhole size={18} color={colors.inkMuted} strokeWidth={1.75} />}
+              title="Change password"
+              caption="Update the password you sign in with"
+              trailing={<ChevronRight size={18} color={colors.inkFaint} strokeWidth={1.75} />}
+              onPress={openPwSheet}
+              last
+            />
+          </Card>
           <SecondaryButton title="Log out" onPress={signOut} />
           <View style={{ height: sp.md }} />
           {confirmingDelete ? (
@@ -491,6 +544,41 @@ export default function Settings() {
 
         <Text style={styles.footer}>Ours · a little home for the two of you ♥</Text>
       </ScrollView>
+
+      <Sheet visible={showPwSheet} onClose={() => setShowPwSheet(false)} title="Change password">
+        {pwSaved ? (
+          <Text style={[text.bodySerif, { color: colors.positive }]}>Your password is updated ♥</Text>
+        ) : (
+          <View>
+            <TextField
+              label="Current password"
+              value={curPw}
+              onChangeText={setCurPw}
+              placeholder="Your current password"
+              secureTextEntry
+              autoComplete="current-password"
+            />
+            <TextField
+              label="New password"
+              value={newPw}
+              onChangeText={setNewPw}
+              placeholder="At least 8 characters"
+              secureTextEntry
+              autoComplete="new-password"
+            />
+            <TextField
+              label="Confirm new password"
+              value={confirmPw}
+              onChangeText={setConfirmPw}
+              placeholder="Type it again"
+              secureTextEntry
+              autoComplete="new-password"
+            />
+            <FormError message={pwError} />
+            <PrimaryButton title="Update password" onPress={submitPassword} loading={pwBusy} />
+          </View>
+        )}
+      </Sheet>
     </Screen>
   );
 }

@@ -6,6 +6,9 @@ import authLogin from './_routes/auth-login';
 import authMe from './_routes/auth-me';
 import authAccount from './_routes/auth-account';
 import authProfile from './_routes/auth-profile';
+import authChangePassword from './_routes/auth-change-password';
+import authForgotPassword from './_routes/auth-forgot-password';
+import authResetPassword from './_routes/auth-reset-password';
 import coupleCreate from './_routes/couple-create';
 import coupleJoin from './_routes/couple-join';
 import coupleGet from './_routes/couple-get';
@@ -59,6 +62,9 @@ const routes: Partial<Record<string, Handler>> = {
   'auth/me': authMe,
   'auth/account': authAccount,
   'auth/profile': authProfile,
+  'auth/change-password': authChangePassword,
+  'auth/forgot-password': authForgotPassword,
+  'auth/reset-password': authResetPassword,
   'couple/create': coupleCreate,
   'couple/join': coupleJoin,
   couple: coupleGet,

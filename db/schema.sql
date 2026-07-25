@@ -405,3 +405,43 @@ CREATE TABLE IF NOT EXISTS message_reactions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (message_id, user_id)
 );
+
+-- v22: password reset + a couple of new couple-level reminders.
+--
+--   password_reset_codes  a signed-out "forgot password" flow. A short-lived
+--     6-digit code is emailed (via Resend); we store only a KEYED HASH of it
+--     (HMAC-SHA256 under JWT_SECRET), never the code itself, so a database leak
+--     does not hand out working reset codes. expires_at bounds it (10 minutes),
+--     used_at marks it spent so a code works exactly once, and the created_at
+--     index backs both the per-email rate limit and the newest-code lookup.
+--     No FK/cascade, like every other table here; rows age out on use/expiry.
+--   users.password_changed_at  stamped whenever the password changes (Settings
+--     change, or a reset). requireUser rejects any JWT issued before it, which
+--     is the ONLY thing that makes a reset actually revoke a stolen 30-day
+--     token. NULLABLE with NO default on purpose: existing rows stay NULL so
+--     every currently-valid session survives the deploy (a NULL never revokes),
+--     and only a real password change starts enforcing it.
+CREATE TABLE IF NOT EXISTS password_reset_codes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  code_hash STRING NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS reset_codes_by_user ON password_reset_codes (user_id, created_at DESC);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ;
+
+-- Two couple-level reminders, both fired by the once-a-day milestone cron
+-- (kind=milestone) and deduped by a stamp on the couple so a re-run never
+-- double-sends. Unlike the milestone COUNTDOWN reminders these DO write a bell
+-- row (via a system-sentinel actor, see api/_lib/notify.ts), so both partners
+-- see them in the notifications pane as well as a push.
+--   last_monthly_anniversary_sent  the day the "N months together" push last
+--     went out; at most one a month.
+--   last_fifty_day_notified  the highest 50-day-tenure multiple already sent
+--     (0 = none yet). Storing the multiple, not a date, is what lets a missed
+--     cron run send only the newest threshold instead of backfilling every one.
+ALTER TABLE couples ADD COLUMN IF NOT EXISTS last_monthly_anniversary_sent DATE;
+ALTER TABLE couples ADD COLUMN IF NOT EXISTS last_fifty_day_notified INT NOT NULL DEFAULT 0;

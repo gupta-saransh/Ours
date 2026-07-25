@@ -3,9 +3,12 @@ import {
   BUBBLE_IMAGE_INSET,
   BUBBLE_MAX,
   BUBBLE_MIN,
+  BUBBLE_QUOTE_INSET,
   BUBBLE_TEXT_WRAP,
+  bubbleContentWidth,
   bubbleImageSize,
   bubbleMaxWidth,
+  bubbleQuoteWidth,
 } from './bubbleLayout';
 
 describe('bubbleMaxWidth', () => {
@@ -72,6 +75,61 @@ describe('bubbleImageSize', () => {
     const { width, height } = bubbleImageSize(4);
     expect(width).toBeGreaterThan(0);
     expect(height).toBeGreaterThan(0);
+  });
+});
+
+describe('bubbleContentWidth', () => {
+  it('is the shared cap minus the bubble inset', () => {
+    const max = bubbleMaxWidth(343);
+    expect(bubbleContentWidth(max)).toBe(max - BUBBLE_IMAGE_INSET * 2);
+  });
+
+  it('matches the image width, so a quote and a photo share one edge', () => {
+    for (const w of [200, 300, 343, 500]) {
+      expect(bubbleContentWidth(w)).toBe(bubbleImageSize(w).width);
+    }
+  });
+
+  it('NEVER exceeds the bubble cap (the quote-overflow regression)', () => {
+    // The reply quote is given this width; if it could exceed the cap, a long
+    // quoted line would drag the bubble edge past the column, which is the bug.
+    for (const w of [150, 200, 240, 300, 343, 648, 4000]) {
+      const cap = bubbleMaxWidth(w);
+      expect(bubbleContentWidth(cap)).toBeLessThanOrEqual(cap);
+    }
+  });
+
+  it('never produces a zero or negative width from a tiny cap', () => {
+    expect(bubbleContentWidth(4)).toBeGreaterThan(0);
+    expect(bubbleContentWidth(1)).toBeGreaterThan(0);
+  });
+});
+
+describe('bubbleQuoteWidth', () => {
+  it('is the cap minus the (deeper) quote inset', () => {
+    const max = bubbleMaxWidth(343);
+    expect(bubbleQuoteWidth(max)).toBe(max - BUBBLE_QUOTE_INSET * 2);
+  });
+
+  it('is narrower than the image width, since a text bubble insets it more', () => {
+    for (const w of [200, 300, 343, 500]) {
+      expect(bubbleQuoteWidth(w)).toBeLessThan(bubbleContentWidth(w));
+    }
+  });
+
+  it('plus the text-bubble padding and quote margin never exceeds the cap (the overflow regression)', () => {
+    // A text-reply bubble pads sp.md (12) each side and the quote margins sp.xs
+    // (4): quote width + those insets must fit the cap exactly, never past it.
+    for (const w of [150, 200, 240, 300, 343, 648, 4000]) {
+      const cap = bubbleMaxWidth(w);
+      // BUBBLE_QUOTE_INSET already bundles bubble padding + quote margin per side.
+      expect(bubbleQuoteWidth(cap) + BUBBLE_QUOTE_INSET * 2).toBeLessThanOrEqual(cap);
+    }
+  });
+
+  it('never produces a zero or negative width from a tiny cap', () => {
+    expect(bubbleQuoteWidth(4)).toBeGreaterThan(0);
+    expect(bubbleQuoteWidth(1)).toBeGreaterThan(0);
   });
 });
 

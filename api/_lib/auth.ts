@@ -46,14 +46,44 @@ export async function requireUser(req: VercelRequest): Promise<SessionUser> {
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) throw new HttpError(401, 'Not signed in');
   let userId: string;
+  let issuedAt: number | undefined; // JWT `iat`, seconds since epoch
   try {
     const payload = jwt.verify(token, secret());
     userId = typeof payload === 'string' ? '' : (payload.sub ?? '');
+    issuedAt = typeof payload === 'string' ? undefined : payload.iat;
   } catch {
     throw new HttpError(401, 'Session expired — please sign in again');
   }
-  const user = await one<SessionUser>(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [userId]);
+
+  // Load `password_changed_at` alongside the row so a password change can revoke
+  // still-valid 30-day tokens (stateless JWTs have no other kill switch). Guarded
+  // for a pre-v22 deploy where the column does not exist yet.
+  let user: (SessionUser & { password_changed_at?: string | null }) | undefined;
+  try {
+    user = await one<SessionUser & { password_changed_at: string | null }>(
+      `SELECT ${USER_COLUMNS}, password_changed_at FROM users WHERE id = $1`,
+      [userId]
+    );
+  } catch {
+    user = await one<SessionUser>(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [userId]);
+  }
   if (!user) throw new HttpError(401, 'Account no longer exists');
+
+  // A NULL stamp never revokes (every pre-change session survives). Compare in
+  // whole seconds: `iat` has second granularity, so a token minted in the same
+  // request right after the change (its iat >= the change second) is NOT killed,
+  // while an older token (iat < the change second) is.
+  const changedAt = user.password_changed_at;
+  if (changedAt && issuedAt !== undefined) {
+    const changedSecond = Math.floor(new Date(changedAt).getTime() / 1000);
+    if (changedSecond > issuedAt) {
+      throw new HttpError(401, 'Your password changed. Please sign in again.');
+    }
+  }
+
+  // Internal-only; never let it ride along into a response that echoes the user.
+  delete user.password_changed_at;
+
   // Every subsequent log line for this request carries who it was for.
   logContext(req, { user_id: user.id, couple_id: user.couple_id ?? undefined });
   return user;

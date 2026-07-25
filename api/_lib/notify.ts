@@ -20,6 +20,21 @@ export type NotificationKind =
   | 'todo';
 
 /**
+ * A synthetic actor id for SYSTEM-generated notifications that belong to the
+ * couple as a whole ("N months together"), not to one partner acting on the
+ * other. Because it is neither partner's id, BOTH partners see it in the bell
+ * (the pane filters `actor_id != viewer`) and BOTH get the push (`notify` pushes
+ * everyone who is not the actor). An all-zero UUID can never collide with a real
+ * gen_random_uuid() user id.
+ */
+export const SYSTEM_ACTOR = '00000000-0000-0000-0000-000000000000';
+
+/** Notify BOTH partners of a couple-level, system-generated event. */
+export function notifyCouple(coupleId: string, kind: NotificationKind, text: string): Promise<void> {
+  return notify(coupleId, SYSTEM_ACTOR, kind, text);
+}
+
+/**
  * The notification service: every meaningful action lands in the
  * notifications table (for the bell + history) and on the couple's Ably
  * channel (for the live dot). Never fails the calling request.

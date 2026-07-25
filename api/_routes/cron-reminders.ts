@@ -2,8 +2,10 @@ import { q, one } from '../_lib/db';
 import { missingVapidVars, sendPush } from '../_lib/push';
 import { pickDateReminder } from '../_lib/date-reminders';
 import { dueForCountdown, type MilestoneRow } from '../_lib/milestone-countdown';
+import { dueCoupleMilestones, type CoupleMilestoneRow } from '../_lib/couple-milestones';
 import { hasUnplayedRound, type AnswerRow } from '../_lib/game-rounds';
-import { log } from '../_lib/log';
+import { notifyCouple } from '../_lib/notify';
+import { errorFields, log } from '../_lib/log';
 import { route, HttpError } from '../_lib/respond';
 
 /**
@@ -36,6 +38,13 @@ import { route, HttpError } from '../_lib/respond';
  *                day. Milestone titles are plaintext (not encrypted), so the
  *                push body can safely name the day; a birthday resolves to the
  *                actual name of whoever's it is rather than the raw title.
+ *                This kind ALSO fires the two couple-level reminders (v22, pure
+ *                math in api/_lib/couple-milestones.ts): the monthly anniversary
+ *                ("N months together today", off the earliest anniversary
+ *                milestone) and the 50-day app tenure ("50 days with Ours", off
+ *                couples.created_at). Unlike the countdown push, these two write
+ *                a bell row too (via notifyCouple), deduped by a stamp on the
+ *                couple so a re-run never double-sends.
  *
  * Writes no notification rows (a self-reminder should not crowd the bell) and
  * never reads couple content. Date reminders are intentionally generic (no
@@ -416,12 +425,49 @@ export default route(['POST', 'GET'], async (req, res) => {
       await one('UPDATE milestones SET last_reminded_date = $2 WHERE id = $1 RETURNING id', [m.id, today]);
     }
 
+    // Couple-level milestones (v22): the monthly anniversary and the 50-day app
+    // tenure. Unlike the countdown reminders above, these DO write a bell row
+    // (via notifyCouple's system actor, so both partners see it AND get a push).
+    // One grouped query per shape, deduped by a stamp on the couple. Guarded so
+    // a deploy running ahead of `npm run migrate` renders zero, not a 500.
+    let coupleMonthly = 0;
+    let coupleTenure = 0;
+    try {
+      const coupleRows = await q<CoupleMilestoneRow>(
+        `SELECT c.id AS couple_id,
+                c.created_at::DATE::STRING AS created_at,
+                (SELECT m2.date::STRING FROM milestones m2
+                   WHERE m2.couple_id = c.id AND m2.kind = 'anniversary'
+                   ORDER BY m2.date ASC LIMIT 1) AS anniversary,
+                c.last_monthly_anniversary_sent::STRING AS last_monthly_anniversary_sent,
+                COALESCE(c.last_fifty_day_notified, 0) AS last_fifty_day_notified
+           FROM couples c
+          WHERE EXISTS (SELECT 1 FROM users u WHERE u.couple_id = c.id)`
+      );
+      for (const d of dueCoupleMilestones(coupleRows, today)) {
+        if (d.monthly !== null) {
+          await notifyCouple(d.couple_id, 'milestone', `${d.monthly} months together today. Here is to you two ♥`);
+          await one('UPDATE couples SET last_monthly_anniversary_sent = $2 WHERE id = $1 RETURNING id', [d.couple_id, today]);
+          coupleMonthly += 1;
+        }
+        if (d.tenure !== null) {
+          await notifyCouple(d.couple_id, 'milestone', `${d.tenure} days with Ours. Thank you for making a little home here ♥`);
+          await one('UPDATE couples SET last_fifty_day_notified = $2 WHERE id = $1 RETURNING id', [d.couple_id, d.tenure]);
+          coupleTenure += 1;
+        }
+      }
+    } catch (err) {
+      log('warn', 'cron.couple_milestones_skipped', errorFields(err));
+    }
+
     const report = {
       kind,
       milestones_checked: rows.length,
       due: due.length,
       recipients,
       sent,
+      couple_monthly_sent: coupleMonthly,
+      couple_tenure_sent: coupleTenure,
       failed: tally(failed),
       missing_vapid_env: missingVapid,
       duration_ms: Date.now() - startedAt,

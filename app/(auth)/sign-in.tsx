@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/lib/auth';
 import { FormError, PrimaryButton, Screen, SecondaryButton, TextField } from '@/components/kit';
@@ -52,6 +52,9 @@ export default function SignIn() {
 
         <FormError message={error} />
         <PrimaryButton title="Sign in" onPress={submit} loading={busy} />
+        <Pressable onPress={() => router.push('/forgot-password')} style={styles.forgot} hitSlop={8}>
+          <Text style={styles.forgotText}>Forgot your password?</Text>
+        </Pressable>
         <SecondaryButton title="I need an account" onPress={() => router.replace('/sign-up')} style={{ marginTop: sp.md }} />
       </ScrollView>
     </Screen>
@@ -66,4 +69,6 @@ const styles = StyleSheet.create({
     maxWidth: 460,
     alignSelf: 'center',
   },
+  forgot: { alignSelf: 'center', marginTop: sp.md },
+  forgotText: { ...text.caption, color: colors.accent },
 });

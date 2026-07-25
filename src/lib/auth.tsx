@@ -49,6 +49,12 @@ interface AuthContextValue {
   signIn(email: string, password: string): Promise<void>;
   signOut(): Promise<void>;
   deleteAccount(): Promise<void>;
+  /** Change the password while signed in; keeps this device signed in on a fresh token. */
+  changePassword(currentPassword: string, newPassword: string): Promise<void>;
+  /** Signed-out: email a reset code. Always resolves, even for an unknown email. */
+  requestPasswordReset(email: string): Promise<void>;
+  /** Signed-out: redeem a reset code, set a new password, and land signed in. */
+  resetPassword(email: string, code: string, newPassword: string): Promise<void>;
   refresh(): Promise<void>;
   createSpace(): Promise<Couple>;
   joinSpace(code: string): Promise<void>;
@@ -198,6 +204,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       async deleteAccount() {
         await api('/api/auth/account', { method: 'DELETE' });
         await clearSession();
+      },
+      async changePassword(currentPassword, newPassword) {
+        const data = await api<{ token: string; user: User }>('/api/auth/change-password', {
+          method: 'POST',
+          body: { currentPassword, newPassword },
+        });
+        // The old token is now server-side revoked; swap in the fresh one so
+        // this device is not logged out on its next request. User state is
+        // unchanged (same account), so leave the richer /auth/me-hydrated user.
+        setAuthToken(data.token);
+        await saveToken(data.token);
+        setToken(data.token);
+        stashSession(data.token).catch(() => {});
+      },
+      async requestPasswordReset(email) {
+        // Generic by design: the server answers the same for any email.
+        await api('/api/auth/forgot-password', { method: 'POST', body: { email } });
+      },
+      async resetPassword(email, code, newPassword) {
+        const data = await api<{ token: string; user: User }>('/api/auth/reset-password', {
+          method: 'POST',
+          body: { email, code, newPassword },
+        });
+        await applySession(data.token, data.user);
+        await refresh().catch(() => {});
       },
       refresh,
       async createSpace() {

@@ -22,6 +22,14 @@ export const BUBBLE_MIN = 200;
 export const BUBBLE_SHARE = 0.78;
 /** Padding a bubble puts around an image (styles.bubbleWithImage: sp.xs each side). */
 export const BUBBLE_IMAGE_INSET = 8;
+/**
+ * Per-side space between the shared cap and a reply-quote block: the text
+ * bubble's own paddingHorizontal (sp.md, 12) plus the quote's marginHorizontal
+ * (sp.xs, 4). A text-reply bubble insets the quote more than an image bubble
+ * does, so the quote must be sized off THIS, not the image inset, or it would
+ * push a text bubble past the cap.
+ */
+export const BUBBLE_QUOTE_INSET = 16;
 /** Images render in a consistent 4:3 frame, cropped to fill (contentFit cover). */
 export const BUBBLE_IMAGE_RATIO = 3 / 4;
 
@@ -41,12 +49,35 @@ export function bubbleMaxWidth(availableWidth: number): number {
 }
 
 /**
+ * The content width INSIDE a bubble: the shared cap minus the bubble's own
+ * inset. Anything that must sit flush inside a bubble and stay within the column
+ * is sized from this, so the bubble grows in HEIGHT to hold it, never in width
+ * past the cap. Used for the image frame AND the reply-quote preview (whose
+ * `numberOfLines={1}` name/body would otherwise lay out nowrap and drag the
+ * bubble edge out inconsistently, message to message).
+ */
+export function bubbleContentWidth(maxWidth: number): number {
+  return Math.max(1, Math.round(maxWidth - BUBBLE_IMAGE_INSET * 2));
+}
+
+/**
  * The image frame inside a bubble. Exactly the shared cap minus the bubble's
  * inset, so photos and text end at the same edge.
  */
 export function bubbleImageSize(maxWidth: number): { width: number; height: number } {
-  const width = Math.max(1, Math.round(maxWidth - BUBBLE_IMAGE_INSET * 2));
+  const width = bubbleContentWidth(maxWidth);
   return { width, height: Math.round(width * BUBBLE_IMAGE_RATIO) };
+}
+
+/**
+ * The fixed width of a reply-quote block. Bounded so its (single-line, nowrap)
+ * name/body truncate INSIDE the column instead of dragging the bubble edge out
+ * to the cap for a short reply. Sized off BUBBLE_QUOTE_INSET, which accounts for
+ * the deeper text-bubble padding, so it can never push a text bubble past the
+ * cap; in an image bubble it lands a touch inside the photo, which is fine.
+ */
+export function bubbleQuoteWidth(maxWidth: number): number {
+  return Math.max(1, Math.round(maxWidth - BUBBLE_QUOTE_INSET * 2));
 }
 
 /**

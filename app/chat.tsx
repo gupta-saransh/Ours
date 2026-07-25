@@ -32,7 +32,7 @@ import { Empty, PrimaryButton, SecondaryButton } from '@/components/kit';
 import { Sheet } from '@/components/Sheet';
 import { ReactionPicker } from '@/components/ReactionPicker';
 import { applyReaction, groupReactions, nextReactionAction, QUICK_REACTIONS, type ReactionRow } from '@/lib/chatReactions';
-import { BUBBLE_TEXT_WRAP, bubbleImageSize, bubbleMaxWidth } from '@/lib/bubbleLayout';
+import { BUBBLE_TEXT_WRAP, bubbleImageSize, bubbleMaxWidth, bubbleQuoteWidth } from '@/lib/bubbleLayout';
 import { colors, font, radius, sp, text } from '@/theme';
 import { formatTime } from '@/lib/format';
 
@@ -670,7 +670,11 @@ function Bubble({
           ]}
         >
           {message.reply_to_id ? (
-            <View style={[styles.quote, mine ? styles.quoteMine : styles.quoteTheirs]}>
+            // Fixed to a bounded quote width (bubbleLayout owns it), so the
+            // quoted name/body truncate inside the column instead of laying out
+            // nowrap and dragging the bubble edge out to the cap for a short
+            // reply. Sized to never push a text bubble past the cap.
+            <View style={[styles.quote, mine ? styles.quoteMine : styles.quoteTheirs, { width: bubbleQuoteWidth(maxWidth) }]}>
               <Text style={[styles.quoteName, mine && { color: colors.onSealed }, noSelect]} numberOfLines={1}>
                 {quoted ? quotedName(quoted.sender_id) : 'Earlier'}
               </Text>
