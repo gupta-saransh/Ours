@@ -23,9 +23,8 @@ export const WHATS_NEW: WhatsNewEntry[] = [
     id: '2026-07-26-thumb-kiss',
     title: 'Thumb Kiss',
     bullets: [
-      "Hold the heart button on Home to open it. Hold the seal together at the same time and you'll feel it.",
+      "Open Thumb Kiss from Home. Hold the seal together at the same time and you'll feel it.",
       "No timing to get right, just both hold at once, whenever you're both free.",
-      'Nudges now come with a bit of personality, a different playful line each time.',
       'How often you agree on This or That is now a little bar instead of a plain line.',
     ],
   },

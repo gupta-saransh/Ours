@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Image } from 'expo-image';
-import { CalendarHeart, ChevronDown, ChevronRight, Flame, Lock } from 'lucide-react-native';
+import { CalendarHeart, ChevronDown, ChevronRight, Flame, HeartHandshake, Lock } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -388,6 +388,21 @@ export default function Home() {
                 </AppPressable>
                 <SecondaryButton title="I have their code" onPress={() => router.push('/pair')} />
               </Card>
+            </Section>
+          </FadeIn>
+        )}
+
+        {data.partner && (
+          <FadeIn delay={40}>
+            <Section label="A little moment together">
+              <PressableCard onPress={() => router.push('/thumb-kiss')} style={styles.recapRow}>
+                <HeartHandshake size={20} color={colors.accent} strokeWidth={1.75} />
+                <View style={{ flex: 1 }}>
+                  <Text style={text.body}>Thumb Kiss</Text>
+                  <Text style={text.caption}>Both hold the seal at the same time and feel it.</Text>
+                </View>
+                <ChevronRight size={18} color={colors.inkFaint} strokeWidth={1.75} />
+              </PressableCard>
             </Section>
           </FadeIn>
         )}
