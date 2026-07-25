@@ -151,6 +151,11 @@ export default function ThumbKissScreen() {
         <Empty line="Thumb Kiss is for two. Pair with your person first." />
       ) : (
         <View style={styles.body}>
+          <Text style={styles.explainer}>
+            Press and hold the seal below, both of you, at the same time. When you are both holding it together,
+            you will feel it.
+          </Text>
+
           <Text style={styles.statusLine}>{statusLine}</Text>
           {matchInfo && !holding && (
             <Text style={styles.countLine}>
@@ -165,8 +170,6 @@ export default function ThumbKissScreen() {
           >
             <Text style={[styles.discGlyph, noSelect]}>♥</Text>
           </AppPressable>
-
-          <Text style={styles.hint}>Hold the seal. See if you match.</Text>
 
           {!partnerHere && (
             <SecondaryButton title="Let them know" onPress={letThemKnow} loading={nudging} style={{ marginTop: sp.xl }} />
@@ -188,6 +191,12 @@ const styles = StyleSheet.create({
     maxWidth: 480,
     alignSelf: 'center',
     width: '100%',
+  },
+  explainer: {
+    ...text.caption,
+    color: colors.inkMuted,
+    textAlign: 'center',
+    marginBottom: sp.xl,
   },
   statusLine: {
     ...text.bodySerif,
@@ -220,11 +229,5 @@ const styles = StyleSheet.create({
     fontSize: 64,
     lineHeight: 64,
     color: colors.onSealed,
-  },
-  hint: {
-    ...text.caption,
-    color: colors.inkFaint,
-    textAlign: 'center',
-    marginTop: sp.xl,
   },
 });

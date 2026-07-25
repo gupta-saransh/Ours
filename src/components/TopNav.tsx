@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
-import { BellButton, NudgeButton, SettingsButton } from './HeaderActions';
+import { BellButton, NudgeButton, SettingsButton, ThumbKissButton } from './HeaderActions';
 import { colors, font, sp, text } from '@/theme';
 
 const LINKS = [
@@ -38,6 +38,7 @@ export function TopNav() {
           <BellButton />
           <SettingsButton />
           <NudgeButton />
+          <ThumbKissButton />
         </View>
       </View>
     </View>

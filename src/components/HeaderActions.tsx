@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Bell, Settings } from 'lucide-react-native';
+import { Bell, HeartHandshake, Settings } from 'lucide-react-native';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { useNotifications } from '@/lib/notifications';
 import { useToast } from '@/lib/toast';
 import { successHaptic } from '@/lib/haptics';
@@ -35,6 +36,26 @@ export function NudgeButton() {
       ) : (
         <Text style={styles.nudgeText}>Nudge ♥</Text>
       )}
+    </AppPressable>
+  );
+}
+
+/**
+ * Sits right beside NudgeButton (a paired-only, second action next to the
+ * first): opens Thumb Kiss, the press-and-hold moment where both of you hold
+ * a touch target at the same time. Solo accounts see nothing here, there is
+ * no one to hold hands with yet. The name alone does not explain the
+ * mechanic, so the explaining happens on the screen itself the moment it
+ * opens, not squeezed into this pill.
+ */
+export function ThumbKissButton() {
+  const { partner } = useAuth();
+  const router = useRouter();
+  if (!partner) return null;
+  return (
+    <AppPressable onPress={() => router.navigate('/thumb-kiss')} style={styles.thumbKiss}>
+      <HeartHandshake size={15} color={colors.surfaceSealed} strokeWidth={1.75} />
+      <Text style={styles.nudgeText}>Thumb Kiss</Text>
     </AppPressable>
   );
 }
@@ -85,6 +106,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   nudgeText: { ...text.caption, color: colors.surfaceSealed, fontWeight: '600' },
+  thumbKiss: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: radius.pill,
+    paddingVertical: sp.sm,
+    paddingHorizontal: sp.md,
+    backgroundColor: colors.surfaceRaised,
+    minHeight: 32,
+  },
   dot: {
     position: 'absolute',
     top: 8,

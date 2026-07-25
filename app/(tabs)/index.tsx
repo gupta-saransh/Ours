@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Image } from 'expo-image';
-import { CalendarHeart, ChevronDown, ChevronRight, Flame, HeartHandshake, Lock } from 'lucide-react-native';
+import { CalendarHeart, ChevronDown, ChevronRight, Flame, Lock } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -36,7 +36,7 @@ import {
 } from '@/components/kit';
 import { Sheet } from '@/components/Sheet';
 import { Avatar } from '@/components/Avatar';
-import { BellButton, NudgeButton, SettingsButton } from '@/components/HeaderActions';
+import { BellButton, NudgeButton, SettingsButton, ThumbKissButton } from '@/components/HeaderActions';
 import { colors, font, radius, sp, text } from '@/theme';
 import { countdownTo, daysSince, formatDay, nextOccurrence } from '@/lib/format';
 
@@ -306,7 +306,10 @@ export default function Home() {
       >
         {!wide && (
           <View style={styles.heroChrome}>
-            <NudgeButton />
+            <View style={{ flexDirection: 'row', gap: sp.sm, flexShrink: 1 }}>
+              <NudgeButton />
+              <ThumbKissButton />
+            </View>
             <View style={{ flexDirection: 'row', gap: sp.sm }}>
               <BellButton />
               <SettingsButton />
@@ -388,21 +391,6 @@ export default function Home() {
                 </AppPressable>
                 <SecondaryButton title="I have their code" onPress={() => router.push('/pair')} />
               </Card>
-            </Section>
-          </FadeIn>
-        )}
-
-        {data.partner && (
-          <FadeIn delay={40}>
-            <Section label="A little moment together">
-              <PressableCard onPress={() => router.push('/thumb-kiss')} style={styles.recapRow}>
-                <HeartHandshake size={20} color={colors.accent} strokeWidth={1.75} />
-                <View style={{ flex: 1 }}>
-                  <Text style={text.body}>Thumb Kiss</Text>
-                  <Text style={text.caption}>Both hold the seal at the same time and feel it.</Text>
-                </View>
-                <ChevronRight size={18} color={colors.inkFaint} strokeWidth={1.75} />
-              </PressableCard>
             </Section>
           </FadeIn>
         )}
@@ -824,7 +812,7 @@ function AgreementMeter({ agreement }: { agreement: { agreed: number; total: num
   }, [agreement?.agreed, agreement?.total]);
 
   if (!agreement || agreement.total < 2) return null;
-  const noun = agreement.total === 1 ? 'either/or' : 'either/ors';
+  const noun = agreement.total === 1 ? 'choice!' : 'choices!';
   const width = fill.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
 
   return (
@@ -950,7 +938,7 @@ function GameCard({
         </Text>
         <AgreementMeter agreement={reveal.agreement} />
         <Text style={[text.micro, { marginTop: sp.sm, textAlign: 'center' }]}>
-          {state.nextRoundAt ? `One more opens ${opensIn(state.nextRoundAt)} ✦` : 'A new one tomorrow ✦'}
+          {state.nextRoundAt ? `✦ One more opens ${opensIn(state.nextRoundAt)} ✦` : '✦ A new one tomorrow ✦'}
         </Text>
       </Card>
     );
@@ -1166,6 +1154,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    rowGap: sp.sm,
   },
   hero: {
     alignItems: 'center',
