@@ -16,6 +16,12 @@ import { errorFields, log } from './log';
  * only delivers to the address on your own Resend account. Verifying a domain
  * and setting RESEND_FROM to e.g. "Ours <no-reply@yourdomain>" is the only
  * change needed to reach real users, no code edit.
+ *
+ * RECEIVING ADDRESS: the same sandbox restriction applies in reverse, Resend
+ * will only actually DELIVER to the email on your own Resend account until that
+ * domain is verified. RESEND_TEST_RECIPIENT, if set, redirects every send there
+ * regardless of the caller's `to` (so testing against any signed-up account still
+ * lands somewhere you can read it); unset it once a domain is verified.
  */
 
 const RESEND_ENDPOINT = 'https://api.resend.com/emails';
@@ -39,6 +45,11 @@ export function emailConfigured(): boolean {
 /** The address emails are sent from (verified-domain address, or the test sender). */
 function fromAddress(): string {
   return process.env.RESEND_FROM?.trim() || DEFAULT_FROM;
+}
+
+/** The sandbox-mode override: redirects delivery to your own Resend account. */
+function toAddress(to: string): string {
+  return process.env.RESEND_TEST_RECIPIENT?.trim() || to;
 }
 
 /**
@@ -77,7 +88,7 @@ export async function sendEmail(
         Authorization: `Bearer ${key}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ from: fromAddress(), to, subject, text }),
+      body: JSON.stringify({ from: fromAddress(), to: toAddress(to), subject, text }),
     });
     if (!res.ok) {
       // Resend's own explanation (unverified domain, bad key, rate limit).

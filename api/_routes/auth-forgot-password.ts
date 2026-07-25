@@ -26,8 +26,7 @@ function pepper(): string {
  * is an accepted trade in a two-person app, not a silent gap.
  */
 export default route(['POST'], async (req, res) => {
-  const email = "saransh287@gmail.com"; // Hardcoded email for testing purposes
-  // const email = requireString(req.body?.email, 'Email', 320).toLowerCase();
+  const email = requireString(req.body?.email, 'Email', 320).toLowerCase();
 
   const code = generateResetCode();
   const codeHash = hashResetCode(code, pepper());
@@ -56,7 +55,7 @@ export default route(['POST'], async (req, res) => {
         await sendEmail(
           email,
           'Your Ours reset code',
-          `Here is your code to reset your Ours password:\n\n${code}\n\n` +
+          `Here is your code to reset the Ours password for ${email}:\n\n${code}\n\n` +
             `It expires in 10 minutes. If you did not ask to reset your password, ` +
             `you can safely ignore this email and nothing will change.\n\nWith warmth,\nOurs`,
           'password-reset'
