@@ -5,10 +5,12 @@ import {
   BUBBLE_MIN,
   BUBBLE_QUOTE_INSET,
   BUBBLE_TEXT_WRAP,
+  BUBBLE_VOICE_WIDTH,
   bubbleContentWidth,
   bubbleImageSize,
   bubbleMaxWidth,
   bubbleQuoteWidth,
+  bubbleVoiceWidth,
 } from './bubbleLayout';
 
 describe('bubbleMaxWidth', () => {
@@ -130,6 +132,27 @@ describe('bubbleQuoteWidth', () => {
   it('never produces a zero or negative width from a tiny cap', () => {
     expect(bubbleQuoteWidth(4)).toBeGreaterThan(0);
     expect(bubbleQuoteWidth(1)).toBeGreaterThan(0);
+  });
+});
+
+describe('bubbleVoiceWidth', () => {
+  it('is the fixed voice width on a normal or wide bubble cap', () => {
+    expect(bubbleVoiceWidth(bubbleMaxWidth(343))).toBe(BUBBLE_VOICE_WIDTH);
+    expect(bubbleVoiceWidth(BUBBLE_MAX)).toBe(BUBBLE_VOICE_WIDTH);
+  });
+
+  it('does not depend on clip length: same cap always yields the same width', () => {
+    expect(bubbleVoiceWidth(300)).toBe(bubbleVoiceWidth(300));
+  });
+
+  it('shrinks below the fixed width rather than exceeding a narrow cap', () => {
+    const narrow = bubbleVoiceWidth(BUBBLE_MIN);
+    expect(narrow).toBeLessThanOrEqual(bubbleContentWidth(BUBBLE_MIN));
+  });
+
+  it('never produces a zero or negative width from a tiny cap', () => {
+    expect(bubbleVoiceWidth(4)).toBeGreaterThan(0);
+    expect(bubbleVoiceWidth(1)).toBeGreaterThan(0);
   });
 });
 

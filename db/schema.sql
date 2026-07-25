@@ -445,3 +445,33 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ;
 --     cron run send only the newest threshold instead of backfilling every one.
 ALTER TABLE couples ADD COLUMN IF NOT EXISTS last_monthly_anniversary_sent DATE;
 ALTER TABLE couples ADD COLUMN IF NOT EXISTS last_fifty_day_notified INT NOT NULL DEFAULT 0;
+
+-- v23: voice notes in chat. Follows the exact same shape as chat photos
+-- (v15): a message can carry one audio clip, stored as plaintext base64 like
+-- image_data (voice audio is not among the encrypted fields, matching photos).
+-- Unlike a photo there is no smaller "thumb" that is itself playable, so the
+-- list-weight payload is the WAVEFORM + duration (a few dozen small numbers),
+-- not a scaled-down copy of the audio; the full clip is fetched on tap, same
+-- as a photo's full resolution is.
+--   audio_data          the full clip, base64 data URI. NULL when no audio.
+--   audio_mime           what it actually is: 'audio/mp4' for every native
+--     recording (iOS and Android both produce AAC-in-.m4a via expo-audio's
+--     HIGH_QUALITY preset) or whatever MediaRecorder.isTypeSupported() picked
+--     on web (prefers audio/mp4 so a Safari-recorded clip plays natively
+--     everywhere; falls back to audio/webm on Chrome/Firefox, which cannot
+--     encode mp4). Needed at playback time to hint the player correctly.
+--   audio_duration_ms    clip length, measured client-side with a plain
+--     Date.now() timer rather than trusted from any player/recorder status
+--     object (expo-audio's own web duration tracking resets to 0 inside its
+--     'stop' event handler, which can race the very stop() call that reads it).
+--   audio_waveform        ~40 normalized amplitude bars (0..1, JSONB array),
+--     sampled for real during recording (native: expo-audio's metering; web:
+--     a small Web Audio AnalyserNode run alongside the recorder, since
+--     expo-audio does not implement metering on web at all) and downsampled
+--     to a fixed bar count. Never fabricated: a message with no readable
+--     level data gets an empty array and the bubble renders flat, honest
+--     bars rather than a fake shape.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_data STRING;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_mime STRING;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_duration_ms INT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_waveform JSONB;

@@ -4,33 +4,42 @@ import { publish, isActiveInChat } from '../_lib/ably';
 import { sendPush } from '../_lib/push';
 import { notify } from '../_lib/notify';
 import { encryptField, readField } from '../_lib/envelope';
+import { transcodeToAac } from '../_lib/transcode';
 import { route, requireString, HttpError } from '../_lib/respond';
 import { errorFields, log } from '../_lib/log';
 
 /**
  * Partner chat.
  *   GET    /api/messages[?before=<ISO>]  list (ascending), unread count, partner's read cursor, reactions
- *   POST   /api/messages { body?, imageData?, imageThumb?, replyToId? }  send (text and/or photo, optionally quoting)
+ *   POST   /api/messages { body?, imageData?, imageThumb?, audio?, replyToId? }  send (text and/or photo and/or voice note, optionally quoting)
  *   POST   /api/messages/seen            mark the thread read (advance the cursor, tell the partner)
  *   GET    /api/messages/unread          just the unread count (for the badge)
- *   GET    /api/messages/:id             the full-resolution image of one message
+ *   GET    /api/messages/:id             the full-resolution image or full audio clip of one message
  *   POST   /api/messages/:id { action: 'to-timeline', note? }  copy a photo message into the timeline
  *   POST   /api/messages/:id { action: 'react', emoji }        set your reaction (replaces any earlier one)
  *   POST   /api/messages/:id { action: 'unreact' }              remove your reaction
  *   DELETE /api/messages/:id             remove your own message (for both of you; no per-side "delete for me")
  *
- * Bodies are encrypted at rest (envelope.ts); images are plaintext base64 like
- * memory photos. Delivery is live over Ably (`message.created`, plaintext body +
- * the small thumbnail over the TLS + subscribe-only channel) plus a best-effort
- * Web Push to the away partner, SKIPPED when the recipient is already sitting on
- * the chat screen (see isActiveInChat in _lib/ably.ts) since the live event is
- * about to show them the message anyway. Chat writes NO notification rows (it
- * would flood the bell); saving a photo to the timeline is a memory, so that
- * one does.
+ * Bodies are encrypted at rest (envelope.ts); images and voice-note audio are
+ * plaintext base64 like memory photos (audio is not among the encrypted
+ * fields either). A voice note has no smaller "thumb" the way a photo does
+ * (there is no such thing as a low-res but still-playable clip), so the
+ * list-weight payload for one is its WAVEFORM + duration, a few dozen small
+ * numbers; the full clip is fetched on tap, same as a photo's full
+ * resolution is. Delivery is live over Ably (`message.created`, plaintext
+ * body + the small thumbnail/waveform over the TLS + subscribe-only channel)
+ * plus a best-effort Web Push to the away partner, SKIPPED when the
+ * recipient is already sitting on the chat screen (see isActiveInChat in
+ * _lib/ably.ts) since the live event is about to show them the message
+ * anyway. Chat writes NO notification rows (it would flood the bell); saving
+ * a photo to the timeline is a memory, so that one does.
  */
 
 const PAGE = 40;
 const MAX_EMOJI_LEN = 16;
+/** ~2MB decoded at 64kbps mono for a 3-minute clip, generous headroom either side. */
+const MAX_AUDIO_B64_LEN = 6_000_000;
+const MAX_WAVEFORM_BARS = 64;
 
 interface Row {
   id: string;
@@ -39,8 +48,20 @@ interface Row {
   body_ct: Buffer | null;
   image_thumb: string | null;
   has_image: boolean;
+  has_audio: boolean;
+  audio_mime: string | null;
+  audio_duration_ms: number | null;
+  audio_waveform: number[] | null;
   reply_to_id: string | null;
   created_at: string;
+}
+
+/** Clamps an incoming waveform to a sane shape: finite numbers in 0..1, capped length. */
+function sanitizeWaveform(input: unknown): number[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .slice(0, MAX_WAVEFORM_BARS)
+    .map((v) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0));
 }
 
 interface ReactionRow {
@@ -75,14 +96,19 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
 
   // ---- Single-message operations (/messages/:id) ----
   if (id) {
-    const msg = await one<{ sender_id: string; image_data: string | null; image_thumb: string | null }>(
-      'SELECT sender_id, image_data, image_thumb FROM messages WHERE id = $1 AND couple_id = $2',
+    const msg = await one<{
+      sender_id: string;
+      image_data: string | null;
+      image_thumb: string | null;
+      audio_data: string | null;
+    }>(
+      'SELECT sender_id, image_data, image_thumb, audio_data FROM messages WHERE id = $1 AND couple_id = $2',
       [id, cid]
     );
     if (!msg) throw new HttpError(404, 'Message not found');
 
     if (req.method === 'GET') {
-      res.status(200).json({ image_data: msg.image_data });
+      res.status(200).json({ image_data: msg.image_data, audio_data: msg.audio_data });
       return;
     }
 
@@ -156,7 +182,38 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
     const hasBody = typeof req.body?.body === 'string' && req.body.body.trim().length > 0;
     const imageData = typeof req.body?.imageData === 'string' ? req.body.imageData : null;
     const imageThumb = typeof req.body?.imageThumb === 'string' ? req.body.imageThumb : imageData;
-    if (!hasBody && !imageData) throw new HttpError(400, 'A message needs some text or a photo');
+
+    const audioIn = req.body?.audio;
+    const audioRaw = audioIn && typeof audioIn.data === 'string' ? audioIn.data : null;
+    if (audioRaw && audioRaw.length > MAX_AUDIO_B64_LEN) throw new HttpError(400, 'That voice note is too long');
+    const audioDurationMs = audioRaw
+      ? Math.max(0, Math.min(600_000, Math.round(Number(audioIn.durationMs) || 0)))
+      : null;
+    const audioWaveform = audioRaw ? sanitizeWaveform(audioIn.waveform) : null;
+
+    if (!hasBody && !imageData && !audioRaw) {
+      throw new HttpError(400, 'A message needs some text, a photo, or a voice note');
+    }
+
+    // Normalize EVERY voice note to one canonical, guaranteed-everywhere-
+    // playable format before it is ever stored: a clip recorded in a browser
+    // can be audio/webm, which iOS's native player cannot reliably decode, so
+    // "record on Android web, play back on a partner's iPhone" would
+    // otherwise silently fail. Runs even on an already-mp4 native recording
+    // (cheap, one code path rather than a "skip if already mp4" branch).
+    // Fails LOUD (no silent pretend-send) rather than store an untranscoded
+    // clip that might not play for the other person.
+    let audioData: string | null = null;
+    let audioMime: string | null = null;
+    if (audioRaw) {
+      const transcoded = await transcodeToAac(audioRaw);
+      if (!transcoded.ok) {
+        log('error', 'chat.voice_transcode_failed', { couple_id: cid, reason: transcoded.reason });
+        throw new HttpError(500, 'Could not process that voice note. Try again.');
+      }
+      audioData = `data:${transcoded.mime};base64,${transcoded.base64}`;
+      audioMime = transcoded.mime!;
+    }
     const body = hasBody ? requireString(req.body.body, 'Message', 4000) : '';
     const bodyCt = body ? await encryptField(cid, body) : null;
 
@@ -170,9 +227,22 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
     }
 
     const row = await one<{ id: string; created_at: string }>(
-      `INSERT INTO messages (couple_id, sender_id, body, body_ct, image_thumb, image_data, reply_to_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at::STRING AS created_at`,
-      [cid, user.id, bodyCt ? '' : body, bodyCt, imageThumb, imageData, replyToId]
+      `INSERT INTO messages
+         (couple_id, sender_id, body, body_ct, image_thumb, image_data, audio_data, audio_mime, audio_duration_ms, audio_waveform, reply_to_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id, created_at::STRING AS created_at`,
+      [
+        cid,
+        user.id,
+        bodyCt ? '' : body,
+        bodyCt,
+        imageThumb,
+        imageData,
+        audioData,
+        audioMime,
+        audioDurationMs,
+        audioWaveform ? JSON.stringify(audioWaveform) : null,
+        replyToId,
+      ]
     );
     const message = {
       id: row!.id,
@@ -181,18 +251,26 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
       reply_to_id: replyToId,
       image_thumb: imageThumb,
       has_image: !!imageData,
+      has_audio: !!audioData,
+      audio_mime: audioMime,
+      audio_duration_ms: audioDurationMs,
+      audio_waveform: audioWaveform,
       created_at: row!.created_at,
     };
 
     // The sender has by definition seen their own message.
     await one('UPDATE users SET chat_seen_at = now() WHERE id = $1', [user.id]).catch(() => {});
-    // The thumbnail is list-weight (same size lists send); the full image is not
-    // carried over the channel.
+    // The thumbnail/waveform is list-weight (same size lists send); the full
+    // image or audio clip is not carried over the channel.
     await publish(cid, 'message.created', message);
 
     try {
       const others = await q<{ id: string }>('SELECT id FROM users WHERE couple_id = $1 AND id != $2', [cid, user.id]);
-      const push = imageData && !body ? `${user.display_name} sent you a photo` : `${user.display_name} sent you a message`;
+      const push = audioData
+        ? `${user.display_name} sent you a voice note`
+        : imageData && !body
+          ? `${user.display_name} sent you a photo`
+          : `${user.display_name} sent you a message`;
       for (const o of others) {
         // Skip the push for whoever is already sitting on the chat screen:
         // they're about to see this arrive live over Ably, and a push on top
@@ -215,6 +293,7 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
   const before = typeof req.query.before === 'string' && req.query.before ? req.query.before : null;
   const rows = await q<Row>(
     `SELECT id, sender_id, body, body_ct, image_thumb, (image_data IS NOT NULL) AS has_image,
+            (audio_data IS NOT NULL) AS has_audio, audio_mime, audio_duration_ms, audio_waveform,
             reply_to_id, created_at::STRING AS created_at
      FROM messages
      WHERE couple_id = $1 ${before ? 'AND created_at < $2' : ''}

@@ -21,7 +21,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { ChevronLeft, ImagePlus, ImageDown, Plus, Reply, Send, Trash2, X } from 'lucide-react-native';
+import * as FileSystem from 'expo-file-system';
+import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { ChevronLeft, ImagePlus, ImageDown, Mic, Pause, Play, Plus, Reply, Send, Trash2, X } from 'lucide-react-native';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { useChatPresence, useCoupleEvent } from '@/lib/realtime';
@@ -32,9 +34,11 @@ import { Empty, PrimaryButton, SecondaryButton } from '@/components/kit';
 import { Sheet } from '@/components/Sheet';
 import { ReactionPicker } from '@/components/ReactionPicker';
 import { applyReaction, groupReactions, nextReactionAction, QUICK_REACTIONS, type ReactionRow } from '@/lib/chatReactions';
-import { BUBBLE_TEXT_WRAP, bubbleImageSize, bubbleMaxWidth, bubbleQuoteWidth } from '@/lib/bubbleLayout';
+import { BUBBLE_TEXT_WRAP, bubbleImageSize, bubbleMaxWidth, bubbleQuoteWidth, bubbleVoiceWidth } from '@/lib/bubbleLayout';
 import { colors, font, radius, sp, text } from '@/theme';
 import { formatChatDay, formatTime, sameLocalDay } from '@/lib/format';
+import { formatClipDuration } from '@/lib/audioWaveform';
+import { useVoiceRecorder } from '@/lib/useVoiceRecorder';
 
 interface Message {
   id: string;
@@ -42,6 +46,10 @@ interface Message {
   body: string;
   image_thumb?: string | null;
   has_image?: boolean;
+  has_audio?: boolean;
+  audio_mime?: string | null;
+  audio_duration_ms?: number | null;
+  audio_waveform?: number[] | null;
   reply_to_id?: string | null;
   reactions?: ReactionRow[];
   created_at: string;
@@ -107,6 +115,35 @@ function LinkedText({ body, style, linkColor }: { body: string; style: any; link
       })}
     </Text>
   );
+}
+
+/** What a reply-quote or reply-bar preview shows when there is no caption text. */
+function previewText(m: Pick<Message, 'body' | 'has_image' | 'has_audio'>): string {
+  if (m.body) return m.body;
+  if (m.has_audio) return 'Voice note';
+  if (m.has_image) return 'Photo';
+  return '';
+}
+
+/**
+ * A recorded clip's `uri` is a local file:// (native) or blob: (web) URI;
+ * the server wants base64, the same shape as a memory photo. Native reads the
+ * file directly; web re-fetches the blob URL and lets FileReader do the
+ * base64 encoding (it already produces a ready-to-use `data:mime;base64,...`
+ * string, so no manual prefixing is needed there).
+ */
+async function readAsDataUri(uri: string, mime: string): Promise<string> {
+  if (Platform.OS === 'web') {
+    const blob = await fetch(uri).then((r) => r.blob());
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(String(reader.result));
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+  const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' as FileSystem.EncodingType });
+  return `data:${mime};base64,${base64}`;
 }
 
 export default function Chat() {
@@ -226,9 +263,14 @@ export default function Chat() {
     }
   };
 
-  const sendMessage = async (opts: { body?: string; imageData?: string; imageThumb?: string }) => {
+  const sendMessage = async (opts: {
+    body?: string;
+    imageData?: string;
+    imageThumb?: string;
+    audio?: { data: string; mime: string; durationMs: number; waveform: number[] };
+  }) => {
     const bodyText = (opts.body ?? '').trim();
-    if (!bodyText && !opts.imageData) return;
+    if (!bodyText && !opts.imageData && !opts.audio) return;
     const quoted = replyTo;
     setInput('');
     setReplyTo(null);
@@ -238,6 +280,10 @@ export default function Chat() {
       body: bodyText,
       image_thumb: opts.imageThumb ?? null,
       has_image: !!opts.imageData,
+      has_audio: !!opts.audio,
+      audio_mime: opts.audio?.mime ?? null,
+      audio_duration_ms: opts.audio?.durationMs ?? null,
+      audio_waveform: opts.audio?.waveform ?? null,
       reply_to_id: quoted?.id ?? null,
       created_at: new Date().toISOString(),
       pending: true,
@@ -250,6 +296,7 @@ export default function Chat() {
           body: bodyText || undefined,
           imageData: opts.imageData,
           imageThumb: opts.imageThumb,
+          audio: opts.audio,
           replyToId: quoted && !quoted.id.startsWith('temp-') ? quoted.id : undefined,
         },
       });
@@ -259,6 +306,7 @@ export default function Chat() {
       setMsgs((prev) => prev.filter((x) => x.id !== temp.id));
       if (bodyText) setInput(bodyText);
       if (quoted) setReplyTo(quoted);
+      if (opts.audio) toast.show('Could not send that voice note. Try again.');
     }
   };
 
@@ -286,6 +334,34 @@ export default function Chat() {
       });
     } catch {
       toast.show('Could not read that photo, try another one.');
+    }
+  };
+
+  const voice = useVoiceRecorder();
+  const [sendingVoice, setSendingVoice] = useState(false);
+
+  const startRecording = async () => {
+    const started = await voice.start();
+    if (!started) toast.show('Ours needs microphone access to record a voice note.');
+  };
+
+  const cancelRecording = async () => {
+    await voice.cancel();
+  };
+
+  const sendRecording = async () => {
+    setSendingVoice(true);
+    try {
+      const clip = await voice.finish();
+      if (!clip) return; // too short to bother with; recorder already stopped
+      const data = await readAsDataUri(clip.uri, clip.mime);
+      await sendMessage({
+        audio: { data, mime: clip.mime, durationMs: clip.durationMs, waveform: clip.waveform },
+      });
+    } catch {
+      toast.show('Could not save that recording. Try again.');
+    } finally {
+      setSendingVoice(false);
     }
   };
 
@@ -434,7 +510,7 @@ export default function Chat() {
                   Replying to {replyTo.sender_id === user?.id ? 'yourself' : partner?.display_name ?? 'them'}
                 </Text>
                 <Text style={styles.replyBarBody} numberOfLines={1}>
-                  {replyTo.body || 'Photo'}
+                  {previewText(replyTo)}
                 </Text>
               </View>
               <Pressable onPress={() => setReplyTo(null)} hitSlop={8}>
@@ -442,28 +518,40 @@ export default function Chat() {
               </Pressable>
             </View>
           )}
-          <View style={styles.composer}>
-            <Pressable onPress={pickImage} hitSlop={8} style={styles.imageBtn}>
-              <ImagePlus size={22} color={colors.accent} strokeWidth={1.75} />
-            </Pressable>
-            <TextInput
-              value={input}
-              onChangeText={setInput}
-              placeholder="Message"
-              placeholderTextColor={colors.inkFaint}
-              style={styles.input}
-              multiline
-              onSubmitEditing={() => sendMessage({ body: input })}
-              blurOnSubmit={false}
+          {voice.isRecording ? (
+            <RecordingBar
+              elapsedMs={voice.elapsedMs}
+              level={voice.level}
+              sending={sendingVoice}
+              onCancel={cancelRecording}
+              onSend={sendRecording}
             />
-            <Pressable
-              onPress={() => sendMessage({ body: input })}
-              disabled={!input.trim()}
-              style={[styles.sendBtn, !input.trim() && { opacity: 0.4 }]}
-            >
-              <Send size={18} color={colors.onSealed} strokeWidth={2} />
-            </Pressable>
-          </View>
+          ) : (
+            <View style={styles.composer}>
+              <Pressable onPress={pickImage} hitSlop={8} style={styles.imageBtn}>
+                <ImagePlus size={22} color={colors.accent} strokeWidth={1.75} />
+              </Pressable>
+              <TextInput
+                value={input}
+                onChangeText={setInput}
+                placeholder="Message"
+                placeholderTextColor={colors.inkFaint}
+                style={styles.input}
+                multiline
+                onSubmitEditing={() => sendMessage({ body: input })}
+                blurOnSubmit={false}
+              />
+              {input.trim() ? (
+                <Pressable onPress={() => sendMessage({ body: input })} style={styles.sendBtn}>
+                  <Send size={18} color={colors.onSealed} strokeWidth={2} />
+                </Pressable>
+              ) : (
+                <Pressable onPress={startRecording} hitSlop={8} style={styles.sendBtn}>
+                  <Mic size={18} color={colors.onSealed} strokeWidth={1.75} />
+                </Pressable>
+              )}
+            </View>
+          )}
         </KeyboardAvoidingView>
       )}
 
@@ -497,6 +585,50 @@ export default function Chat() {
         }}
       />
     </SafeAreaView>
+  );
+}
+
+/**
+ * The composer swaps to this while recording: a pulsing dot (scaled by the
+ * real mic level, not decorative) plus an elapsed timer, a trash button to
+ * discard, and a wax-seal send. Tap-to-start/tap-to-stop rather than
+ * WhatsApp's hold-with-slide-to-cancel: getting a drag-to-cancel gesture
+ * right on both touch and mouse, on top of everything else a voice note
+ * already touches, was more risk than a moderate-lift feature should take on
+ * for a gesture that a plain cancel button already covers.
+ */
+function RecordingBar({
+  elapsedMs,
+  level,
+  sending,
+  onCancel,
+  onSend,
+}: {
+  elapsedMs: number;
+  level: number;
+  sending: boolean;
+  onCancel: () => void;
+  onSend: () => void;
+}) {
+  const scale = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    Animated.spring(scale, { toValue: 1 + level * 0.6, useNativeDriver: true, speed: 20, bounciness: 4 }).start();
+  }, [level, scale]);
+
+  return (
+    <View style={styles.composer}>
+      <Pressable onPress={onCancel} hitSlop={8} disabled={sending} style={styles.imageBtn}>
+        <Trash2 size={19} color={colors.danger} strokeWidth={1.75} />
+      </Pressable>
+      <View style={styles.recordingRow}>
+        <Animated.View style={[styles.recordingDot, { transform: [{ scale }] }]} />
+        <Text style={styles.recordingTimer}>{formatClipDuration(elapsedMs)}</Text>
+        <Text style={styles.recordingHint}>Recording a voice note…</Text>
+      </View>
+      <Pressable onPress={onSend} disabled={sending} hitSlop={8} style={[styles.sendBtn, sending && { opacity: 0.5 }]}>
+        {sending ? <ActivityIndicator size="small" color={colors.onSealed} /> : <Send size={18} color={colors.onSealed} strokeWidth={2} />}
+      </Pressable>
+    </View>
   );
 }
 
@@ -698,6 +830,8 @@ function Bubble({
   onJumpToQuote?: () => void;
 }) {
   const hasImage = !!message.image_thumb;
+  const hasAudio = !!message.has_audio;
+  const voiceWidth = bubbleVoiceWidth(maxWidth);
   return (
     <View
       style={[
@@ -737,7 +871,7 @@ function Bubble({
                 {quoted ? quotedName(quoted.sender_id) : 'Earlier'}
               </Text>
               <Text style={[styles.quoteBody, mine && { color: colors.onSealed, opacity: 0.75 }, noSelect]} numberOfLines={1}>
-                {quoted ? quoted.body || 'Photo' : 'An earlier message'}
+                {quoted ? previewText(quoted) : 'An earlier message'}
               </Text>
             </Pressable>
           ) : null}
@@ -751,14 +885,25 @@ function Bubble({
               />
             </Pressable>
           )}
+          {hasAudio && (
+            <VoiceBubble
+              messageId={message.id}
+              mine={mine}
+              pending={!!message.pending}
+              waveform={message.audio_waveform ?? []}
+              durationMs={message.audio_duration_ms ?? 0}
+              width={voiceWidth}
+            />
+          )}
           {message.body ? (
             <LinkedText
               body={message.body}
               style={[
                 styles.bubbleText,
-                // A captioned photo already sets the bubble's width, so the
-                // caption gets that width to wrap inside rather than widening it.
+                // A captioned photo/voice note already sets the bubble's width, so
+                // the caption gets that width to wrap inside rather than widening it.
                 hasImage && { marginTop: sp.sm, width: imageSize.width },
+                hasAudio && { marginTop: sp.sm, width: voiceWidth },
                 mine && { color: colors.onSealed },
                 noSelect,
               ]}
@@ -800,6 +945,94 @@ function Bubble({
         )}
         {seen && <Text style={styles.seen}>Seen</Text>}
       </View>
+    </View>
+  );
+}
+
+/**
+ * A voice note bubble: waveform bars + a play/pause button + its duration.
+ * The bars are REAL amplitude data captured while recording, not decorative.
+ * The full clip is fetched lazily on first tap, exactly like a photo's full
+ * resolution is fetched only when the viewer opens (never eagerly on render,
+ * per the app's list-weight-only performance contract).
+ */
+function VoiceBubble({
+  messageId,
+  mine,
+  pending,
+  waveform,
+  durationMs,
+  width,
+}: {
+  messageId: string;
+  mine: boolean;
+  pending: boolean;
+  waveform: number[];
+  durationMs: number;
+  width: number;
+}) {
+  const [audioUri, setAudioUri] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const player = useAudioPlayer(audioUri);
+  const status = useAudioPlayerStatus(player);
+
+  useEffect(() => {
+    // Once the full clip lands, start it. Only true right after we set it.
+    if (audioUri) player.play();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioUri]);
+
+  const onToggle = async () => {
+    if (pending || messageId.startsWith('temp-') || loading) return;
+    if (audioUri) {
+      status.playing ? player.pause() : player.play();
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await api<{ audio_data: string | null }>(`/api/messages/${messageId}`);
+      if (data.audio_data) setAudioUri(data.audio_data);
+    } catch {
+      // no toast here: the play button just stays tappable to retry
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Progress falls back to the stored duration until the player itself has
+  // loaded one (native/web both report 0 before the clip is actually fetched).
+  const totalSeconds = status.duration > 0 ? status.duration : durationMs / 1000;
+  const playedRatio = totalSeconds > 0 ? Math.min(1, status.currentTime / totalSeconds) : 0;
+  const playedBars = Math.round(playedRatio * waveform.length);
+  const barColor = mine ? 'rgba(249, 239, 220, 0.9)' : colors.accent;
+  const barColorFaint = mine ? 'rgba(249, 239, 220, 0.35)' : colors.hairline;
+
+  return (
+    <View style={[styles.voiceRow, { width }]}>
+      <Pressable onPress={onToggle} hitSlop={8} style={[styles.voicePlayBtn, mine && styles.voicePlayBtnMine]}>
+        {loading ? (
+          <ActivityIndicator size="small" color={mine ? colors.onSealed : colors.accent} />
+        ) : status.playing ? (
+          <Pause size={15} color={mine ? colors.onSealed : colors.accent} strokeWidth={1.75} />
+        ) : (
+          <Play size={15} color={mine ? colors.onSealed : colors.accent} strokeWidth={1.75} />
+        )}
+      </Pressable>
+      <View style={styles.voiceBars}>
+        {(waveform.length ? waveform : new Array(24).fill(0.15)).map((v, i) => (
+          <View
+            key={i}
+            style={[
+              styles.voiceBar,
+              {
+                height: Math.max(3, Math.round(v * 22)),
+                backgroundColor: i < playedBars ? barColor : barColorFaint,
+              },
+            ]}
+          />
+        ))}
+      </View>
+      <Text style={[styles.voiceDuration, mine && { color: colors.onSealed }]}>{formatClipDuration(durationMs)}</Text>
     </View>
   );
 }
@@ -939,6 +1172,41 @@ const styles = StyleSheet.create({
     // as the widest line of text can be. Do not hardcode a size here.
     borderRadius: radius.sm,
     backgroundColor: colors.blushSoft,
+  },
+  voiceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.sm,
+    paddingVertical: sp.xs,
+  },
+  voicePlayBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.blushSoft,
+  },
+  voicePlayBtnMine: {
+    backgroundColor: 'rgba(249, 239, 220, 0.18)',
+  },
+  voiceBars: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    height: 22,
+  },
+  voiceBar: {
+    flex: 1,
+    minWidth: 2,
+    borderRadius: 1,
+  },
+  voiceDuration: {
+    ...text.micro,
+    textTransform: 'none',
+    letterSpacing: 0,
+    color: colors.inkMuted,
   },
   bubbleText: {
     ...text.body,
@@ -1123,6 +1391,28 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: LIST_MAX_WIDTH,
     alignSelf: 'center',
+  },
+  recordingRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.sm,
+    height: 40,
+  },
+  recordingDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.danger,
+  },
+  recordingTimer: {
+    ...text.body,
+    fontVariant: ['tabular-nums'],
+    color: colors.ink,
+  },
+  recordingHint: {
+    ...text.caption,
+    color: colors.inkMuted,
   },
   imageBtn: {
     width: 40,

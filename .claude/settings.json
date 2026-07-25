@@ -28,7 +28,14 @@
       "Bash(python3 -)",
       "PowerShell(npm run typecheck 2>&1)",
       "PowerShell(npm test 2>&1)",
-      "PowerShell(npm run build:web 2>&1)"
+      "PowerShell(npm run build:web 2>&1)",
+      "Bash(grep -E \"^expo-\\(file-system|audio|av\\)$\")",
+      "Bash(node -e \"const p=require\\('/d/Coding/NewProjects/RelationshipHQ/package.json'\\); console.log\\(Object.keys\\(p.dependencies\\).filter\\(k=>k.startsWith\\('expo'\\)\\).join\\('\\\\n'\\)\\)\")",
+      "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(Object.keys\\(p.dependencies\\).filter\\(k=>k.startsWith\\('expo'\\)\\).join\\('\\\\n'\\)\\)\")",
+      "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(p.dependencies['expo-audio'], p.dependencies['expo-file-system']\\)\")",
+      "Bash(grep -rn \"from '\\\\.\\\\./\\\\.\\\\./src\\\\|from '@/lib\\\\|src/lib\" /d/Coding/NewProjects/RelationshipHQ/api --include=\"*.ts\")",
+      "Bash(node -e ' *)",
+      "Bash(node_modules/ffmpeg-static/ffmpeg.exe -version)"
     ],
     "additionalDirectories": [
       "d:\\Coding\\NewProjects\\RelationshipHQ\\api"

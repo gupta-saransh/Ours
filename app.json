@@ -7,13 +7,14 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "backgroundColor": "#FAF6F0",
-    "splash": {
-      "backgroundColor": "#FAF6F0",
-      "resizeMode": "contain"
-    },
+    "backgroundColor": "#F4ECDD",
+    "icon": "./public/icons/icon-512.png",
     "ios": {
-      "supportsTablet": false
+      "supportsTablet": false,
+      "bundleIdentifier": "com.guptasaransh.ours",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "edgeToEdgeEnabled": true,
@@ -44,7 +45,22 @@
           "photosPermission": "Ours uses your photo library so you can add pictures to your shared memories."
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./public/icons/icon-512.png",
+          "imageWidth": 220,
+          "resizeMode": "contain",
+          "backgroundColor": "#F4ECDD"
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Ours uses your microphone so you can send voice notes to your person."
+        }
+      ]
     ],
     "extra": {
       "router": {},

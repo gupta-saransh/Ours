@@ -9,7 +9,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const h = vi.hoisted(() => ({
-  message: { sender_id: 'user-A', image_data: null as string | null, image_thumb: null as string | null },
+  message: {
+    sender_id: 'user-A',
+    image_data: null as string | null,
+    image_thumb: null as string | null,
+    audio_data: null as string | null,
+  },
   calls: [] as { text: string; params: unknown[] }[],
   publishes: [] as { coupleId: string; event: string; data: unknown }[],
   pushes: [] as { userId: string }[],
@@ -38,10 +43,20 @@ vi.mock('../_lib/envelope', () => ({
   readField: vi.fn(async (_cid: string, _ct: unknown, plaintext: string) => plaintext),
 }));
 vi.mock('../_lib/log', () => ({ log: vi.fn(), errorFields: vi.fn(() => ({})), flushLogs: vi.fn(async () => {}) }));
+vi.mock('../_lib/transcode', () => ({
+  // Real transcoding shells out to ffmpeg; unit tests stand in for it so they
+  // stay fast and don't depend on a binary being present. A sentinel input of
+  // 'FAIL' exercises the "transcode failed" path.
+  transcodeToAac: vi.fn(async (dataUri: string) =>
+    dataUri === 'FAIL'
+      ? { ok: false, reason: 'transcode-failed' }
+      : { ok: true, base64: 'VFJBTlNDT0RFRA==', mime: 'audio/mp4' }
+  ),
+}));
 vi.mock('../_lib/db', () => ({
   one: vi.fn(async (text: string, params: unknown[] = []) => {
     h.calls.push({ text, params });
-    if (text.startsWith('SELECT sender_id, image_data, image_thumb FROM messages')) return h.message;
+    if (text.startsWith('SELECT sender_id, image_data, image_thumb, audio_data FROM messages')) return h.message;
     if (text.startsWith('INSERT INTO messages')) return { id: 'm-new', created_at: '2026-07-19T00:00:00.000Z' };
     return undefined;
   }),
@@ -78,13 +93,13 @@ function makeRes() {
 
 describe('DELETE /api/messages/:id', () => {
   beforeEach(() => {
-    h.message = { sender_id: 'user-A', image_data: null, image_thumb: null };
+    h.message = { sender_id: 'user-A', image_data: null, image_thumb: null, audio_data: null };
     h.calls.length = 0;
     h.publishes.length = 0;
   });
 
   it('refuses to delete a message you did not send', async () => {
-    h.message = { sender_id: 'user-B', image_data: null, image_thumb: null };
+    h.message = { sender_id: 'user-B', image_data: null, image_thumb: null, audio_data: null };
     const res = makeRes();
     await handler({ method: 'DELETE', url: '/api/messages/m1', query: { id: 'm1' }, headers: {}, body: {} } as any, res);
     expect(res.statusCode).toBe(403);
@@ -102,7 +117,7 @@ describe('DELETE /api/messages/:id', () => {
 
 describe('POST /api/messages/:id (react/unreact)', () => {
   beforeEach(() => {
-    h.message = { sender_id: 'user-A', image_data: null, image_thumb: null };
+    h.message = { sender_id: 'user-A', image_data: null, image_thumb: null, audio_data: null };
     h.calls.length = 0;
     h.publishes.length = 0;
   });
@@ -146,6 +161,77 @@ describe('POST /api/messages/:id (react/unreact)', () => {
       event: 'message.reacted',
       data: { message_id: 'm1', user_id: 'user-A', emoji: null },
     });
+  });
+});
+
+describe('GET /api/messages/:id — full audio fetch', () => {
+  beforeEach(() => {
+    h.calls.length = 0;
+  });
+
+  it('returns the full clip alongside the full image', async () => {
+    h.message = { sender_id: 'user-A', image_data: null, image_thumb: null, audio_data: 'data:audio/mp4;base64,ABC' };
+    const res = makeRes();
+    await handler({ method: 'GET', url: '/api/messages/m1', query: { id: 'm1' }, headers: {}, body: {} } as any, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ image_data: null, audio_data: 'data:audio/mp4;base64,ABC' });
+  });
+});
+
+describe('POST /api/messages (send) — voice notes', () => {
+  beforeEach(() => {
+    h.calls.length = 0;
+    h.publishes.length = 0;
+    h.pushes.length = 0;
+    h.active = false;
+  });
+
+  it('rejects a message with no text, photo, or audio', async () => {
+    const res = makeRes();
+    await handler({ method: 'POST', url: '/api/messages', query: {}, headers: {}, body: {} } as any, res);
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('normalizes the recorded clip through transcodeToAac before storing it', async () => {
+    const res = makeRes();
+    await handler(
+      {
+        method: 'POST',
+        url: '/api/messages',
+        query: {},
+        headers: {},
+        // The client's own claimed mime (audio/webm here) is irrelevant: the
+        // server never trusts it, only what transcodeToAac actually returns.
+        body: { audio: { data: 'data:audio/webm;base64,ABC', mime: 'audio/webm', durationMs: 4200, waveform: [0.2, 0.9, 1.4, -1] } },
+      } as any,
+      res
+    );
+    expect(res.statusCode).toBe(201);
+    const insert = h.calls.find((c) => c.text.startsWith('INSERT INTO messages'));
+    // couple_id, sender_id, body, body_ct, image_thumb, image_data, audio_data, audio_mime, audio_duration_ms, audio_waveform, reply_to_id
+    expect(insert!.params[6]).toBe('data:audio/mp4;base64,VFJBTlNDT0RFRA==');
+    expect(insert!.params[7]).toBe('audio/mp4');
+    expect(insert!.params[8]).toBe(4200);
+    // Out-of-range waveform values are clamped into 0..1 before storage.
+    expect(JSON.parse(insert!.params[9] as string)).toEqual([0.2, 0.9, 1, 0]);
+    expect(h.pushes).toEqual([{ userId: 'user-B' }]);
+  });
+
+  it('fails loudly (no silent pretend-send) when transcoding fails', async () => {
+    const res = makeRes();
+    await handler(
+      {
+        method: 'POST',
+        url: '/api/messages',
+        query: {},
+        headers: {},
+        body: { audio: { data: 'FAIL', mime: 'audio/webm', durationMs: 1000, waveform: [] } },
+      } as any,
+      res
+    );
+    expect(res.statusCode).toBe(500);
+    expect(h.calls.some((c) => c.text.startsWith('INSERT INTO messages'))).toBe(false);
+    expect(h.pushes).toEqual([]);
   });
 });
 

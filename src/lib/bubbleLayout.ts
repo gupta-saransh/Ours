@@ -32,6 +32,8 @@ export const BUBBLE_IMAGE_INSET = 8;
 export const BUBBLE_QUOTE_INSET = 16;
 /** Images render in a consistent 4:3 frame, cropped to fill (contentFit cover). */
 export const BUBBLE_IMAGE_RATIO = 3 / 4;
+/** A voice bubble's own width, independent of clip length (WhatsApp does this too: a 3-second and a 3-minute note look the same size, only the timer differs). */
+export const BUBBLE_VOICE_WIDTH = 220;
 
 /**
  * The width cap shared by every bubble in the thread. Derived from the width
@@ -78,6 +80,15 @@ export function bubbleImageSize(maxWidth: number): { width: number; height: numb
  */
 export function bubbleQuoteWidth(maxWidth: number): number {
   return Math.max(1, Math.round(maxWidth - BUBBLE_QUOTE_INSET * 2));
+}
+
+/**
+ * A voice note's fixed content width: BUBBLE_VOICE_WIDTH, but never past the
+ * shared cap on a narrow phone (same rule as every other bubble content: stay
+ * inside maxWidth minus the bubble's own inset).
+ */
+export function bubbleVoiceWidth(maxWidth: number): number {
+  return Math.max(1, Math.min(BUBBLE_VOICE_WIDTH, bubbleContentWidth(maxWidth)));
 }
 
 /**
