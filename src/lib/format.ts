@@ -1,13 +1,40 @@
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTHS_FULL = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+const WEEKDAYS_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
 
 export function formatDay(iso: string): string {
   const d = new Date(iso);
   const now = new Date();
-  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diffDays = Math.round((startOf(now) - startOf(d)) / 86_400_000);
+  const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
   if (diffDays === 0) return 'Today';
   if (diffDays === 1) return 'Yesterday';
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+/**
+ * A chat day-separator label, WhatsApp-style: Today / Yesterday, then the
+ * weekday name for the rest of the past week ("Wednesday"), then a dated form
+ * for anything older ("Tuesday, 14 July", with the year appended when it is not
+ * the current one). `now` is injectable so the rule is unit-testable.
+ */
+export function formatChatDay(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso);
+  const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays > 1 && diffDays < 7) return WEEKDAYS_FULL[d.getDay()];
+  const dated = `${WEEKDAYS_FULL[d.getDay()]}, ${d.getDate()} ${MONTHS_FULL[d.getMonth()]}`;
+  return d.getFullYear() === now.getFullYear() ? dated : `${dated} ${d.getFullYear()}`;
+}
+
+/** Whether two ISO timestamps fall on the same local calendar day. */
+export function sameLocalDay(a: string, b: string): boolean {
+  return startOfDay(new Date(a)) === startOfDay(new Date(b));
 }
 
 export function formatTime(iso: string): string {

@@ -1370,6 +1370,9 @@ const styles = StyleSheet.create({
     fontSize: 17,
     lineHeight: 26,
     paddingTop: sp.md,
+    // Match the memory card's bottom gap; without it a note sat flush against
+    // the next day's date header (and the next card), reading as cramped.
+    marginBottom: sp.lg,
   },
   sealMark: {
     fontSize: 22,

@@ -34,7 +34,7 @@ import { ReactionPicker } from '@/components/ReactionPicker';
 import { applyReaction, groupReactions, nextReactionAction, QUICK_REACTIONS, type ReactionRow } from '@/lib/chatReactions';
 import { BUBBLE_TEXT_WRAP, bubbleImageSize, bubbleMaxWidth, bubbleQuoteWidth } from '@/lib/bubbleLayout';
 import { colors, font, radius, sp, text } from '@/theme';
-import { formatTime } from '@/lib/format';
+import { formatChatDay, formatTime, sameLocalDay } from '@/lib/format';
 
 interface Message {
   id: string;
@@ -134,6 +134,21 @@ export default function Chat() {
   const [actionsFor, setActionsFor] = useState<Message | null>(null);
   // React (from the menu, or tapping an existing pill someone else started) opens this.
   const [reactFor, setReactFor] = useState<Message | null>(null);
+  // Tapping a quoted reply scrolls to the original and briefly highlights it.
+  const listRef = useRef<FlatList<Message>>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+
+  const jumpToMessage = useCallback(
+    (id: string) => {
+      const idx = msgs.findIndex((m) => m.id === id);
+      // Not loaded (paginated out of the window): no jump rather than a wrong one.
+      if (idx < 0) return;
+      listRef.current?.scrollToIndex({ index: idx, viewPosition: 0.35, animated: true });
+      setHighlightId(id);
+      setTimeout(() => setHighlightId((cur) => (cur === id ? null : cur)), 1600);
+    },
+    [msgs]
+  );
 
   // Am I actually looking at this screen right now? Combines "this route is
   // mounted" with "the tab/app is foregrounded", so backgrounding the app
@@ -348,12 +363,23 @@ export default function Chat() {
       ) : (
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <FlatList
+            ref={listRef}
             data={msgs}
             inverted
             keyExtractor={(m) => m.id}
             contentContainerStyle={styles.list}
             onEndReached={loadMore}
             onEndReachedThreshold={0.3}
+            // Inverted lists can fail a jump when the target row is not measured
+            // yet; nudge toward it, then land on it once it has rendered.
+            onScrollToIndexFailed={(info) => {
+              listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
+              setTimeout(() => {
+                if (info.index < msgs.length) {
+                  listRef.current?.scrollToIndex({ index: info.index, viewPosition: 0.35, animated: true });
+                }
+              }, 80);
+            }}
             ListEmptyComponent={
               loaded ? (
                 <View style={styles.emptyWrap}>
@@ -363,27 +389,40 @@ export default function Chat() {
             }
             renderItem={({ item, index }) => {
               const mine = item.sender_id === user?.id;
-              const prev = msgs[index + 1];
+              const prev = msgs[index + 1]; // the OLDER neighbour (inverted list)
               const grouped = prev && prev.sender_id === item.sender_id;
+              // A day divider sits at the visual top of each day's block: show it
+              // above the OLDEST message of a day (the one whose older neighbour
+              // is a different day, or which has none).
+              const showDay = !prev || !sameLocalDay(item.created_at, prev.created_at);
               return (
-                <SwipeToReply onReply={() => setReplyTo(item)} disabled={item.pending} mine={mine}>
-                  <Bubble
-                    message={item}
-                    mine={mine}
-                    grouped={!!grouped}
-                    seen={item.id === seenReceiptId}
-                    added={addedIds.has(item.id)}
-                    quoted={item.reply_to_id ? msgs.find((x) => x.id === item.reply_to_id) ?? null : null}
-                    quotedName={(sid) => (sid === user?.id ? 'You' : partner?.display_name ?? 'Them')}
-                    reactions={groupReactions(item.reactions ?? [], user?.id)}
-                    maxWidth={maxBubble}
-                    imageSize={imageSize}
-                    onOpenImage={() => item.image_thumb && setViewer({ id: item.id, thumb: item.image_thumb })}
-                    onAddToTimeline={() => addToTimeline(item)}
-                    onOpenActions={() => !item.pending && setActionsFor(item)}
-                    onToggleReaction={(emoji) => toggleReaction(item, emoji)}
-                  />
-                </SwipeToReply>
+                <View>
+                  {showDay && (
+                    <View style={styles.dayDivider}>
+                      <Text style={styles.dayDividerText}>{formatChatDay(item.created_at)}</Text>
+                    </View>
+                  )}
+                  <SwipeToReply onReply={() => setReplyTo(item)} disabled={item.pending} mine={mine}>
+                    <Bubble
+                      message={item}
+                      mine={mine}
+                      grouped={!!grouped}
+                      highlighted={highlightId === item.id}
+                      seen={item.id === seenReceiptId}
+                      added={addedIds.has(item.id)}
+                      quoted={item.reply_to_id ? msgs.find((x) => x.id === item.reply_to_id) ?? null : null}
+                      quotedName={(sid) => (sid === user?.id ? 'You' : partner?.display_name ?? 'Them')}
+                      reactions={groupReactions(item.reactions ?? [], user?.id)}
+                      maxWidth={maxBubble}
+                      imageSize={imageSize}
+                      onOpenImage={() => item.image_thumb && setViewer({ id: item.id, thumb: item.image_thumb })}
+                      onAddToTimeline={() => addToTimeline(item)}
+                      onOpenActions={() => !item.pending && setActionsFor(item)}
+                      onToggleReaction={(emoji) => toggleReaction(item, emoji)}
+                      onJumpToQuote={item.reply_to_id ? () => jumpToMessage(item.reply_to_id!) : undefined}
+                    />
+                  </SwipeToReply>
+                </View>
               );
             }}
           />
@@ -621,6 +660,7 @@ function Bubble({
   message,
   mine,
   grouped,
+  highlighted,
   seen,
   added,
   quoted,
@@ -632,10 +672,13 @@ function Bubble({
   onAddToTimeline,
   onOpenActions,
   onToggleReaction,
+  onJumpToQuote,
 }: {
   message: Message;
   mine: boolean;
   grouped: boolean;
+  /** Briefly true after someone taps a reply pointing here, to draw the eye. */
+  highlighted: boolean;
   seen: boolean;
   added: boolean;
   /** The message this one replies to, if it is loaded in the thread. */
@@ -651,10 +694,19 @@ function Bubble({
   /** A tap on the bubble opens the React / Reply / Delete sheet (the small ✦ mark is the hint). */
   onOpenActions: () => void;
   onToggleReaction: (emoji: string) => void;
+  /** Tapping the quoted preview scrolls to the original message. */
+  onJumpToQuote?: () => void;
 }) {
   const hasImage = !!message.image_thumb;
   return (
-    <View style={[styles.bubbleRow, mine ? styles.rowMine : styles.rowTheirs, { marginTop: grouped ? 2 : sp.md }]}>
+    <View
+      style={[
+        styles.bubbleRow,
+        mine ? styles.rowMine : styles.rowTheirs,
+        { marginTop: grouped ? 2 : sp.md },
+        highlighted && styles.bubbleRowHighlighted,
+      ]}
+    >
       {/* One shared pixel cap for the whole thread (not a percentage of the
           screen, which made every bubble a different width). flexShrink +
           minWidth 0 let a bubble holding one long unbroken token shrink below
@@ -673,15 +725,21 @@ function Bubble({
             // Fixed to a bounded quote width (bubbleLayout owns it), so the
             // quoted name/body truncate inside the column instead of laying out
             // nowrap and dragging the bubble edge out to the cap for a short
-            // reply. Sized to never push a text bubble past the cap.
-            <View style={[styles.quote, mine ? styles.quoteMine : styles.quoteTheirs, { width: bubbleQuoteWidth(maxWidth) }]}>
+            // reply. Sized to never push a text bubble past the cap. Tapping it
+            // scrolls to the original (a nested Pressable, so it wins the tap
+            // over the bubble's own actions-sheet press).
+            <Pressable
+              onPress={onJumpToQuote}
+              disabled={!onJumpToQuote}
+              style={[styles.quote, mine ? styles.quoteMine : styles.quoteTheirs, { width: bubbleQuoteWidth(maxWidth) }]}
+            >
               <Text style={[styles.quoteName, mine && { color: colors.onSealed }, noSelect]} numberOfLines={1}>
                 {quoted ? quotedName(quoted.sender_id) : 'Earlier'}
               </Text>
               <Text style={[styles.quoteBody, mine && { color: colors.onSealed, opacity: 0.75 }, noSelect]} numberOfLines={1}>
                 {quoted ? quoted.body || 'Photo' : 'An earlier message'}
               </Text>
-            </View>
+            </Pressable>
           ) : null}
           {hasImage && (
             <Pressable onPress={onOpenImage}>
@@ -825,11 +883,38 @@ const styles = StyleSheet.create({
   bubbleRow: {
     flexDirection: 'row',
   },
+  // A soft parchment wash behind the row when a reply jumps here, so the eye
+  // finds the message without a jarring flash. Fades on its own after a beat.
+  bubbleRowHighlighted: {
+    backgroundColor: colors.blushSoft,
+    borderRadius: radius.md,
+    marginHorizontal: -sp.xs,
+    paddingHorizontal: sp.xs,
+  },
   rowMine: {
     justifyContent: 'flex-end',
   },
   rowTheirs: {
     justifyContent: 'flex-start',
+  },
+  // WhatsApp-style day separator: a small centred chip between message groups.
+  dayDivider: {
+    alignItems: 'center',
+    marginTop: sp.md,
+    marginBottom: sp.sm,
+  },
+  dayDividerText: {
+    ...text.micro,
+    color: colors.inkMuted,
+    textTransform: 'none',
+    letterSpacing: 0.3,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: radius.pill,
+    overflow: 'hidden',
+    paddingHorizontal: sp.md,
+    paddingVertical: 3,
   },
   bubble: {
     paddingVertical: sp.sm,

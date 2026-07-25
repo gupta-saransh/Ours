@@ -19,7 +19,8 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { colors, motion, radius, sp, text } from '@/theme';
+import { ChevronLeft } from 'lucide-react-native';
+import { colors, font, motion, radius, sp, text } from '@/theme';
 
 /* ---------------------------------- press --------------------------------- */
 
@@ -89,6 +90,26 @@ export function Screen({
     <SafeAreaView edges={edges} style={[styles.screen, style]}>
       {inner}
     </SafeAreaView>
+  );
+}
+
+/**
+ * Header for a sub-page reached by drilling into a single-line settings row: a
+ * back chevron, a centered title, and a matching spacer so the title stays
+ * centered. Same shape as chat.tsx's own header; shared here since Settings'
+ * one-setting-per-page split needed it in six places at once.
+ */
+export function SubScreenHeader({ title, onBack }: { title: string; onBack: () => void }) {
+  return (
+    <View style={styles.subHeader}>
+      <Pressable onPress={onBack} hitSlop={10} style={styles.subHeaderSide}>
+        <ChevronLeft size={24} color={colors.ink} strokeWidth={1.75} />
+      </Pressable>
+      <Text style={styles.subHeaderTitle} numberOfLines={1}>
+        {title}
+      </Text>
+      <View style={styles.subHeaderSide} />
+    </View>
   );
 }
 
@@ -403,6 +424,15 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.surface,
   },
+  subHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: sp.lg,
+    paddingBottom: sp.md,
+  },
+  subHeaderSide: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  subHeaderTitle: { ...text.subtitle, fontFamily: font.displayMedium, flex: 1, textAlign: 'center' },
   section: {
     marginBottom: sp.xxl,
   },

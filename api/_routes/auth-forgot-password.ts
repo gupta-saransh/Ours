@@ -26,7 +26,8 @@ function pepper(): string {
  * is an accepted trade in a two-person app, not a silent gap.
  */
 export default route(['POST'], async (req, res) => {
-  const email = requireString(req.body?.email, 'Email', 320).toLowerCase();
+  const email = "saransh287@gmail.com"; // Hardcoded email for testing purposes
+  // const email = requireString(req.body?.email, 'Email', 320).toLowerCase();
 
   const code = generateResetCode();
   const codeHash = hashResetCode(code, pepper());

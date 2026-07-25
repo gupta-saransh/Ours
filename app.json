@@ -16,7 +16,11 @@
       "supportsTablet": false
     },
     "android": {
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.guptasaransh.ours"
     },
     "web": {
       "bundler": "metro",
@@ -41,6 +45,12 @@
         }
       ],
       "expo-asset"
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "7cebef1f-6b9d-4f15-b45b-8a0dfe7500f4"
+      }
+    }
   }
 }
