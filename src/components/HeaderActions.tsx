@@ -1,18 +1,31 @@
 import React, { useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Bell, Settings } from 'lucide-react-native';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { useNotifications } from '@/lib/notifications';
 import { useToast } from '@/lib/toast';
 import { successHaptic } from '@/lib/haptics';
 import { AppPressable, IconButton } from '@/components/kit';
 import { colors, radius, sp, text } from '@/theme';
 
-/** ♥ button, sends a live "thinking of you" to your partner. */
+// Same defensive pattern chat.tsx uses on its bubbles: a sustained press on
+// web can trigger the browser's own text-selection/callout UI on top of the
+// app's own onLongPress, which is exactly the "screen turns blue" bug that
+// pushed chat's message bubbles off onLongPress entirely. Applied here since
+// NudgeButton gains a real onLongPress below (chat's bubbles did not keep one).
+const noSelect =
+  Platform.OS === 'web'
+    ? ({ userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none' } as any)
+    : null;
+
+/** ♥ button: tap sends a live "thinking of you"; hold opens Thumb Kiss. */
 export function NudgeButton() {
   const [sending, setSending] = useState(false);
   const toast = useToast();
+  const router = useRouter();
+  const { partner } = useAuth();
 
   const send = async () => {
     if (sending) return; // debounce repeat taps
@@ -28,12 +41,18 @@ export function NudgeButton() {
     }
   };
 
+  // Solo (no partner yet): nothing to hold hands with, so hold does nothing.
+  const hold = () => {
+    if (!partner) return;
+    router.navigate('/thumb-kiss');
+  };
+
   return (
-    <AppPressable onPress={send} style={styles.nudge}>
+    <AppPressable onPress={send} onLongPress={hold} style={[styles.nudge, noSelect]}>
       {sending ? (
         <ActivityIndicator size={14} color={colors.surfaceSealed} />
       ) : (
-        <Text style={styles.nudgeText}>Nudge ♥</Text>
+        <Text style={[styles.nudgeText, noSelect]}>Nudge ♥</Text>
       )}
     </AppPressable>
   );

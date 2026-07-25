@@ -475,3 +475,12 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_data STRING;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_mime STRING;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_duration_ms INT;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_waveform JSONB;
+
+-- v24: Thumb Kiss, a synchronized press-and-hold mini-moment (both partners
+-- open the screen and hold a touch target at the same time). The moment
+-- itself is never stored, only a running total. api/_routes/thumb-kiss.ts
+-- atomically increments this on a match so it can say "your Nth thumb kiss";
+-- exactly one partner reports each match (the one with the lexicographically
+-- smaller user id, the same ordered-pair tie-break agreementStatsFor uses in
+-- game.ts) so a match is never double-counted by both clients firing at once.
+ALTER TABLE couples ADD COLUMN IF NOT EXISTS thumb_kiss_count INT NOT NULL DEFAULT 0;

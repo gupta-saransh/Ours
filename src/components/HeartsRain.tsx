@@ -78,7 +78,16 @@ export function HeartsRain() {
   return <Burst key={burst.n} variant={burst.variant} onDone={() => setBurst(null)} />;
 }
 
-function Burst({ variant, onDone }: { variant: Variant; onDone: () => void }) {
+/**
+ * The shower itself, exported so a screen presented through a native Modal
+ * (any `Sheet`, or a pushed route outside the tabs group) can render it
+ * INLINE in its own tree. RN's Modal paints in its own layer above
+ * everything else, including the <HeartsRain/> singleton mounted once in the
+ * tabs layout, so triggering showHearts()/showConfetti() from behind a modal
+ * would render invisibly underneath it. Same engine either way, just called
+ * from the right place. See app/thumb-kiss.tsx for the local use.
+ */
+export function Burst({ variant, onDone }: { variant: Variant; onDone: () => void }) {
   const { height } = useWindowDimensions();
   const specs = useMemo(makeSpecs, []);
   const values = useRef(specs.map(() => new Animated.Value(0))).current;

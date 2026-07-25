@@ -28,7 +28,10 @@ export function NudgeToast() {
 
   useCoupleEvent('nudge', (data) => {
     if (data?.fromId && data.fromId === user?.id) return; // don't toast yourself
-    show(`${data?.fromName ?? 'Your person'} is thinking of you ♥`);
+    // The server already picked one witty line for this send (nudge.ts) and
+    // put it on the event; the fallback only covers an old cached client that
+    // published a nudge without one.
+    show(data?.message ?? `${data?.fromName ?? 'Your person'} is thinking of you ♥`);
   });
 
   useCoupleEvent('partner.joined', (data) => {
