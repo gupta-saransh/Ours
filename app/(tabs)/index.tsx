@@ -1,5 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Animated,
+  Easing,
   Platform,
   Pressable,
   RefreshControl,
@@ -777,15 +779,52 @@ function opensIn(iso: string): string {
 }
 
 /**
- * "You've agreed on 12 of your 18 either/ors." A real count, not a score,
- * same "no numbers as scores, but real counts are fine" rule the path
- * ceremony's madeOfSummary follows. Skipped under 2 rounds of history: "1 of
- * 1" reads as an odd, oddly definitive thing to lead with on day one.
+ * A little "in sync" meter for the reveal card: a pill bar filled to how
+ * often you two land on the same pick, with a heart riding the fill's edge,
+ * plus "You've agreed on 12 of 18 either/ors" underneath. The BAR is what
+ * replaced a plain caption line the user found "too plain"; the real-count
+ * sentence stays, since the design system's "no numbers as scores, but real
+ * counts are fine" rule (the path ceremony's madeOfSummary follows it too) is
+ * about not inventing a score, not about avoiding numbers altogether. Skipped
+ * under 2 rounds of history: "1 of 1" reads as an odd, oddly definitive thing
+ * to lead with on day one. Fills in once on mount (GameCard's reveal branch
+ * only renders this when `state.reveal` is true, so a fresh reveal is always
+ * a fresh mount, which is what makes a from-zero fill read as intentional
+ * rather than a flicker on every re-render).
  */
-function agreementLine(agreement: { agreed: number; total: number } | null): string | null {
+function AgreementMeter({ agreement }: { agreement: { agreed: number; total: number } | null }) {
+  const rate = agreement && agreement.total > 0 ? agreement.agreed / agreement.total : 0;
+  const fill = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!agreement || agreement.total < 2) return;
+    fill.setValue(0);
+    Animated.timing(fill, {
+      toValue: rate,
+      duration: 550,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false, // animating `width`/`left`, which the native driver cannot do
+    }).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agreement?.agreed, agreement?.total]);
+
   if (!agreement || agreement.total < 2) return null;
   const noun = agreement.total === 1 ? 'either/or' : 'either/ors';
-  return `You've agreed on ${agreement.agreed} of your ${agreement.total} ${noun} ✦`;
+  const width = fill.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
+
+  return (
+    <View style={styles.agreementWrap}>
+      <View style={styles.agreementTrack}>
+        <Animated.View style={[styles.agreementFill, { width }]} />
+        <Animated.View style={[styles.agreementMarker, { left: width }]}>
+          <Text style={styles.agreementMarkerGlyph}>{HEART}</Text>
+        </Animated.View>
+      </View>
+      <Text style={styles.agreementCaption}>
+        You've agreed on {agreement.agreed} of {agreement.total} {noun} ✦
+      </Text>
+    </View>
+  );
 }
 
 /**
@@ -894,11 +933,7 @@ function GameCard({
                 ? `They had you pegged from the start! Caught you off guard, didn't they? ${HEART}`
                 : 'Plot twist! You managed to completely catch each other by surprise.'}
         </Text>
-        {agreementLine(reveal.agreement) && (
-          <Text style={[text.caption, { marginTop: sp.md, textAlign: 'center', color: colors.inkMuted }]}>
-            {agreementLine(reveal.agreement)}
-          </Text>
-        )}
+        <AgreementMeter agreement={reveal.agreement} />
         <Text style={[text.micro, { marginTop: sp.sm, textAlign: 'center' }]}>
           {state.nextRoundAt ? `One more opens ${opensIn(state.nextRoundAt)} ✦` : 'A new one tomorrow ✦'}
         </Text>
@@ -1266,6 +1301,42 @@ const styles = StyleSheet.create({
     // heart is between the two people, and pinning it to the avatar row is the
     // only way it stays put no matter how either pick wraps. (44 - 22) / 2.
     marginTop: 11,
+  },
+  agreementWrap: {
+    marginTop: sp.md,
+    alignItems: 'center',
+  },
+  agreementTrack: {
+    width: 160,
+    height: 8,
+    borderRadius: radius.pill,
+    backgroundColor: colors.blushSoft,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    overflow: 'visible', // the heart marker rides slightly above/outside the track
+  },
+  agreementFill: {
+    height: '100%',
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceSealed,
+  },
+  agreementMarker: {
+    position: 'absolute',
+    top: -7,
+    marginLeft: -9, // centers the glyph on the fill's edge (roughly half its width)
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  agreementMarkerGlyph: {
+    fontSize: 18,
+    lineHeight: 18,
+    color: colors.surfaceSealed,
+  },
+  agreementCaption: {
+    ...text.caption,
+    color: colors.inkMuted,
+    marginTop: sp.sm,
+    textAlign: 'center',
   },
   chapterRow: {
     flexDirection: 'row',
