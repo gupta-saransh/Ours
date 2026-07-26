@@ -42,6 +42,7 @@ const WINDOWS = [7, 30, 90] as const;
 
 const SOURCE_LABELS: Record<string, string> = {
   messages: 'Chat',
+  voice: 'Voice notes',
   memories: 'Memories',
   notes: 'Notes',
   todos: 'To-dos',
@@ -100,6 +101,19 @@ interface Stats {
     last_active: string | null;
     empty: boolean;
   }[];
+  people: {
+    id: string;
+    name: string;
+    coupleId: string | null;
+    coupleName: string;
+    counts: Record<string, number>;
+    total: number;
+    windowCounts: Record<string, number>;
+    windowTotal: number;
+    featuresUsed: number;
+    lastActive: string | null;
+  }[];
+  featureAdoption: { src: string; users: number; windowUsers: number; total: number }[];
 }
 
 /** Thrown for a 401 so callers can tell "token expired" from "request failed". */
@@ -354,6 +368,18 @@ export default function AdminDashboard() {
             <CoupleTable couples={stats.couples} sources={stats.sources} />
           </Section>
 
+          <Section
+            title="Who is using what"
+            hint="Pick a feature to rank people by it. The couple table above cannot show this."
+          >
+            <PeopleTable
+              people={stats.people ?? []}
+              adoption={stats.featureAdoption ?? []}
+              sources={stats.sources}
+              days={days}
+            />
+          </Section>
+
           <View style={styles.twoUp}>
             <Section title="What they make" style={styles.half}>
               <BarList rows={stats.contentMix} labels={SOURCE_LABELS} />
@@ -527,6 +553,149 @@ function CoupleTable({ couples, sources }: { couples: Stats['couples']; sources:
         <Pressable onPress={() => setShowEmpty((s) => !s)} style={styles.showMore}>
           <Text style={styles.showMoreText}>
             {showEmpty ? 'Hide' : 'Show'} {empty.length} empty space{empty.length === 1 ? '' : 's'}
+          </Text>
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
+/**
+ * Who is using what: the dimension the couple leaderboard structurally cannot
+ * show. Two controls, both client-side over data already fetched (no extra
+ * request, so switching is instant):
+ *
+ *  - a FEATURE filter, which re-ranks everyone by that one feature and shows
+ *    its count in its own column. "Who is actually using voice notes" is one
+ *    tap, and was previously unanswerable.
+ *  - an ALL-TIME vs WINDOW toggle, because "has used it once, ever" and "is
+ *    using it now" are different questions and the window one decays.
+ *
+ * People with nothing are kept, behind a toggle: a signed-up person who has
+ * never made anything is the most actionable row here, not noise to filter out.
+ */
+function PeopleTable({
+  people,
+  adoption,
+  sources,
+  days,
+}: {
+  people: Stats['people'];
+  adoption: Stats['featureAdoption'];
+  sources: string[];
+  days: number;
+}) {
+  const [feature, setFeature] = useState<string | null>(null);
+  const [windowed, setWindowed] = useState(false);
+  const [showIdle, setShowIdle] = useState(false);
+
+  const pick = (p: Stats['people'][number], src: string) =>
+    (windowed ? p.windowCounts : p.counts)[src] ?? 0;
+  const totalOf = (p: Stats['people'][number]) => (windowed ? p.windowTotal : p.total);
+
+  const ranked = useMemo(() => {
+    const rows = [...people];
+    rows.sort((a, b) => {
+      if (feature) return pick(b, feature) - pick(a, feature) || totalOf(b) - totalOf(a);
+      return totalOf(b) - totalOf(a);
+    });
+    return rows;
+  }, [people, feature, windowed]);
+
+  // "Idle" is relative to what is being asked: nothing in the window when the
+  // window toggle is on, nothing ever when it is off.
+  const active = ranked.filter((p) => (feature ? pick(p, feature) > 0 : totalOf(p) > 0));
+  const idle = ranked.filter((p) => (feature ? pick(p, feature) === 0 : totalOf(p) === 0));
+  const shown = showIdle ? [...active, ...idle] : active;
+  const top = Math.max(...active.map((p) => (feature ? pick(p, feature) : totalOf(p))), 1);
+  const adopted = feature ? adoption.find((a) => a.src === feature) : null;
+
+  return (
+    <View>
+      <View style={styles.filterRow}>
+        <Pressable
+          onPress={() => setFeature(null)}
+          style={[styles.chip, !feature && styles.chipActive]}
+        >
+          <Text style={[styles.chipText, !feature && styles.chipTextActive]}>Everything</Text>
+        </Pressable>
+        {sources.map((src) => {
+          const a = adoption.find((x) => x.src === src);
+          const on = feature === src;
+          return (
+            <Pressable
+              key={src}
+              onPress={() => setFeature(on ? null : src)}
+              style={[styles.chip, on && styles.chipActive]}
+            >
+              <Text style={[styles.chipText, on && styles.chipTextActive]}>
+                {SOURCE_LABELS[src] ?? src}
+                {a ? ` · ${a.users}` : ''}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <View style={styles.filterRow}>
+        <Pressable onPress={() => setWindowed(false)} style={[styles.chip, !windowed && styles.chipActive]}>
+          <Text style={[styles.chipText, !windowed && styles.chipTextActive]}>All time</Text>
+        </Pressable>
+        <Pressable onPress={() => setWindowed(true)} style={[styles.chip, windowed && styles.chipActive]}>
+          <Text style={[styles.chipText, windowed && styles.chipTextActive]}>Last {days}d</Text>
+        </Pressable>
+        <Text style={styles.filterNote}>
+          {feature
+            ? `${adopted?.users ?? 0} of ${people.length} people have ever used ${
+                SOURCE_LABELS[feature] ?? feature
+              }${windowed ? `, ${adopted?.windowUsers ?? 0} in the last ${days}d` : ''}`
+            : 'The number on each chip is how many people have ever used it.'}
+        </Text>
+      </View>
+
+      <View style={[styles.trow, styles.thead]}>
+        <Text style={[styles.thName, styles.th]}>Person</Text>
+        <Text style={[styles.thBar, styles.th]}>What they use</Text>
+        <Text style={[styles.thNum, styles.th]}>{feature ? SOURCE_LABELS[feature] ?? feature : 'Items'}</Text>
+        <Text style={[styles.thNum, styles.th]}>Uses</Text>
+        <Text style={[styles.thLast, styles.th]}>Last seen</Text>
+      </View>
+
+      {shown.length === 0 && <Text style={styles.emptyNote}>Nobody yet.</Text>}
+
+      {shown.map((p, i) => {
+        const n = feature ? pick(p, feature) : totalOf(p);
+        return (
+          <View key={p.id} style={styles.trow}>
+            <View style={styles.thName}>
+              <Text style={styles.cName} numberOfLines={1}>
+                {p.name}
+              </Text>
+              <Text style={styles.cMeta} numberOfLines={1}>
+                {p.coupleName ? p.coupleName : 'no space'}
+              </Text>
+            </View>
+            <View style={styles.thBar}>
+              <StackStrip counts={windowed ? p.windowCounts : p.counts} keys={sources} />
+              <View style={styles.miniTrack}>
+                <View style={{ width: `${Math.min(100, (n / top) * 100)}%`, height: '100%', backgroundColor: colors.inkFaint }} />
+              </View>
+            </View>
+            <Text style={[styles.thNum, styles.cNum, i === 0 && n > 0 && styles.cNumTop]}>{n}</Text>
+            <Text style={[styles.thNum, styles.cNum]}>
+              {p.featuresUsed > 0 ? `${p.featuresUsed}/${sources.length}` : '·'}
+            </Text>
+            <Text style={[styles.thLast, styles.cLast]}>{ago(p.lastActive)}</Text>
+          </View>
+        );
+      })}
+
+      {idle.length > 0 && (
+        <Pressable onPress={() => setShowIdle((s) => !s)} style={styles.showMore}>
+          <Text style={styles.showMoreText}>
+            {showIdle ? 'Hide' : 'Show'} {idle.length} who have not{' '}
+            {feature ? `used ${SOURCE_LABELS[feature] ?? feature}` : 'made anything'}
+            {windowed ? ` in ${days}d` : ''}
           </Text>
         </Pressable>
       )}
@@ -713,6 +882,29 @@ const styles = StyleSheet.create({
   miniTrack: { height: 2, borderRadius: 1, overflow: 'hidden' },
   showMore: { paddingVertical: sp.sm, alignItems: 'center' },
   showMoreText: { ...text.micro, textTransform: 'none', letterSpacing: 0, color: colors.accent },
+
+  // "Who is using what" controls. Chips reuse the window segment's visual
+  // language (hairline pill, sealed when active) rather than inventing a
+  // second selected-state look for the same page.
+  filterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: sp.xs,
+    marginBottom: sp.sm,
+  },
+  chip: {
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: radius.pill,
+    paddingHorizontal: sp.md,
+    paddingVertical: 5,
+  },
+  chipActive: { backgroundColor: colors.surfaceSealed, borderColor: colors.surfaceSealed },
+  chipText: { ...text.micro, textTransform: 'none', letterSpacing: 0, color: colors.inkMuted },
+  chipTextActive: { color: colors.onSealed, fontWeight: '600' },
+  filterNote: { ...text.micro, textTransform: 'none', letterSpacing: 0, color: colors.inkFaint, flexShrink: 1 },
+  emptyNote: { ...text.caption, color: colors.inkFaint, paddingVertical: sp.md },
 
   statGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: sp.md },
   statCell: { flexGrow: 1, flexBasis: 68, minWidth: 62 },

@@ -6,12 +6,15 @@ import {
   activeSpacesSpark,
   buildActivitySeries,
   buildCoupleRows,
+  buildPersonRows,
   contentMix,
   countActiveSince,
+  featureAdoption,
   flowKpi,
   lastNDays,
   levelKpi,
   NAME_DELIM,
+  unionAllPeople,
   unionAllSources,
   type ContentSource,
 } from '../_lib/admin-aggregate';
@@ -45,18 +48,31 @@ import {
  *  the activity chart, the per-couple totals, the content mix, AND active-space
  *  counting, all at once. */
 const SOURCES: ContentSource[] = [
-  { src: 'messages', table: 'messages' },
-  { src: 'memories', table: 'memories' },
-  { src: 'notes', table: 'love_notes' },
-  { src: 'todos', table: 'todos' },
-  { src: 'prompts', table: 'daily_prompt_answers' },
-  { src: 'comments', table: 'memory_comments' },
-  { src: 'bucket', table: 'bucket_items' },
-  { src: 'wishlist', table: 'wishlist_items' },
-  { src: 'dates', table: 'date_proposals' },
+  // Chat splits in two so VOICE NOTES get their own column everywhere (chart,
+  // mix, per-couple makeup, per-person) without inflating anything: the two
+  // filters are mutually exclusive, so a voice note is counted once, as voice.
+  { src: 'messages', table: 'messages', where: 'audio_data IS NULL', userCol: 'sender_id' },
+  { src: 'voice', table: 'messages', where: 'audio_data IS NOT NULL', userCol: 'sender_id' },
+  { src: 'memories', table: 'memories', userCol: 'author_id' },
+  { src: 'notes', table: 'love_notes', userCol: 'author_id' },
+  { src: 'todos', table: 'todos', userCol: 'author_id' },
+  { src: 'prompts', table: 'daily_prompt_answers', userCol: 'user_id' },
+  { src: 'comments', table: 'memory_comments', userCol: 'author_id' },
+  { src: 'bucket', table: 'bucket_items', userCol: 'author_id' },
+  // added_by, not owner_id: a secret gift plan sits on the PARTNER's list, so
+  // the owner is not the person who used the feature.
+  { src: 'wishlist', table: 'wishlist_items', userCol: 'added_by' },
+  { src: 'dates', table: 'date_proposals', userCol: 'proposer_id' },
 ];
-/** Same list minus anything added after v18, for the pre-migration fallback. */
-const LEGACY_SOURCES: ContentSource[] = SOURCES.filter((s) => s.table !== 'todos');
+/**
+ * Fallback for a deploy running ahead of `npm run migrate`: drops `todos`
+ * (v19) and un-splits chat, since `messages.audio_data` is v23 and a query
+ * naming a column that does not exist yet fails the whole union.
+ */
+const LEGACY_SOURCES: ContentSource[] = [
+  { src: 'messages', table: 'messages', userCol: 'sender_id' },
+  ...SOURCES.filter((s) => s.table !== 'todos' && s.table !== 'messages'),
+];
 
 const SOURCE_KEYS = SOURCES.map((s) => s.src);
 const ALLOWED_WINDOWS = [7, 30, 90];
@@ -96,6 +112,8 @@ export default route(['GET'], async (req, res) => {
 
   const union = unionAllSources(SOURCES);
   const legacyUnion = unionAllSources(LEGACY_SOURCES);
+  const peopleUnion = unionAllPeople(SOURCES);
+  const legacyPeopleUnion = unionAllPeople(LEGACY_SOURCES);
 
   const [
     totals,
@@ -113,6 +131,11 @@ export default route(['GET'], async (req, res) => {
     coupleCountRows,
     lastActiveRows,
     memberRows,
+    peopleRows,
+    personAllRows,
+    personWindowRows,
+    personLastActiveRows,
+    voiceTotal,
     extras,
   ] = await Promise.all([
     // Lifetime totals per source, for the content mix.
@@ -220,6 +243,40 @@ export default route(['GET'], async (req, res) => {
               string_agg(display_name, '${NAME_DELIM}') AS names
        FROM users WHERE couple_id IS NOT NULL GROUP BY couple_id`
     ),
+    // ---- Who is using what -------------------------------------------------
+    // Every signed-up person, including ones who have made nothing: "signed up
+    // and never used anything" is the most actionable row on the screen.
+    q<{ id: string; display_name: string; couple_id: string | null }>(
+      `SELECT id::STRING AS id, display_name, couple_id::STRING AS couple_id FROM users`
+    ),
+    safeRows<{ user_id: string; src: string; n: number }>(
+      'person_counts',
+      `SELECT user_id::STRING AS user_id, src, count(*)::int AS n
+       FROM (${peopleUnion}) t WHERE user_id IS NOT NULL GROUP BY user_id, src`,
+      `SELECT user_id::STRING AS user_id, src, count(*)::int AS n
+       FROM (${legacyPeopleUnion}) t WHERE user_id IS NOT NULL GROUP BY user_id, src`
+    ),
+    safeRows<{ user_id: string; src: string; n: number }>(
+      'person_counts_window',
+      `SELECT user_id::STRING AS user_id, src, count(*)::int AS n
+       FROM (${peopleUnion}) t
+       WHERE user_id IS NOT NULL AND created_at > now() - INTERVAL '${span}'
+       GROUP BY user_id, src`,
+      `SELECT user_id::STRING AS user_id, src, count(*)::int AS n
+       FROM (${legacyPeopleUnion}) t
+       WHERE user_id IS NOT NULL AND created_at > now() - INTERVAL '${span}'
+       GROUP BY user_id, src`
+    ),
+    safeRows<{ user_id: string; last_active: string | null }>(
+      'person_last_active',
+      `SELECT user_id::STRING AS user_id, max(created_at)::STRING AS last_active
+       FROM (${peopleUnion}) t WHERE user_id IS NOT NULL GROUP BY user_id`,
+      `SELECT user_id::STRING AS user_id, max(created_at)::STRING AS last_active
+       FROM (${legacyPeopleUnion}) t WHERE user_id IS NOT NULL GROUP BY user_id`
+    ),
+    // Counted on its own rather than inside the lifetime totals query, so that
+    // query keeps working untouched on a pre-v23 deploy with no audio column.
+    safeCount('voice', `SELECT count(*)::int AS n FROM messages WHERE audio_data IS NOT NULL`),
     Promise.all([
       safeCount('todos', 'SELECT count(*)::int AS n FROM todos'),
       safeCount('todos_done', 'SELECT count(*)::int AS n FROM todos WHERE done = true'),
@@ -249,10 +306,24 @@ export default route(['GET'], async (req, res) => {
   const weekAgo = new Date(now.getTime() - 7 * 86_400_000).toISOString();
   const activeSpark = activeSpacesSpark(dayList, activeDayRows);
 
+  // `totals.messages` is every chat row; the mix wants the two halves apart, so
+  // subtract the voice notes back out. Falls out correctly on a pre-v23 deploy
+  // too, where voiceTotal is 0 and messages stays the whole count.
   const totalsAll = {
     ...(totals ?? {}),
+    messages: Math.max(0, Number(totals?.messages ?? 0) - voiceTotal),
+    voice: voiceTotal,
     todos,
   } as Record<string, number>;
+
+  const people_ = buildPersonRows(
+    peopleRows,
+    personAllRows,
+    personWindowRows,
+    personLastActiveRows,
+    memberRows,
+    SOURCE_KEYS
+  );
 
   res.status(200).json({
     generatedAt: now.toISOString(),
@@ -306,5 +377,11 @@ export default route(['GET'], async (req, res) => {
     signups: dayList.map((day) => ({ day, n: signupsByDay.get(day) ?? 0 })),
     contentMix: contentMix(totalsAll, [...SOURCE_KEYS, 'milestones']),
     couples: buildCoupleRows(coupleRows, coupleCountRows, lastActiveRows, memberRows, SOURCE_KEYS),
+
+    // Who is using what. The couple leaderboard cannot answer this: a space
+    // where one partner does everything looks identical, at couple level, to
+    // one where both are engaged.
+    people: people_,
+    featureAdoption: featureAdoption(people_, SOURCE_KEYS),
   });
 });

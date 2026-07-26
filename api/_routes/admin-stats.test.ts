@@ -9,6 +9,8 @@ import { NAME_DELIM } from '../_lib/admin-aggregate';
  */
 
 const COUPLE = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+const USER_A = '11111111-2222-3333-4444-555555555555';
+const USER_B = '66666666-7777-8888-9999-000000000000';
 
 const h = vi.hoisted(() => ({
   admitted: true,
@@ -52,6 +54,26 @@ vi.mock('../_lib/db', () => ({
     }
     if (text.includes('string_agg')) {
       return [{ couple_id: COUPLE, members: 2, names: `Anisha${NAME_DELIM}Saransh` }];
+    }
+    // Person queries are checked BEFORE the couple ones they'd otherwise
+    // pattern-match: both last-active queries contain `max(created_at)`.
+    if (text.includes('GROUP BY user_id, src')) {
+      return text.includes('INTERVAL')
+        ? [{ user_id: USER_A, src: 'voice', n: 2 }]
+        : [
+            { user_id: USER_A, src: 'voice', n: 9 },
+            { user_id: USER_A, src: 'messages', n: 40 },
+            { user_id: USER_B, src: 'messages', n: 12 },
+          ];
+    }
+    if (text.includes('user_id') && text.includes('max(created_at)')) {
+      return [{ user_id: USER_A, last_active: new Date().toISOString() }];
+    }
+    if (text.includes('FROM users') && text.includes('display_name')) {
+      return [
+        { id: USER_A, display_name: 'Anisha', couple_id: COUPLE },
+        { id: USER_B, display_name: 'Saransh', couple_id: COUPLE },
+      ];
     }
     if (text.includes('max(created_at)')) {
       return [{ couple_id: COUPLE, last_active: new Date().toISOString() }];
@@ -204,5 +226,85 @@ describe('GET /api/admin/stats', () => {
     const coupleListQuery = h.queries.find((t) => t.includes('FROM couples ORDER BY'))!;
     expect(coupleListQuery).not.toContain('SELECT count(*)::int FROM memories m WHERE');
     expect(h.queries.some((t) => t.includes('GROUP BY couple_id, src'))).toBe(true);
+  });
+});
+
+describe('who is using what', () => {
+  beforeEach(() => {
+    h.admitted = true;
+    h.missingTables = [];
+    h.queries.length = 0;
+  });
+
+  it('returns a row per person with per-feature counts, busiest first', async () => {
+    const res = makeRes();
+    await handler(req(), res);
+    expect(res.statusCode).toBe(200);
+    const [first, second] = res.body.people;
+    expect(first.name).toBe('Anisha');
+    expect(first.counts.voice).toBe(9);
+    expect(first.counts.messages).toBe(40);
+    expect(first.total).toBe(49);
+    expect(second.name).toBe('Saransh');
+    expect(second.counts.voice).toBe(0);
+  });
+
+  it('carries a separate windowed count so the window toggle is real', async () => {
+    const res = makeRes();
+    await handler(req(), res);
+    expect(res.body.people[0].windowCounts.voice).toBe(2);
+    expect(res.body.people[0].windowTotal).toBe(2);
+  });
+
+  it('keeps a person who has made nothing, rather than dropping them', async () => {
+    const res = makeRes();
+    await handler(req(), res);
+    const saransh = res.body.people.find((p: any) => p.name === 'Saransh');
+    expect(saransh).toBeDefined();
+    expect(saransh.featuresUsed).toBe(1);
+  });
+
+  it('reports feature adoption as DISTINCT people, not row counts', async () => {
+    const res = makeRes();
+    await handler(req(), res);
+    const voice = res.body.featureAdoption.find((a: any) => a.src === 'voice');
+    // Nine voice notes, but only one person sending them.
+    expect(voice).toMatchObject({ users: 1, total: 9 });
+    const chat = res.body.featureAdoption.find((a: any) => a.src === 'messages');
+    expect(chat).toMatchObject({ users: 2, total: 52 });
+  });
+
+  it('splits voice out of chat instead of double counting it', async () => {
+    const res = makeRes();
+    await handler(req(), res);
+    expect(res.body.sources).toContain('voice');
+    // Lifetime chat total is 326; the 5 voice notes (safeCount's stub) come out
+    // of it rather than being added on top.
+    const mix = Object.fromEntries(res.body.contentMix.map((r: any) => [r.src, r.n]));
+    expect(mix.messages + mix.voice).toBe(326);
+  });
+
+  it('never selects an email, a token, or any content in the person queries', async () => {
+    const res = makeRes();
+    await handler(req(), res);
+    expect(res.statusCode).toBe(200);
+    const personQueries = h.queries.filter((t) => t.includes('user_id') || t.includes('display_name'));
+    expect(personQueries.length).toBeGreaterThan(0);
+    for (const sql of personQueries) {
+      for (const forbidden of ['email', 'password_hash', 'push_token', 'body_ct', 'note_ct', 'title_ct', 'audio_data,']) {
+        expect(sql).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it('degrades to the legacy union when the audio column does not exist yet', async () => {
+    h.missingTables = ['audio_data'];
+    const res = makeRes();
+    await handler(req(), res);
+    expect(res.statusCode).toBe(200);
+    // Chat keeps working un-split; voice simply reads as zero.
+    const mix = Object.fromEntries(res.body.contentMix.map((r: any) => [r.src, r.n]));
+    expect(mix.messages).toBe(326);
+    expect(mix.voice).toBeUndefined();
   });
 });

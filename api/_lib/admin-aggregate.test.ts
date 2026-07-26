@@ -3,13 +3,16 @@ import {
   activeSpacesSpark,
   buildActivitySeries,
   buildCoupleRows,
+  buildPersonRows,
   contentMix,
   countActiveSince,
   deltaPct,
+  featureAdoption,
   flowKpi,
   lastNDays,
   levelKpi,
   NAME_DELIM,
+  unionAllPeople,
   unionAllSources,
 } from './admin-aggregate';
 
@@ -229,5 +232,156 @@ describe('unionAllSources', () => {
     expect(sql).toContain("'messages' AS src FROM messages");
     expect(sql).toContain("'notes' AS src FROM love_notes");
     expect(sql.split('UNION ALL')).toHaveLength(2);
+  });
+});
+
+describe('unionAllSources with a where clause', () => {
+  it('splits one table into two mutually exclusive sources', () => {
+    const sql = unionAllSources([
+      { src: 'messages', table: 'messages', where: 'audio_data IS NULL' },
+      { src: 'voice', table: 'messages', where: 'audio_data IS NOT NULL' },
+    ]);
+    expect(sql).toContain("'messages' AS src FROM messages WHERE audio_data IS NULL");
+    expect(sql).toContain("'voice' AS src FROM messages WHERE audio_data IS NOT NULL");
+  });
+
+  it('omits WHERE entirely for a source that has no filter', () => {
+    expect(unionAllSources([{ src: 'notes', table: 'love_notes' }])).not.toContain('WHERE');
+  });
+});
+
+describe('unionAllPeople', () => {
+  it('projects each table own author column as user_id', () => {
+    const sql = unionAllPeople([
+      { src: 'messages', table: 'messages', userCol: 'sender_id' },
+      { src: 'dates', table: 'date_proposals', userCol: 'proposer_id' },
+    ]);
+    expect(sql).toContain('SELECT sender_id AS user_id');
+    expect(sql).toContain('SELECT proposer_id AS user_id');
+  });
+
+  it('skips a source with no author column rather than attributing it to nobody', () => {
+    const sql = unionAllPeople([
+      { src: 'messages', table: 'messages', userCol: 'sender_id' },
+      { src: 'milestones', table: 'milestones' },
+    ]);
+    expect(sql).toContain('FROM messages');
+    expect(sql).not.toContain('FROM milestones');
+    expect(sql).not.toContain('UNION ALL');
+  });
+
+  it('keeps the where clause when splitting a table per author', () => {
+    const sql = unionAllPeople([
+      { src: 'voice', table: 'messages', where: 'audio_data IS NOT NULL', userCol: 'sender_id' },
+    ]);
+    expect(sql).toContain('FROM messages WHERE audio_data IS NOT NULL');
+  });
+});
+
+const PSOURCES = ['messages', 'voice', 'notes'] as const;
+const PEOPLE = [
+  { id: 'aaaaaaaa-1111', display_name: 'Anisha', couple_id: 'cccccccc-9999' },
+  { id: 'bbbbbbbb-2222', display_name: 'Saransh', couple_id: 'cccccccc-9999' },
+  { id: 'dddddddd-3333', display_name: 'Nobody', couple_id: null },
+];
+const MEMBERS = [{ couple_id: 'cccccccc-9999', members: 2, names: `Anisha${NAME_DELIM}Saransh` }];
+
+describe('buildPersonRows', () => {
+  const rows = buildPersonRows(
+    PEOPLE,
+    [
+      { user_id: 'aaaaaaaa-1111', src: 'messages', n: 40 },
+      { user_id: 'aaaaaaaa-1111', src: 'voice', n: 9 },
+      { user_id: 'bbbbbbbb-2222', src: 'messages', n: 12 },
+    ],
+    [{ user_id: 'aaaaaaaa-1111', src: 'voice', n: 2 }],
+    [{ user_id: 'aaaaaaaa-1111', last_active: '2026-07-25T00:00:00.000Z' }],
+    MEMBERS,
+    PSOURCES
+  );
+
+  it('ranks by lifetime total, busiest first', () => {
+    expect(rows.map((r) => r.name)).toEqual(['Anisha', 'Saransh', 'Nobody']);
+    expect(rows[0].total).toBe(49);
+  });
+
+  it('fills every source with a zero so a table never has holes', () => {
+    expect(rows[1].counts).toEqual({ messages: 12, voice: 0, notes: 0 });
+  });
+
+  it('keeps window counts separate from lifetime counts', () => {
+    expect(rows[0].counts.voice).toBe(9);
+    expect(rows[0].windowCounts.voice).toBe(2);
+    expect(rows[0].windowTotal).toBe(2);
+  });
+
+  it('counts breadth as distinct features ever used', () => {
+    expect(rows[0].featuresUsed).toBe(2);
+    expect(rows[1].featuresUsed).toBe(1);
+    expect(rows[2].featuresUsed).toBe(0);
+  });
+
+  it('keeps a person who has made nothing, and one with no space', () => {
+    const nobody = rows.find((r) => r.name === 'Nobody')!;
+    expect(nobody.total).toBe(0);
+    expect(nobody.coupleId).toBeNull();
+    expect(nobody.coupleName).toBe('');
+  });
+
+  it('resolves the space name from the delimited member list', () => {
+    expect(rows[0].coupleName).toBe('Anisha + Saransh');
+  });
+
+  it('truncates ids the same way the couple leaderboard does', () => {
+    expect(rows[0].id).toBe('aaaaaaaa');
+    expect(rows[0].coupleId).toBe('cccccccc');
+  });
+
+  it('ignores a count row for a user that no longer exists', () => {
+    const out = buildPersonRows(
+      PEOPLE,
+      [{ user_id: 'deleted-user', src: 'messages', n: 99 }],
+      [],
+      [],
+      MEMBERS,
+      PSOURCES
+    );
+    expect(out.every((r) => r.total === 0)).toBe(true);
+  });
+});
+
+describe('featureAdoption', () => {
+  const rows = buildPersonRows(
+    PEOPLE,
+    [
+      { user_id: 'aaaaaaaa-1111', src: 'messages', n: 40 },
+      { user_id: 'aaaaaaaa-1111', src: 'voice', n: 9 },
+      { user_id: 'bbbbbbbb-2222', src: 'messages', n: 12 },
+    ],
+    [{ user_id: 'aaaaaaaa-1111', src: 'voice', n: 2 }],
+    [],
+    MEMBERS,
+    PSOURCES
+  );
+
+  it('counts DISTINCT people, so one power user does not read as adoption', () => {
+    const byS = Object.fromEntries(featureAdoption(rows, PSOURCES).map((a) => [a.src, a]));
+    expect(byS.voice).toMatchObject({ users: 1, total: 9 });
+    expect(byS.messages).toMatchObject({ users: 2, total: 52 });
+  });
+
+  it('reports window users apart from all-time users', () => {
+    const voice = featureAdoption(rows, PSOURCES).find((a) => a.src === 'voice')!;
+    expect(voice.users).toBe(1);
+    expect(voice.windowUsers).toBe(1);
+  });
+
+  it('keeps a never-used feature in the list at zero, so it is visibly dead', () => {
+    const notes = featureAdoption(rows, PSOURCES).find((a) => a.src === 'notes')!;
+    expect(notes).toMatchObject({ src: 'notes', users: 0, total: 0 });
+  });
+
+  it('ranks by adoption, widest first', () => {
+    expect(featureAdoption(rows, PSOURCES).map((a) => a.src)).toEqual(['messages', 'voice', 'notes']);
   });
 });
