@@ -484,3 +484,54 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_waveform JSONB;
 -- smaller user id, the same ordered-pair tie-break agreementStatsFor uses in
 -- game.ts) so a match is never double-counted by both clients firing at once.
 ALTER TABLE couples ADD COLUMN IF NOT EXISTS thumb_kiss_count INT NOT NULL DEFAULT 0;
+
+-- ---------------------------------------------------------------------------
+-- v25: Picture Night, the shared movie riddle.
+--
+-- TWO new tables, deliberately kept OFF daily_game_answers: This-or-That's row
+-- is one per person per day carrying two letters, and overloading it with an
+-- unrelated game's columns would tangle two schedules (that table's per-day
+-- UNIQUE is what forced round two onto extra columns in v18; this game must not
+-- inherit that constraint).
+--
+-- `movies` is reference data, NOT couple content: it is the same public film
+-- facts for everybody, so it carries no couple_id, is never encrypted, and is
+-- loaded by scripts/load-movies.ts from the IMDB CSV rather than typed by hand.
+-- `eligible` marks the films allowed to BE the mystery; every row stays valid
+-- as a GUESS regardless, so autocomplete always covers the whole catalogue.
+CREATE TABLE IF NOT EXISTS movies (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  imdb_id STRING NOT NULL UNIQUE,
+  title STRING NOT NULL,
+  year INT NOT NULL,
+  -- JSONB arrays rather than STRING[]: comparison happens in JS (see
+  -- api/_lib/picture-night.ts) and this matches messages.audio_waveform's
+  -- existing precedent for a small list on a row.
+  genres JSONB NOT NULL,
+  director JSONB NOT NULL,
+  cast_members JSONB NOT NULL,
+  eligible BOOL NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS movies_eligible ON movies (eligible, imdb_id);
+-- Autocomplete searches by title prefix; year disambiguates the 37 duplicate
+-- titles in the source data (Don appears three times, Devdas twice).
+CREATE INDEX IF NOT EXISTS movies_by_title ON movies (title);
+
+-- One row per GUESS, from either partner, on one couple's shared board.
+-- Everything the board shows (solved, attempts left, hints unlocked) is derived
+-- from these rows on every read by boardStateFor(), never stored: the same
+-- reasoning that rewrote the streak after an incremental counter drifted.
+-- No couple-authored free text lands here, only a movie id, so nothing to encrypt.
+CREATE TABLE IF NOT EXISTS picture_night_guesses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  couple_id UUID NOT NULL,
+  user_id UUID NOT NULL,
+  puzzle_date DATE NOT NULL,
+  round INT NOT NULL,
+  movie_id UUID NOT NULL,
+  correct BOOL NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS picture_night_board
+  ON picture_night_guesses (couple_id, puzzle_date, round, created_at);

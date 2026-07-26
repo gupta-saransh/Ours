@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Image } from 'expo-image';
-import { CalendarHeart, ChevronDown, ChevronRight, Flame, Lock } from 'lucide-react-native';
+import { CalendarHeart, ChevronDown, ChevronRight, Clapperboard, Flame, Lock } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -138,6 +138,11 @@ const RECENT_LABEL: Record<string, string> = {
 };
 
 interface HomeData {
+  pictureNight: {
+    rounds: { round: number; solved: boolean; guesses: number; started: boolean }[];
+    solvedToday: number;
+    allDone: boolean;
+  } | null;
   couple: { id: string; invite_code: string; created_at: string } | null;
   partner: { id: string; display_name: string } | null;
   daysBasis: string | null;
@@ -462,6 +467,16 @@ export default function Home() {
                 onPlayed={(next) => setData((d) => (d ? { ...d, game: next } : d))}
               />
             </Section>
+          </FadeIn>
+        )}
+
+        {/* Picture Night. Sits BELOW This-or-That and collapses to one line once
+            there is nothing left to do tonight, so it only takes real space on
+            Home while it is actually asking for something. Two a day means it
+            cannot use the reflection card's "only on its day" trick. */}
+        {data.pictureNight && data.partner && (
+          <FadeIn delay={100}>
+            <PictureNightCard state={data.pictureNight} />
           </FadeIn>
         )}
 
@@ -837,6 +852,51 @@ function AgreementMeter({ agreement }: { agreement: { agreed: number; total: num
  * their picks. Two taps: pick your side, then guess theirs. Nothing shows until
  * both of you have played.
  */
+/**
+ * Picture Night on Home.
+ *
+ * Two states by design. While a board is still live it is a sealed card, the
+ * same grammar This-or-That's unplayed card uses. Once both of tonight's
+ * mysteries are settled it collapses to a single quiet line: Home already
+ * carries This-or-That and, on Sundays, the reflection card, and a third full
+ * card competing for attention with nothing left to ask for is just clutter.
+ */
+function PictureNightCard({ state }: { state: NonNullable<HomeData['pictureNight']> }) {
+  const router = useRouter();
+  const open = state.rounds.filter((r) => !r.solved && r.guesses < 7);
+
+  if (state.allDone) {
+    return (
+      <Pressable onPress={() => router.push('/picture-night')} style={styles.pnDone}>
+        <Clapperboard size={15} color={colors.accent} strokeWidth={1.75} />
+        <Text style={styles.pnDoneText}>
+          {state.solvedToday === 2
+            ? 'Both mysteries solved tonight ♥'
+            : state.solvedToday === 1
+              ? 'One mystery solved tonight ♥'
+              : "Tonight's mysteries got away"}
+        </Text>
+      </Pressable>
+    );
+  }
+
+  const started = state.rounds.some((r) => r.started);
+  return (
+    <Section label="Picture Night">
+      <PressableCard sealed onPress={() => router.push('/picture-night')}>
+        <Text style={styles.pnTitle}>
+          {open.length === 2 ? 'Two mystery movies tonight' : 'One mystery still open'}
+        </Text>
+        <Text style={styles.pnSub}>
+          {started
+            ? `Seven guesses between you. ${open.map((r) => `#${r.round} has ${7 - r.guesses} left`).join(', ')}.`
+            : 'Seven guesses, shared between the two of you. Work it out together.'}
+        </Text>
+      </PressableCard>
+    </Section>
+  );
+}
+
 function GameCard({
   state,
   partnerName,
@@ -1143,6 +1203,18 @@ function ReflectionCard({
 }
 
 const styles = StyleSheet.create({
+  // Picture Night's Home card. The collapsed state is a single row, not a
+  // Card, so a settled night takes a line instead of a block.
+  pnTitle: { ...text.subtitle, color: colors.onSealed, marginBottom: sp.xs },
+  pnSub: { ...text.caption, color: colors.onSealed, opacity: 0.8 },
+  pnDone: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: sp.sm,
+    paddingVertical: sp.sm,
+  },
+  pnDoneText: { ...text.caption, color: colors.inkMuted },
+
   body: {
     padding: sp.xl,
     paddingBottom: sp.huge,

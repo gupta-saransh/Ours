@@ -40,6 +40,11 @@ const POINTS: Record<string, number> = {
   milestones: 2,
   guesses: 2,
   todos_done: 2,
+  // A solved Picture Night board. Weighted like a prompt answer rather than a
+  // memory: it is a real shared accomplishment, but at up to two a day it would
+  // outrun everything else at x5, and this system is easier to under-weight
+  // than to walk back.
+  riddles_solved: 3,
   comments: 1,
 };
 
@@ -83,7 +88,7 @@ export default route(['GET'], async (req, res) => {
 
   const isSunday = new Date().getUTCDay() === 0;
 
-  const [couple, partner, anniversary, milestones, yearAgo, monthAgo, older, bucket, pinnedNote, seen, prompt, upcomingDate, reflection, streak, storyCounts, guessRow, recentRows, game, todoWeek, todoWins] =
+  const [couple, partner, anniversary, milestones, yearAgo, monthAgo, older, bucket, pinnedNote, seen, prompt, upcomingDate, reflection, streak, storyCounts, guessRow, recentRows, game, riddleRounds, riddleSolved, todoWeek, todoWins] =
     await Promise.all([
       one('SELECT id, invite_code, created_at FROM couples WHERE id = $1', [cid]),
       one('SELECT id, display_name FROM users WHERE couple_id = $1 AND id != $2', [cid, user.id]),
@@ -178,6 +183,27 @@ export default route(['GET'], async (req, res) => {
         [cid]
       ).catch(() => [] as { kind: string; created_at: string }[]),
       gameStateFor(cid, user.id),
+      // Picture Night: today's two boards, as counts only. Home never needs the
+      // mystery film itself, so it never asks for it and there is nothing here
+      // that could leak the answer onto the home screen.
+      // Catch-guarded: the tables are v25 and a deploy landing before the
+      // migration must degrade to "no card", not a 500.
+      q<{ round: number; solved: boolean; n: number }>(
+        `SELECT round, bool_or(correct) AS solved, count(*)::int AS n
+         FROM picture_night_guesses
+         WHERE couple_id = $1 AND puzzle_date = now()::DATE
+         GROUP BY round`,
+        [cid]
+      ).catch(() => null),
+      // All-time solved boards, for the path. One row per (day, round) that was
+      // ever cracked, not one per guess.
+      one<{ n: number }>(
+        `SELECT count(*)::int AS n FROM (
+           SELECT puzzle_date, round FROM picture_night_guesses
+           WHERE couple_id = $1 AND correct = true GROUP BY puzzle_date, round
+         ) t`,
+        [cid]
+      ).catch(() => null),
       // The week's to-do standing, for the Home summary card. Monday-based like
       // the weekly reflection. Catch-guarded: the table is v19 and a deploy that
       // lands before the migration must degrade to "no card", not a 500.
@@ -328,6 +354,28 @@ export default route(['GET'], async (req, res) => {
     streak,
     nudged: (unseenRow?.nudges ?? 0) > 0,
     game,
+    // Two boards a night. `null` while the migration has not run, which is what
+    // hides the card rather than showing a broken one.
+    pictureNight: riddleRounds
+      ? (() => {
+          const byRound = new Map(riddleRounds.map((r) => [Number(r.round), r]));
+          const rounds = [1, 2].map((round) => {
+            const row = byRound.get(round);
+            return {
+              round,
+              solved: !!row?.solved,
+              guesses: Number(row?.n ?? 0),
+              started: !!row,
+            };
+          });
+          return {
+            rounds,
+            solvedToday: rounds.filter((r) => r.solved).length,
+            // Nothing left to do tonight: both boards either cracked or spent.
+            allDone: rounds.every((r) => r.solved || r.guesses >= 7),
+          };
+        })()
+      : null,
     story: (() => {
       const counts = {
         ...(storyCounts ?? {
@@ -335,6 +383,7 @@ export default route(['GET'], async (req, res) => {
         }),
         guesses: guessRow?.n ?? 0,
         todos_done: todoWeek?.all_done ?? 0,
+        riddles_solved: riddleSolved?.n ?? 0,
       };
       // Each recent moment carries the points it earned, so the card can show
       // "+5 · A memory · Jul 12" without the client re-deriving the values.

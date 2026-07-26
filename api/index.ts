@@ -44,6 +44,7 @@ import referral from './_routes/referral';
 import todos from './_routes/todos';
 import todoItem from './_routes/todo-item';
 import thumbKiss from './_routes/thumb-kiss';
+import pictureNight from './_routes/picture-night';
 
 type Handler = (req: VercelRequest, res: VercelResponse) => Promise<void>;
 
@@ -106,6 +107,7 @@ const routes: Partial<Record<string, Handler>> = {
   todos,
   'todos/:id': todoItem,
   'thumb-kiss': thumbKiss,
+  'picture-night': pictureNight,
 };
 
 function pathSegments(req: VercelRequest): string[] {
