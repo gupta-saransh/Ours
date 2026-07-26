@@ -20,6 +20,15 @@ export interface WhatsNewEntry {
 // Newest first. Add an entry here whenever something user-facing ships.
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: '2026-07-26-explore',
+    title: 'A tidier home',
+    bullets: [
+      'To-dos, Dates and Wishes now live together under Plans, as three tabs at the top.',
+      'The new Explore tab gathers everything else: Picture Night, your prompt, your streak, recaps and milestones.',
+      'Picture Night is two mystery movies a night, guessed together with seven shared tries.',
+    ],
+  },
+  {
     id: '2026-07-26-picture-night',
     title: 'Picture Night',
     bullets: [

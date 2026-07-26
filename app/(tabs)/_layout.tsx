@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { Platform, useWindowDimensions, View } from 'react-native';
 import { Redirect, Tabs } from 'expo-router';
-import { CalendarHeart, CheckSquare, Gift, Home, Image as ImageIcon } from 'lucide-react-native';
+import { CheckSquare, Compass, Home, Image as ImageIcon } from 'lucide-react-native';
 import { useAuth } from '@/lib/auth';
 import { NotificationsProvider } from '@/lib/notifications';
 import { tapHaptic } from '@/lib/haptics';
@@ -90,9 +90,14 @@ export default function TabsLayout() {
         >
           <Tabs.Screen name="index" options={{ title: 'Home', headerShown: false, tabBarIcon: icon(Home) }} />
           <Tabs.Screen name="timeline" options={{ title: 'Timeline', tabBarIcon: icon(ImageIcon) }} />
-          <Tabs.Screen name="todos" options={{ title: 'To-dos', tabBarIcon: icon(CheckSquare) }} />
-          <Tabs.Screen name="dates" options={{ title: 'Dates', tabBarIcon: icon(CalendarHeart) }} />
-          <Tabs.Screen name="wishlist" options={{ title: 'Wishes', tabBarIcon: icon(Gift) }} />
+          {/* Plans holds To-dos, Dates and Wishes as pills. Those three keep
+              their own routes below (hidden from the bar) so that a stored
+              notification's deep link still lands on a real screen. */}
+          <Tabs.Screen name="plans" options={{ title: 'Plans', tabBarIcon: icon(CheckSquare) }} />
+          <Tabs.Screen name="explore" options={{ title: 'Explore', tabBarIcon: icon(Compass) }} />
+          <Tabs.Screen name="todos" options={{ title: 'To-dos', href: null }} />
+          <Tabs.Screen name="dates" options={{ title: 'Dates', href: null }} />
+          <Tabs.Screen name="wishlist" options={{ title: 'Wishes', href: null }} />
           <Tabs.Screen name="memories" options={{ title: 'Memories', href: null }} />
           <Tabs.Screen name="notes" options={{ title: 'Notes', href: null }} />
           <Tabs.Screen name="milestones" options={{ title: 'Milestones', href: null }} />

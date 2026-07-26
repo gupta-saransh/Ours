@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Image } from 'expo-image';
-import { CalendarHeart, ChevronDown, ChevronRight, Clapperboard, Flame, Lock } from 'lucide-react-native';
+import { ChevronDown, Clapperboard, Flame, Lock } from 'lucide-react-native';
 import * as Clipboard from 'expo-clipboard';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -607,22 +607,11 @@ export default function Home() {
           </FadeIn>
         )}
 
-        {/* A persistent way into saved recaps. The full card above only appears
-            on Sundays, so on every other day this is the only door to them. */}
-        {!(data.isSunday && data.reflection) && (
-          <FadeIn delay={120}>
-            <Section label="Looking back">
-              <PressableCard onPress={() => router.push('/reflections')} style={styles.recapRow}>
-                <CalendarHeart size={20} color={colors.accent} strokeWidth={1.75} />
-                <View style={{ flex: 1 }}>
-                  <Text style={text.body}>Your weekly recaps</Text>
-                  <Text style={text.caption}>Look back on the weeks you have kept.</Text>
-                </View>
-                <ChevronRight size={18} color={colors.inkFaint} strokeWidth={1.75} />
-              </PressableCard>
-            </Section>
-          </FadeIn>
-        )}
+        {/* The "Your weekly recaps" row that used to sit here is gone. It only
+            ever existed because saved recaps had no other way back in once the
+            Sunday card scrolled past; the Explore tab now lists them properly,
+            so keeping a permanent Home row for them is the clutter it was
+            invented to avoid. The Sunday reflection card itself is untouched. */}
 
         {data.upcomingDate && (
           <FadeIn delay={120}>
@@ -1568,7 +1557,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
     marginBottom: sp.base,
   },
-  recapRow: { flexDirection: 'row', alignItems: 'center', gap: sp.md },
   reflectionGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',

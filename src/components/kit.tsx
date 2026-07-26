@@ -73,11 +73,22 @@ export function Screen({
   edges = ['top'],
   keyboard = false,
   style,
+  embedded = false,
 }: {
   children: React.ReactNode;
   edges?: ('top' | 'bottom')[];
   keyboard?: boolean;
   style?: StyleProp<ViewStyle>;
+  /**
+   * Render as a plain View instead of a SafeAreaView.
+   *
+   * For a screen shown INSIDE another screen: the Plans tab renders To-dos,
+   * Dates and Wishes under its own pill row, and each of those still declares
+   * its own `Screen` when visited directly (a notification deep-link to
+   * /todos must keep working). Nesting two SafeAreaViews would apply the top
+   * inset twice and push the content down by a notch's worth of padding.
+   */
+  embedded?: boolean;
 }) {
   const inner = keyboard ? (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -86,6 +97,7 @@ export function Screen({
   ) : (
     children
   );
+  if (embedded) return <View style={[styles.screen, style]}>{inner}</View>;
   return (
     <SafeAreaView edges={edges} style={[styles.screen, style]}>
       {inner}

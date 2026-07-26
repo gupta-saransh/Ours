@@ -85,7 +85,12 @@ function whenLine(p: Proposal): string {
     .join(' · ');
 }
 
-export default function Dates() {
+/**
+ * Also rendered INSIDE the Plans tab, under its pill row, which is why it takes
+ * `embedded`. Visiting this route directly still works (a stored notification
+ * deep-links here), and then it draws its own Screen as before.
+ */
+export default function Dates({ embedded = false }: { embedded?: boolean } = {}) {
   const { user, partner } = useAuth();
   const [proposals, setProposals] = useState<Proposal[] | null>(null);
   const [ideas, setIdeas] = useState<Idea[]>([]);
@@ -170,14 +175,14 @@ export default function Dates() {
 
   if (failed && !proposals) {
     return (
-      <Screen>
+      <Screen embedded={embedded}>
         <ErrorState onRetry={() => load().catch(() => setFailed(true))} />
       </Screen>
     );
   }
   if (!proposals) {
     return (
-      <Screen>
+      <Screen embedded={embedded}>
         <View style={styles.body}>
           <Skeleton height={40} style={{ marginBottom: sp.lg }} />
           <Skeleton height={72} style={{ marginBottom: sp.lg }} />
@@ -214,7 +219,7 @@ export default function Dates() {
   ];
 
   return (
-    <Screen>
+    <Screen embedded={embedded}>
       <ScrollView
         contentContainerStyle={styles.body}
         refreshControl={

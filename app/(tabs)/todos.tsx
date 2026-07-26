@@ -63,7 +63,12 @@ function sortTodos(items: Todo[]): Todo[] {
 
 type Assignee = 'both' | 'me' | 'partner';
 
-export default function Todos() {
+/**
+ * Also rendered INSIDE the Plans tab, under its pill row, which is why it takes
+ * `embedded`. Visiting this route directly still works (a stored notification
+ * deep-links here), and then it draws its own Screen as before.
+ */
+export default function Todos({ embedded = false }: { embedded?: boolean } = {}) {
   const { user, partner } = useAuth();
   const toast = useToast();
   const [date, setDate] = useState(todayUTC());
@@ -183,7 +188,7 @@ export default function Todos() {
 
   if (failed && !items) {
     return (
-      <Screen>
+      <Screen embedded={embedded}>
         <ErrorState onRetry={() => load(date).catch(() => setFailed(true))} />
       </Screen>
     );
@@ -192,7 +197,7 @@ export default function Todos() {
   const label = (id: string | null) => (id === null ? 'both' : id === user?.id ? 'you' : partner?.display_name ?? 'them');
 
   return (
-    <Screen>
+    <Screen embedded={embedded}>
       <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         <View style={styles.dayNav}>
           <Pressable onPress={() => goto(addDays(date, -1))} hitSlop={10} style={styles.navArrow}>

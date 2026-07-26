@@ -4,12 +4,13 @@ import { usePathname, useRouter } from 'expo-router';
 import { BellButton, NudgeButton, SettingsButton, ThumbKissButton } from './HeaderActions';
 import { colors, font, sp, text } from '@/theme';
 
+// Mirrors the bottom tab bar exactly: To-dos, Dates and Wishes are pills
+// inside Plans now, not destinations of their own.
 const LINKS = [
   { href: '/', label: 'Home' },
   { href: '/timeline', label: 'Timeline' },
-  { href: '/todos', label: 'To-dos' },
-  { href: '/dates', label: 'Dates' },
-  { href: '/wishlist', label: 'Wishes' },
+  { href: '/plans', label: 'Plans' },
+  { href: '/explore', label: 'Explore' },
 ] as const;
 
 /** Top navigation bar, shown on wide (web) layouts instead of bottom tabs. */

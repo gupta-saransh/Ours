@@ -44,16 +44,23 @@ interface Action {
 // Bottom-up: index 0 sits closest to the FAB. There is ONE Timeline action:
 // the composer it opens takes words, a photo, or both, so the old Note/Memory
 // split (and its `kind` param) is gone. Five actions, not six.
+// To-dos, Dates and Wishes now live as pills inside the Plans tab, so those
+// three actions deep-link to /plans WITH the pill they want rather than to the
+// standalone routes. Landing on the right list with its composer open is the
+// whole point of these actions; sending someone to a hidden route would work
+// but would drop them outside the tab they were just in.
 const ACTIONS: Action[] = [
   { key: 'milestone', label: 'Add a milestone', Icon: Star, path: '/milestones' },
-  { key: 'date', label: 'Propose a date', Icon: CalendarHeart, path: '/dates' },
-  { key: 'wish', label: 'Make a wish', Icon: Gift, path: '/wishlist' },
-  { key: 'todo', label: 'Add a to-do', Icon: CheckSquare, path: '/todos' },
+  { key: 'date', label: 'Propose a date', Icon: CalendarHeart, path: '/plans', params: { pill: 'dates' } },
+  { key: 'wish', label: 'Make a wish', Icon: Gift, path: '/plans', params: { pill: 'wishes' } },
+  { key: 'todo', label: 'Add a to-do', Icon: CheckSquare, path: '/plans', params: { pill: 'todos' } },
   { key: 'memory', label: 'Share a moment', Icon: ImageIcon, path: '/timeline' },
 ];
 
 // Routes that show the FAB. Hidden elsewhere (Settings, Notifications, etc.).
-const VISIBLE_ON = new Set(['/', '/timeline', '/todos', '/dates', '/wishlist', '/milestones']);
+// Explore is deliberately absent: it is a list of places to go, and nothing on
+// it is something you would add to from there.
+const VISIBLE_ON = new Set(['/', '/timeline', '/plans', '/milestones']);
 
 const FAB_SIZE = 56;
 const FAB_RIGHT = sp.xl; // gap from the screen's right edge

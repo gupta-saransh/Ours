@@ -85,7 +85,12 @@ const SKY_DUST = [
  *  - Gift wishes: each partner's list, tag-styled. A plan added secretly to
  *    the partner's list carries a small wax mark only you can see.
  */
-export default function Wishes() {
+/**
+ * Also rendered INSIDE the Plans tab, under its pill row, which is why it takes
+ * `embedded`. Visiting this route directly still works (a stored notification
+ * deep-links here), and then it draws its own Screen as before.
+ */
+export default function Wishes({ embedded = false }: { embedded?: boolean } = {}) {
   const { user, partner } = useAuth();
   const router = useRouter();
   const { width } = useWindowDimensions();
@@ -226,14 +231,14 @@ export default function Wishes() {
 
   if (failed && (!wishes || !gifts)) {
     return (
-      <Screen>
+      <Screen embedded={embedded}>
         <ErrorState onRetry={() => load().catch(() => setFailed(true))} />
       </Screen>
     );
   }
   if (!wishes || !gifts) {
     return (
-      <Screen>
+      <Screen embedded={embedded}>
         <View style={styles.body}>
           <Skeleton height={220} style={{ marginBottom: sp.lg }} />
           <Skeleton height={64} style={{ marginBottom: sp.lg }} />
@@ -475,7 +480,7 @@ export default function Wishes() {
   );
 
   return (
-    <Screen>
+    <Screen embedded={embedded}>
       <ScrollView
         contentContainerStyle={[styles.body, wide && styles.bodyWide]}
         keyboardShouldPersistTaps="handled"
