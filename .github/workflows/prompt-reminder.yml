@@ -4,11 +4,11 @@ name: Daily prompt reminder
 # prompt yet gets a Web Push pointing at it. Same setup as daily-reminder.yml
 # (repo secrets APP_URL + CRON_SECRET, matching CRON_SECRET in Vercel).
 #
-# GitHub cron is UTC. 04:00 UTC = 9:30 AM IST. Adjust to your own morning.
+# GitHub cron is UTC. 01:30 UTC = 7:00 AM IST. Adjust to your own morning.
 
 on:
   schedule:
-    - cron: '0 3 * * *'
+    - cron: '30 1 * * *'
   workflow_dispatch: {} # lets you run it by hand from the Actions tab to test
 
 jobs:

@@ -10,15 +10,15 @@ name: This or That reminder
 # + CRON_SECRET, matching CRON_SECRET in Vercel).
 #
 # GitHub cron is UTC.
-#   09:00 UTC = 2:30 PM IST  (afternoon)
-#   15:00 UTC = 8:30 PM IST  (evening, ahead of the 9:30 PM daily reminder)
+#   07:30 UTC = 1:00 PM IST  (afternoon)
+#   13:30 UTC = 7:00 PM IST  (evening, same time as the daily reminder)
 # The day's second question opens a few hours after the first is settled, so
 # these two runs naturally cover one round each.
 
 on:
   schedule:
-    - cron: '0 9 * * *'
-    - cron: '0 15 * * *'
+    - cron: '30 7 * * *'
+    - cron: '30 13 * * *'
   workflow_dispatch: {} # lets you run it by hand from the Actions tab to test
 
 jobs:
