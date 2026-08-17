@@ -215,16 +215,24 @@ describe('shredding', () => {
 });
 
 describe('sending', () => {
-  it('stamps the couple timer onto the message and stores a key for it', async () => {
+  it('records the timer it was sent under but does NOT start counting yet', async () => {
     h.ttl = 60;
     const res = makeRes();
     await handler(req({ method: 'POST', body: { body: 'hello' } }), res);
     expect(res.statusCode).toBe(201);
     const insert = h.calls.find((c) => c.text.startsWith('INSERT INTO messages'))!;
-    expect(insert.params).toContain(60);
+    expect(insert.params).toContain(60); // the deal it was sent under
     expect(h.calls.some((c) => c.text.includes('INSERT INTO secret_message_keys'))).toBe(true);
-    // created_at + 60s
-    expect(res.body.message.expires_at).toBe('2026-08-17T12:01:00.000Z');
+    // A message sent while your person is asleep must still be there when they
+    // wake up, so the clock waits for their read.
+    expect(res.body.message.expires_at).toBeNull();
+    expect(res.body.message.timer_started_at).toBeNull();
+  });
+
+  it('does not start its own clock by marking the sender as having seen it', async () => {
+    const res = makeRes();
+    await handler(req({ method: 'POST', body: { body: 'hello' } }), res);
+    expect(h.calls.some((c) => c.text.includes('SET timer_started_at'))).toBe(false);
   });
 
   it('leaves no expiry when the timer is off', async () => {
@@ -301,9 +309,37 @@ describe('deleting', () => {
   });
 });
 
+describe('the timer starts when the message is read', () => {
+  it('starts the partner\'s messages on /seen, and only theirs', async () => {
+    const res = makeRes();
+    await handler(req({ method: 'POST', url: '/api/secret-chat/seen' }), res);
+    const start = h.calls.find((c) => c.text.includes('SET timer_started_at'))!;
+    expect(start.text).toContain('sender_id != $2'); // never your own
+    expect(start.text).toContain('timer_started_at IS NULL'); // only once
+    expect(start.text).toContain('kept_by IS NULL'); // never a kept message
+    expect(start.text).toContain('ttl_seconds > 0'); // never when the timer is off
+  });
+
+  it('tells the sender the new deadlines so their countdown starts live', async () => {
+    const res = makeRes();
+    await handler(req({ method: 'POST', url: '/api/secret-chat/seen' }), res);
+    const seen = h.publishes.find((p) => p.event === 'secret.chat.seen')!;
+    expect(seen.data).toHaveProperty('started');
+    expect(Array.isArray(seen.data.started)).toBe(true);
+  });
+});
+
 describe('keep and un-keep', () => {
+  const read = {
+    sender_id: 'user-A',
+    created_at: '2026-08-17T11:00:00.000Z',
+    timer_started_at: '2026-08-17T12:00:00.000Z',
+    ttl_seconds: 60,
+    wrapped_key: Buffer.from('w'),
+  };
+
   it('keeping clears the expiry', async () => {
-    h.single = { sender_id: 'user-A', created_at: '2026-08-17T12:00:00.000Z', ttl_seconds: 60, wrapped_key: Buffer.from('w') };
+    h.single = read;
     const res = makeRes();
     await handler(
       req({ method: 'POST', url: '/api/secret-chat/m1', query: { id: 'm1' }, body: { action: 'keep' } }),
@@ -312,16 +348,26 @@ describe('keep and un-keep', () => {
     expect(res.body).toMatchObject({ kept_by: 'user-A', expires_at: null });
   });
 
-  it('un-keeping restores the ORIGINAL deadline, not a fresh window', async () => {
-    h.single = { sender_id: 'user-A', created_at: '2026-08-17T12:00:00.000Z', ttl_seconds: 60, wrapped_key: Buffer.from('w') };
+  it('un-keeping restores the deadline measured from the READ, not from sending', async () => {
+    h.single = read; // sent 11:00, read 12:00, 60s timer
     const res = makeRes();
     await handler(
       req({ method: 'POST', url: '/api/secret-chat/m1', query: { id: 'm1' }, body: { action: 'unkeep' } }),
       res
     );
-    // 12:00 + 60s, long past by the time anyone un-keeps: it goes at once.
+    // read + 60s, NOT created + 60s (which would be 11:01).
     expect(res.body.expires_at).toBe('2026-08-17T12:01:00.000Z');
     expect(res.body.kept_by).toBeNull();
+  });
+
+  it('un-keeping something never read returns it to waiting, not to a fresh window', async () => {
+    h.single = { ...read, timer_started_at: null };
+    const res = makeRes();
+    await handler(
+      req({ method: 'POST', url: '/api/secret-chat/m1', query: { id: 'm1' }, body: { action: 'unkeep' } }),
+      res
+    );
+    expect(res.body.expires_at).toBeNull();
   });
 });
 

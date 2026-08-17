@@ -22,9 +22,11 @@ import { log } from '../_lib/log';
  * RESET but never revealed. (Showing someone their existing code would require
  * storing it reversibly, which is both weaker and more work than a reset form.)
  *
- * Setting a code for the FIRST time still requires the account password. That
- * is not belt-and-braces: without it, somebody holding an unlocked phone could
- * set a code and lock the actual owner out of their own secret thread.
+ * PASSWORD RULE: choosing your FIRST code needs nothing but your session, so
+ * starting a secret chat is two taps. CHANGING an existing one requires the
+ * account password, which is the part that matters: it stops someone who has
+ * picked up your unlocked phone from quietly swapping the code and locking you
+ * out of your own thread, and it is the same proof the Settings reset uses.
  */
 
 const LOCKED_MESSAGE = 'Too many tries. You can reset your code in Settings, under Privacy.';
@@ -102,15 +104,20 @@ export default route(['GET', 'POST'], async (req, res) => {
     return;
   }
 
-  // ---- Set or reset the code (account password required either way) ----
-  const password = requireString(req.body?.password, 'Password', 200);
+  // ---- Set or reset the code ----
   const code = typeof req.body?.code === 'string' ? req.body.code : '';
   if (!isValidCode(code)) throw new HttpError(400, 'Your code needs to be 4 digits');
 
   const row = await loadCodeRow(user.id);
-  if (!verifyPassword(password, row.password_hash)) {
-    log('warn', 'secret.code_set_bad_password', { user_id: user.id });
-    throw new HttpError(400, 'That password is not right');
+  // First code: your session is proof enough, so there is nothing to type but
+  // the four digits. REPLACING one needs the account password, so nobody who
+  // picks up your unlocked phone can change the code out from under you.
+  if (row.secret_code_hash) {
+    const password = requireString(req.body?.password, 'Password', 200);
+    if (!verifyPassword(password, row.password_hash)) {
+      log('warn', 'secret.code_set_bad_password', { user_id: user.id });
+      throw new HttpError(400, 'That password is not right');
+    }
   }
 
   // Setting a code also clears any lockout: proving the account password is a

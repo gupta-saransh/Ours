@@ -61,17 +61,34 @@ export function isExpired(expiresAt: Date | string | null | undefined, now: Date
 }
 
 /**
- * Un-keeping restores the message's ORIGINAL deadline (created_at + the ttl it
- * was sent under), which by then is usually already past, so the message goes
- * immediately. Deliberately not "now + the current timer": that would let
- * keep-then-unkeep be used to EXTEND a message's life, which is the opposite of
- * what the button means.
+ * Un-keeping restores the message's ORIGINAL deadline, measured from when the
+ * timer actually started (the moment the other person read it), so by then it
+ * is usually already past and the message goes immediately. Deliberately not
+ * "now + the current timer": that would let keep-then-unkeep be used to EXTEND
+ * a message's life, the opposite of what the button means.
+ *
+ * A message un-kept before it was ever read has no start yet, so it returns to
+ * WAITING (null) rather than being handed a fresh window.
  */
 export function unkeepExpiry(
-  createdAt: Date | string,
+  timerStartedAt: Date | string | null | undefined,
   ttlSeconds: number | null | undefined
 ): Date | null {
-  return expiryFor(createdAt, ttlSeconds);
+  if (!timerStartedAt) return null;
+  return expiryFor(timerStartedAt, ttlSeconds);
+}
+
+/**
+ * Whether a message is still waiting to be read, and so has not begun counting
+ * down. Distinct from "kept" (paused on purpose) and from "timer off".
+ */
+export function isAwaitingRead(m: {
+  ttl_seconds: number | null;
+  timer_started_at: string | Date | null;
+  kept_by: string | null;
+  expires_at: string | Date | null;
+}): boolean {
+  return !!m.ttl_seconds && m.ttl_seconds > 0 && !m.timer_started_at && !m.kept_by && !m.expires_at;
 }
 
 /** A 4-digit code, and nothing else. Leading zeros are meaningful, so this stays a string everywhere. */

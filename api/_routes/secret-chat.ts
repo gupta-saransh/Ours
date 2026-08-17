@@ -84,6 +84,7 @@ interface Row {
   expires_at: string | null;
   ttl_seconds: number | null;
   kept_by: string | null;
+  timer_started_at: string | null;
   created_at: string;
 }
 
@@ -103,6 +104,8 @@ interface OutMessage {
   expires_at: string | null;
   ttl_seconds: number | null;
   kept_by: string | null;
+  /** Null until the other person has opened the thread; that read is what starts the countdown. */
+  timer_started_at: string | null;
   created_at: string;
 }
 
@@ -204,11 +207,13 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
       sender_id: string;
       created_at: string;
       ttl_seconds: number | null;
+      timer_started_at: string | null;
       image_data_ct: Buffer | null;
       audio_data_ct: Buffer | null;
       wrapped_key: Buffer | null;
     }>(
       `SELECT m.sender_id, m.created_at::STRING AS created_at, m.ttl_seconds,
+              m.timer_started_at::STRING AS timer_started_at,
               m.image_data_ct, m.audio_data_ct, k.wrapped_key
        FROM messages m
        LEFT JOIN secret_message_keys k ON k.message_id = m.id
@@ -250,10 +255,12 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
       return;
     }
     if (action === 'unkeep') {
-      // Restores the ORIGINAL deadline (usually already past, so it goes at
-      // once) rather than granting a fresh window. Computed by the pure,
-      // unit-tested helper so this rule lives in exactly one place.
-      const expires = unkeepExpiry(msg.created_at, msg.ttl_seconds);
+      // Restores the ORIGINAL deadline, measured from when the other person
+      // actually read it (usually already past, so it goes at once) rather than
+      // granting a fresh window. A message kept before it was ever read simply
+      // goes back to waiting. Computed by the pure, unit-tested helper so this
+      // rule lives in exactly one place.
+      const expires = unkeepExpiry(msg.timer_started_at, msg.ttl_seconds);
       await one(
         'UPDATE messages SET expires_at = $3, kept_by = NULL WHERE id = $1 AND couple_id = $2 AND secret RETURNING id',
         [id, cid, expires]
@@ -266,11 +273,31 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
     throw new HttpError(400, 'Unknown action');
   }
 
-  // ---- Read cursor ----
+  // ---- Read cursor, which is ALSO what starts the timers ----
   if (sub.endsWith('/seen')) {
     await one('UPDATE users SET secret_seen_at = now() WHERE id = $1 RETURNING id', [user.id]);
-    await publish(cid, 'secret.chat.seen', { by: user.id, at: new Date().toISOString() });
-    res.status(200).json({ ok: true });
+    // A message counts down from when the OTHER person reads it, not from when
+    // it was sent: a 1-minute message sent while your person is asleep should
+    // still be there when they wake up. Only their partner's messages start
+    // here (`sender_id != me`), only once (`timer_started_at IS NULL`), and
+    // never for a kept message or one sent with the timer off.
+    const started = await q<{ id: string; expires_at: string }>(
+      `UPDATE messages
+       SET timer_started_at = now(), expires_at = now() + (ttl_seconds || ' seconds')::INTERVAL
+       WHERE couple_id = $1 AND secret AND sender_id != $2
+         AND timer_started_at IS NULL AND kept_by IS NULL
+         AND ttl_seconds IS NOT NULL AND ttl_seconds > 0
+       RETURNING id, expires_at::STRING AS expires_at`,
+      [cid, user.id]
+    );
+    await publish(cid, 'secret.chat.seen', {
+      by: user.id,
+      at: new Date().toISOString(),
+      // The sender's open thread swaps "waiting" for a live countdown off this,
+      // without needing to refetch.
+      started: started.map((s) => ({ id: s.id, expires_at: s.expires_at })),
+    });
+    res.status(200).json({ ok: true, started: started.length });
     return;
   }
 
@@ -349,7 +376,10 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
 
     const ttlSeconds = await currentTtl(cid);
     const now = new Date();
-    const expiresAt = expiryFor(now, ttlSeconds);
+    // NOT stamped at send (v27). The message stores the deal it was sent under
+    // and waits; the countdown begins when the other person actually opens the
+    // thread, in the /seen branch above.
+    const expiresAt = null;
 
     const row = await one<{ id: string; created_at: string }>(
       `INSERT INTO messages
@@ -404,10 +434,14 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
       system_text: null,
       kept_by: null,
       ttl_seconds: ttlSeconds,
-      expires_at: expiresAt ? expiresAt.toISOString() : null,
+      expires_at: expiresAt,
+      timer_started_at: null,
       created_at: row!.created_at,
     };
 
+    // The sender has by definition seen their own message. This must NOT run
+    // the timer-starting UPDATE above: your own reading is not what starts your
+    // own message's clock.
     await one('UPDATE users SET secret_seen_at = now() WHERE id = $1 RETURNING id', [user.id]).catch(() => {});
 
     // Content-free by design (rule 2 in the header comment): a locked partner is
@@ -443,7 +477,8 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
     `SELECT id, sender_id, body_ct, image_thumb_ct,
             (image_data_ct IS NOT NULL) AS has_image, (audio_data_ct IS NOT NULL) AS has_audio,
             audio_mime, audio_duration_ms, audio_waveform, reply_to_id, system_text,
-            expires_at::STRING AS expires_at, ttl_seconds, kept_by, created_at::STRING AS created_at
+            expires_at::STRING AS expires_at, ttl_seconds, kept_by,
+            timer_started_at::STRING AS timer_started_at, created_at::STRING AS created_at
      FROM messages
      WHERE couple_id = $1 AND secret AND (expires_at IS NULL OR expires_at > now())
        ${before ? 'AND created_at < $2' : ''}
@@ -482,6 +517,7 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
         expires_at: null,
         ttl_seconds: null,
         kept_by: null,
+        timer_started_at: null,
       });
       continue;
     }

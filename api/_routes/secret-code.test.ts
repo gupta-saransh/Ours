@@ -159,12 +159,28 @@ describe('setting or resetting the code', () => {
     body: { password, code },
   });
 
-  it('requires the account password, even when no code exists yet', async () => {
-    // Otherwise whoever is holding the unlocked phone could put their own lock
-    // on their partner's secret thread.
+  it('lets you choose your FIRST code with no password at all', async () => {
+    // Starting a secret chat should be two taps. There is nothing to protect
+    // yet, since no code exists to be swapped out from under anyone.
     h.row.secret_code_hash = null;
     const res = makeRes();
+    await handler({ method: 'POST', url: '/api/secret-code', query: {}, headers: {}, body: { code: '1234' } } as any, res);
+    expect(res.statusCode).toBe(200);
+    expect(h.calls.some((c) => c.text.includes('SET secret_code_hash'))).toBe(true);
+  });
+
+  it('requires the account password to REPLACE an existing code', async () => {
+    // This is the case that matters: without it, whoever is holding the
+    // unlocked phone could change the code and lock the owner out.
+    const res = makeRes();
     await handler(setReq('wrong password', '1234') as any, res);
+    expect(res.statusCode).toBe(400);
+    expect(h.calls.some((c) => c.text.includes('SET secret_code_hash'))).toBe(false);
+  });
+
+  it('refuses to replace a code with no password supplied at all', async () => {
+    const res = makeRes();
+    await handler({ method: 'POST', url: '/api/secret-code', query: {}, headers: {}, body: { code: '1234' } } as any, res);
     expect(res.statusCode).toBe(400);
     expect(h.calls.some((c) => c.text.includes('SET secret_code_hash'))).toBe(false);
   });

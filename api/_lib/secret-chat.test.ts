@@ -5,6 +5,7 @@ import {
   TTL_OPTIONS,
   codeGateState,
   expiryFor,
+  isAwaitingRead,
   isExpired,
   isLockedOut,
   isValidCode,
@@ -78,9 +79,9 @@ describe('isExpired', () => {
 });
 
 describe('unkeepExpiry', () => {
-  it('restores the original deadline, not a fresh window', () => {
-    // Sent at T0 under a 1-minute timer, kept, then un-kept an hour later: it
-    // should be due at T0+1min (long past), NOT an hour from now.
+  it('restores the original deadline, measured from when it was READ', () => {
+    // Read at T0 under a 1-minute timer, kept, then un-kept an hour later: due
+    // at T0+1min (long past), NOT an hour from now.
     expect(unkeepExpiry(T0, 60)?.toISOString()).toBe('2026-08-17T12:01:00.000Z');
   });
 
@@ -91,6 +92,35 @@ describe('unkeepExpiry', () => {
 
   it('leaves a message sent with the timer off still permanent', () => {
     expect(unkeepExpiry(T0, 0)).toBeNull();
+  });
+
+  it('returns a never-read message to WAITING rather than a fresh window', () => {
+    // Kept before the partner ever opened it, then un-kept: it has no start, so
+    // it goes back to waiting to be read. Handing it "now + ttl" here would let
+    // keep-then-unkeep quietly restart a message's life.
+    expect(unkeepExpiry(null, 60)).toBeNull();
+    expect(unkeepExpiry(undefined, 60)).toBeNull();
+  });
+});
+
+describe('isAwaitingRead', () => {
+  const base = { ttl_seconds: 60, timer_started_at: null, kept_by: null, expires_at: null };
+
+  it('is true for a message sent but not yet read', () => {
+    expect(isAwaitingRead(base)).toBe(true);
+  });
+
+  it('is false once the clock has started', () => {
+    expect(isAwaitingRead({ ...base, timer_started_at: T0, expires_at: T0 })).toBe(false);
+  });
+
+  it('is false for a kept message, which is paused rather than waiting', () => {
+    expect(isAwaitingRead({ ...base, kept_by: 'user-A' })).toBe(false);
+  });
+
+  it('is false when the timer is off entirely', () => {
+    expect(isAwaitingRead({ ...base, ttl_seconds: 0 })).toBe(false);
+    expect(isAwaitingRead({ ...base, ttl_seconds: null })).toBe(false);
   });
 });
 

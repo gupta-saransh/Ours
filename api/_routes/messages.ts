@@ -106,6 +106,23 @@ async function unreadCount(coupleId: string, userId: string): Promise<number> {
   return Number(row?.n ?? 0) || 0;
 }
 
+/**
+ * How many unread secret messages are waiting. A COUNT ONLY, and deliberately
+ * outside the unlock grant so the dot can appear while the thread is still
+ * locked (see the /unread branch). Its own cursor, so reading the normal thread
+ * never clears it.
+ */
+async function secretUnreadCount(coupleId: string, userId: string): Promise<number> {
+  const seen = await one<{ secret_seen_at: string }>('SELECT secret_seen_at FROM users WHERE id = $1', [userId]);
+  const row = await one<{ n: number | string }>(
+    `SELECT count(*)::INT4 AS n FROM messages
+     WHERE couple_id = $1 AND secret AND sender_id != $2 AND created_at > $3
+       AND (expires_at IS NULL OR expires_at > now()) AND system_text IS NULL`,
+    [coupleId, userId, seen?.secret_seen_at ?? new Date(0).toISOString()]
+  );
+  return Number(row?.n ?? 0) || 0;
+}
+
 async function partnerSeenAt(coupleId: string, userId: string): Promise<string | null> {
   const row = await one<{ chat_seen_at: string }>(
     'SELECT chat_seen_at::STRING AS chat_seen_at FROM users WHERE couple_id = $1 AND id != $2',
@@ -203,7 +220,14 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
 
   // ---- Lightweight badge poll ----
   if (sub.endsWith('/unread')) {
-    res.status(200).json({ unread: await unreadCount(cid, user.id) });
+    // `secretUnread` deliberately needs NO unlock grant. A bare count reveals
+    // only "something arrived", which the visible-but-locked Secret toggle
+    // already announces, and without it the dot could never appear until after
+    // you had unlocked, which is precisely backwards: the dot is the thing that
+    // tells you to go and unlock. Nothing else about the thread is reachable
+    // here. Catch-guarded for a deploy running ahead of `npm run migrate`.
+    const secretUnread = await secretUnreadCount(cid, user.id).catch(() => 0);
+    res.status(200).json({ unread: await unreadCount(cid, user.id), secretUnread });
     return;
   }
 

@@ -308,11 +308,30 @@ describe('secret messages never surface through /api/messages', () => {
     expect(list!.text).toContain('AND NOT secret');
   });
 
-  it('excludes them from the unread count', async () => {
+  it('counts the two threads separately, never mixing them', async () => {
     const res = makeRes();
     await handler({ method: 'GET', url: '/api/messages/unread', query: {}, headers: {}, body: {} } as any, res);
-    const count = h.calls.find((c) => c.text.includes('count(*)'));
-    expect(count!.text).toContain('AND NOT secret');
+    const counts = h.calls.filter((c) => c.text.includes('count(*)'));
+    // One count per thread: the ordinary badge excludes secret rows, and the
+    // secret badge counts only them. `secretUnread` is deliberately reachable
+    // WITHOUT an unlock grant, since the dot is what tells you to go unlock.
+    expect(counts.some((c) => c.text.includes('AND NOT secret'))).toBe(true);
+    expect(counts.some((c) => c.text.includes('AND secret AND sender_id'))).toBe(true);
+    expect(res.body).toHaveProperty('secretUnread');
+  });
+
+  it('reports zero secret unread rather than failing on a pre-migration deploy', async () => {
+    const dbMock = await import('../_lib/db');
+    (dbMock.one as any).mockImplementationOnce(async () => ({ secret_seen_at: 't' }));
+    (dbMock.one as any).mockImplementationOnce(async () => {
+      const err: any = new Error('column "secret" does not exist');
+      err.code = '42703';
+      throw err;
+    });
+    const res = makeRes();
+    await handler({ method: 'GET', url: '/api/messages/unread', query: {}, headers: {}, body: {} } as any, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.secretUnread).toBe(0);
   });
 
   it('excludes them from every single-message operation, to-timeline above all', async () => {

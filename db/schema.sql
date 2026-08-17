@@ -624,3 +624,26 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS secret_seen_at TIMESTAMPTZ NOT NULL D
 -- the thread as a system_text notice so it is never silent. 86400 = 24 hours,
 -- the default the feature was specified with. 0 means the timer is off.
 ALTER TABLE couples ADD COLUMN IF NOT EXISTS secret_ttl_seconds INT NOT NULL DEFAULT 86400;
+
+-- ---------------------------------------------------------------------------
+-- v27: the secret timer starts when the message is READ, not when it is sent.
+--
+-- The original v26 build stamped expires_at at send time, which meant a
+-- 1-minute message sent while your person was asleep was gone before they ever
+-- saw it. The countdown is meant to limit how long something LINGERS, not to
+-- race the recipient, so it now begins the moment the other person opens the
+-- thread.
+--
+-- timer_started_at is the fact; expires_at stays the materialised deadline so
+-- the read filter and the sweeper index stay a single cheap column. Together
+-- with kept_by they encode four distinct states, with no extra flag needed:
+--
+--   ttl_seconds NULL/0                        -> timer off, never expires
+--   ttl_seconds > 0, started NULL, kept NULL  -> waiting to be read
+--   ttl_seconds > 0, started NULL, kept SET   -> kept, timer paused
+--   expires_at NOT NULL                       -> counting down
+--
+-- Un-keeping therefore restores timer_started_at + ttl (not created_at + ttl,
+-- which v26 used), and a message that was never read simply goes back to
+-- waiting rather than being resurrected with a fresh window.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS timer_started_at TIMESTAMPTZ;

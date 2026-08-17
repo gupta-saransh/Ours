@@ -64,11 +64,11 @@ export default function PrivacySettings() {
           </View>
           <Text style={[text.body, { color: colors.inkMuted, marginTop: sp.sm }]}>
             {hasCode
-              ? 'Your secret chat opens with a 4-digit code. If you have forgotten it, set a new one here with your account password. Nobody can look the old one up, not even us, so a new code is the only way back in.'
-              : 'The secret chat is locked with a 4-digit code you choose. Messages in there disappear on a timer and cannot be recovered afterwards, by you or by us.'}
+              ? 'Your secret chat opens with four digits. Forgotten them? Pick new ones here with your account password. Nobody can look the old code up, not even us, so a new one is the only way back in.'
+              : 'The secret chat sits behind four digits that only you know. Whatever you two say in there disappears on a timer, and once it goes it is gone for good, for us as well as for you.'}
           </Text>
           <Pressable style={styles.actionLink} onPress={() => setEditing(true)}>
-            <Text style={styles.actionLinkText}>{hasCode ? 'Set a new code' : 'Choose a code'}</Text>
+            <Text style={styles.actionLinkText}>{hasCode ? 'Pick a new code' : 'Choose a code'}</Text>
           </Pressable>
         </Card>
       </ScrollView>
@@ -123,16 +123,18 @@ function SecretCodeSheet({
   const submit = async () => {
     setError(null);
     if (!/^\d{4}$/.test(code)) {
-      setError('Your code needs to be 4 digits.');
+      setError('Four digits, that is all.');
       return;
     }
     if (code !== confirm) {
-      setError('Those two codes are not the same.');
+      setError('Those two do not match.');
       return;
     }
     setBusy(true);
     try {
-      await setCode(password, code);
+      // The password is only needed to REPLACE a code. Choosing a first one
+      // needs nothing but being signed in.
+      await setCode(code, replacing ? password : undefined);
       successHaptic();
       onSaved();
     } catch (err) {
@@ -143,12 +145,13 @@ function SecretCodeSheet({
   };
 
   return (
-    <Sheet visible={visible} onClose={onClose} title={replacing ? 'Set a new code' : 'Choose a code'}>
-      <Text style={[text.body, { color: colors.inkMuted, marginBottom: sp.lg }]}>
+    <Sheet visible={visible} onClose={onClose} title={replacing ? 'Pick a new code' : 'Choose a code'}>
+      <Text style={[text.bodySerif, { color: colors.inkMuted, marginBottom: sp.lg }]}>
         {replacing
-          ? 'This replaces your old code. Anything already in the secret chat stays there, on whatever timer it was sent with.'
-          : 'Pick 4 digits. Your person sets their own, so you never need to share it.'}
+          ? 'This replaces your old one. Anything already in the secret chat stays put, on whatever timer it came with.'
+          : 'Pick four digits. Your person picks their own, so you never have to share it.'}
       </Text>
+      <Text style={styles.fieldLabel}>{replacing ? 'New code' : 'Your code'}</Text>
       <TextInput
         value={code}
         onChangeText={(t) => setCodeText(t.replace(/\D/g, '').slice(0, 4))}
@@ -158,24 +161,30 @@ function SecretCodeSheet({
         secureTextEntry
         style={styles.codeInput}
       />
+      <Text style={styles.fieldLabel}>Once more</Text>
       <TextInput
         value={confirm}
         onChangeText={(t) => setConfirm(t.replace(/\D/g, '').slice(0, 4))}
-        placeholder="Type it again"
+        placeholder="••••"
         placeholderTextColor={colors.inkFaint}
         keyboardType="number-pad"
         secureTextEntry
         style={styles.codeInput}
       />
-      <TextInput
-        value={password}
-        onChangeText={setPassword}
-        placeholder="Your account password"
-        placeholderTextColor={colors.inkFaint}
-        secureTextEntry
-        autoComplete="current-password"
-        style={styles.codePassword}
-      />
+      {replacing && (
+        <>
+          <Text style={styles.fieldLabel}>Your account password</Text>
+          <TextInput
+            value={password}
+            onChangeText={setPassword}
+            placeholder="So we know it is you"
+            placeholderTextColor={colors.inkFaint}
+            secureTextEntry
+            autoComplete="current-password"
+            style={styles.codePassword}
+          />
+        </>
+      )}
       {error && <Text style={styles.error}>{error}</Text>}
       <PrimaryButton
         title={busy ? 'One moment…' : 'Save'}
@@ -218,16 +227,21 @@ const styles = StyleSheet.create({
     borderTopColor: colors.hairline,
   },
   actionLinkText: { ...text.body, color: colors.surfaceSealed, fontWeight: '600' },
+  // A small label above each field so the input itself only ever holds four
+  // dots; a long placeholder inside a title-sized, wide-tracked box looked bad.
+  fieldLabel: { ...text.caption, color: colors.inkFaint, marginBottom: sp.xs },
   codeInput: {
     ...text.title,
     color: colors.ink,
     textAlign: 'center',
     letterSpacing: 12,
+    paddingLeft: 12, // offsets the trailing letter-space so the dots look centred
     paddingVertical: sp.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.hairline,
-    marginBottom: sp.md,
-    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.surfaceRaised,
+    marginBottom: sp.base,
+    borderRadius: radius.md,
     ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : null),
   },
   codePassword: {

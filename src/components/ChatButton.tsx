@@ -23,7 +23,10 @@ const FAB_SIZE = 56;
 const FAB_RIGHT = sp.xl;
 const CHAT_SIZE = 52;
 
-const VISIBLE_ON = new Set(['/', '/timeline', '/todos', '/dates', '/wishlist', '/milestones']);
+// Mirrors AddMenu's VISIBLE_ON. To-dos, Dates and Wishes are pills inside
+// /plans now, so listing their old standalone routes here hid the button on
+// every screen it should have been on.
+const VISIBLE_ON = new Set(['/', '/timeline', '/plans', '/milestones']);
 
 export function ChatButton() {
   const { user, partner } = useAuth();
@@ -41,13 +44,22 @@ export function ChatButton() {
   // (e.g. returning from the chat, which has just marked everything read).
   useEffect(() => {
     if (!partner || !VISIBLE_ON.has(pathname)) return;
-    api<{ unread: number }>('/api/messages/unread')
-      .then((d) => setHasUnread(d.unread > 0))
+    // Either thread lights the same dot. A secret message has to be able to say
+    // "come and look" from out here, or the only way to discover one would be
+    // to unlock the secret thread on the off-chance, which nobody will do.
+    // It stays a plain dot: no count, no name, no hint of which thread.
+    api<{ unread: number; secretUnread?: number }>('/api/messages/unread')
+      .then((d) => setHasUnread(d.unread > 0 || (d.secretUnread ?? 0) > 0))
       .catch(() => {});
   }, [partner, pathname]);
 
   // A message from the partner lights the dot immediately.
   useCoupleEvent('message.created', (m) => {
+    if (m?.sender_id && m.sender_id !== user?.id) setHasUnread(true);
+  });
+  // Same for the secret thread. The event carries no content by design, which
+  // is all a dot needs anyway.
+  useCoupleEvent('secret.message.created', (m: { sender_id?: string }) => {
     if (m?.sender_id && m.sender_id !== user?.id) setHasUnread(true);
   });
 

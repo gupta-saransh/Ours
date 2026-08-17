@@ -49,11 +49,15 @@ export function codeStatus(): Promise<{ hasCode: boolean; lockedOut: boolean; wa
   return api('/api/secret-code');
 }
 
-/** Set or reset the 4-digit code. Requires the ACCOUNT password, always, even the first time. */
-export async function setCode(password: string, code: string): Promise<void> {
+/**
+ * Set or change the 4-digit code. Choosing your FIRST one needs nothing but
+ * your session; replacing an existing one needs the account password, so
+ * nobody holding your unlocked phone can swap it and lock you out.
+ */
+export async function setCode(code: string, password?: string): Promise<void> {
   const res = await api<{ token: string; expiresIn: number }>('/api/secret-code', {
     method: 'POST',
-    body: { password, code },
+    body: password ? { code, password } : { code },
   });
   // The server hands back a grant so setting a code drops you straight in
   // rather than immediately asking for what you just typed.

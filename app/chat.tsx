@@ -88,6 +88,8 @@ interface Message {
   expires_at?: string | null;
   ttl_seconds?: number | null;
   kept_by?: string | null;
+  /** Null until your person has actually opened the thread; their read is what starts the clock. */
+  timer_started_at?: string | null;
   system_text?: string | null;
 }
 
@@ -327,16 +329,18 @@ export default function Chat() {
     }
   }, [status, partner, load]);
 
-  // The unread mark on the Secret toggle. Its own cursor, so reading the normal
-  // thread never silently clears it.
+  // The unread mark on the Secret toggle. Read from the ORDINARY unread
+  // endpoint, which returns the secret count without needing an unlock grant:
+  // the dot's whole job is to tell you there is something worth unlocking FOR,
+  // so it cannot itself require having unlocked. Its own cursor server-side, so
+  // reading the normal thread never clears it.
   const refreshSecretUnread = useCallback(() => {
-    if (!unlocked) return;
-    secretApi<{ unread: number }>('/api/secret-chat/unread')
+    api<{ secretUnread?: number }>('/api/messages/unread')
       // Number(): a count can arrive as a string from the int8 wire type (see
       // unreadCount in the route), and `"3" + 1` would quietly become "31".
-      .then((d) => setSecretUnread(Number(d.unread) || 0))
+      .then((d) => setSecretUnread(Number(d.secretUnread ?? 0) || 0))
       .catch(() => {});
-  }, [unlocked]);
+  }, []);
   useEffect(() => {
     if (secretShown) setSecretUnread(0);
     else refreshSecretUnread();
@@ -392,9 +396,24 @@ export default function Chat() {
   useCoupleEvent('secret.ttl.changed', () => {
     if (secretShown) load().catch(() => {});
   });
-  useCoupleEvent('secret.chat.seen', (d: { by?: string; at?: string }) => {
-    if (secretShown && d?.by && d.by === partner?.id && d.at) setPartnerSeen(d.at);
-  });
+  // Your person opened the secret thread, which is what STARTS the timers on
+  // everything you sent them. The event carries the new deadlines so the
+  // countdowns switch on live, without a refetch.
+  useCoupleEvent(
+    'secret.chat.seen',
+    (d: { by?: string; at?: string; started?: { id: string; expires_at: string }[] }) => {
+      if (!secretShown || !d?.by || d.by !== partner?.id) return;
+      if (d.at) setPartnerSeen(d.at);
+      if (d.started?.length) {
+        const byId = new Map(d.started.map((s) => [s.id, s.expires_at]));
+        setMsgs((prev) =>
+          prev.map((m) =>
+            byId.has(m.id) ? { ...m, expires_at: byId.get(m.id)!, timer_started_at: d.at ?? null } : m
+          )
+        );
+      }
+    }
+  );
   // The partner opened the thread: light up our "Seen" receipt.
   useCoupleEvent('chat.seen', (d: { by?: string; at?: string }) => {
     if (!secretShown && d?.by && d.by === partner?.id && d.at) setPartnerSeen(d.at);
@@ -455,10 +474,10 @@ export default function Chat() {
       created_at: new Date().toISOString(),
       // Optimistically show the timer this message is about to get, so the
       // countdown does not pop into existence a moment after it appears.
-      expires_at:
-        secretShown && ttl && ttl.seconds > 0
-          ? new Date(Date.now() + ttl.seconds * 1000).toISOString()
-          : null,
+      // No optimistic expiry any more: a message waits, unexpiring, until your
+      // person has actually read it.
+      expires_at: null,
+      timer_started_at: null,
       pending: true,
     };
     setMsgs((prev) => [temp, ...prev]);
@@ -698,11 +717,11 @@ export default function Chat() {
         <View style={styles.secretBanner}>
           <Text style={styles.secretBannerText}>
             {ttl && ttl.seconds > 0
-              ? `Messages here disappear after ${ttl.label.toLowerCase()}, for both of you.`
-              : 'The timer is off, so messages here stay until one of you removes them.'}
+              ? `Just you two. Everything here fades ${ttl.label.toLowerCase()} after it is read.`
+              : 'Just you two. The timer is off, so this all stays until one of you clears it.'}
           </Text>
           <Text style={styles.secretBannerFine}>
-            Nobody can screenshot-proof a phone, so trust each other first.
+            We cannot stop a screenshot though, so trust each other first ♥
           </Text>
         </View>
       )}
@@ -734,7 +753,7 @@ export default function Chat() {
                 <View style={styles.emptyWrap}>
                   <Text style={[styles.emptyLine, secretShown && styles.emptyLineSecret]}>
                     {secretShown
-                      ? 'Nothing here. Whatever you say next disappears on its own.'
+                      ? 'Empty in here. Go on, say the thing you were not going to say.'
                       : 'Say the first thing. A hello, a heart, a photo, anything.'}
                   </Text>
                 </View>
@@ -844,7 +863,7 @@ export default function Chat() {
                   if (t.trim()) notifyTyping();
                   else clearTyping();
                 }}
-                placeholder={secretShown ? 'Just between us' : 'Message'}
+                placeholder={secretShown ? 'Go on, nobody else is looking' : 'Message'}
                 placeholderTextColor={secretShown ? 'rgba(249, 239, 220, 0.45)' : colors.inkFaint}
                 style={[styles.input, secretShown && styles.inputSecret]}
                 multiline
@@ -940,14 +959,12 @@ function CodeSheet({
 }) {
   const [code, setCode] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     setCode('');
     setConfirm('');
-    setPassword('');
     setError(null);
   }, [mode]);
 
@@ -956,16 +973,18 @@ function CodeSheet({
   const submit = async () => {
     setError(null);
     if (!/^\d{4}$/.test(code)) {
-      setError('Your code needs to be 4 digits.');
+      setError('Four digits, that is all.');
       return;
     }
     if (setting && code !== confirm) {
-      setError('Those two codes are not the same.');
+      setError('Those two do not match.');
       return;
     }
     setBusy(true);
     try {
-      if (setting) await saveCode(password, code);
+      // No password when choosing your first code: your session is proof
+      // enough, and getting in should be two taps.
+      if (setting) await saveCode(code);
       else await unlockSecret(code);
       successHaptic();
       onDone();
@@ -977,12 +996,13 @@ function CodeSheet({
   };
 
   return (
-    <Sheet visible={!!mode} onClose={onClose} title={setting ? 'Make a secret chat' : 'Secret chat'}>
-      <Text style={[text.body, { color: colors.inkMuted, marginBottom: sp.lg }]}>
+    <Sheet visible={!!mode} onClose={onClose} title={setting ? 'Your little secret' : 'Welcome back'}>
+      <Text style={[text.bodySerif, { color: colors.inkMuted, marginBottom: sp.lg }]}>
         {setting
-          ? 'Pick a 4-digit code. You will need it every time you open the secret chat, and only you know it. Your person sets their own.'
-          : 'Enter your 4-digit code.'}
+          ? 'Pick four digits. This room is only yours, and whatever happens in it does not stick around. Your person picks their own, so you never have to share it.'
+          : 'Four digits and you are in.'}
       </Text>
+      <Text style={styles.codeLabel}>{setting ? 'Your code' : 'Code'}</Text>
       <TextInput
         value={code}
         onChangeText={(t) => setCode(t.replace(/\D/g, '').slice(0, 4))}
@@ -995,36 +1015,28 @@ function CodeSheet({
       />
       {setting && (
         <>
+          <Text style={styles.codeLabel}>Once more</Text>
           <TextInput
             value={confirm}
             onChangeText={(t) => setConfirm(t.replace(/\D/g, '').slice(0, 4))}
-            placeholder="Type it again"
+            placeholder="••••"
             placeholderTextColor={colors.inkFaint}
             keyboardType="number-pad"
             secureTextEntry
             style={styles.codeInput}
           />
-          <TextInput
-            value={password}
-            onChangeText={setPassword}
-            placeholder="Your account password"
-            placeholderTextColor={colors.inkFaint}
-            secureTextEntry
-            autoComplete="current-password"
-            style={styles.codePassword}
-          />
         </>
       )}
       {error && <Text style={styles.codeError}>{error}</Text>}
       <PrimaryButton
-        title={busy ? 'One moment…' : setting ? 'Create it' : 'Open'}
+        title={busy ? 'One moment…' : setting ? 'Let me in' : 'Open'}
         onPress={submit}
         disabled={busy}
         style={{ marginTop: sp.lg }}
       />
       {!setting && (
         <Text style={styles.codeHelp}>
-          Forgotten it? You can set a new one in Settings, under Privacy, with your account password.
+          Drawn a blank? Settings, then Privacy, and you can pick a new one.
         </Text>
       )}
     </Sheet>
@@ -1048,9 +1060,10 @@ function TimerSheet({
   onLock: () => void;
 }) {
   return (
-    <Sheet visible={visible} onClose={onClose} title="Disappearing messages">
-      <Text style={[text.body, { color: colors.inkMuted, marginBottom: sp.lg }]}>
-        New messages get whatever you choose here. Anything already sent keeps the timer it was sent with.
+    <Sheet visible={visible} onClose={onClose} title="How long things linger">
+      <Text style={[text.bodySerif, { color: colors.inkMuted, marginBottom: sp.lg }]}>
+        The clock only starts once your person has actually read it, so nothing vanishes before they see it.
+        Whatever you pick applies from here on, and anything already sent keeps the timer it came with.
       </Text>
       {options.map((o) => (
         <Pressable key={o.seconds} style={styles.actionRow} onPress={() => onPick(o.seconds)}>
@@ -1652,7 +1665,11 @@ const styles = StyleSheet.create({
     borderColor: colors.hairline,
     backgroundColor: colors.surfaceRaised,
   },
-  secretToggleText: { ...text.micro, color: colors.surfaceSealed, fontWeight: '600' },
+  // text.micro is UPPERCASE by design (it is the app's label/chrome preset), so
+  // every sentence-shaped string in here overrides it back. Instructions that
+  // SHOUT read as a warning notice, which is the opposite of the tone this
+  // room wants.
+  secretToggleText: { ...text.micro, textTransform: 'none', letterSpacing: 0.2, color: colors.surfaceSealed, fontWeight: '600' },
   secretDot: {
     width: 6,
     height: 6,
@@ -1669,28 +1686,42 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(249, 239, 220, 0.35)',
   },
-  secretToggleOnText: { ...text.micro, color: colors.onSealed, fontWeight: '600' },
+  secretToggleOnText: {
+    ...text.micro,
+    textTransform: 'none',
+    letterSpacing: 0.2,
+    color: colors.onSealed,
+    fontWeight: '600',
+  },
   secretBanner: {
     paddingHorizontal: sp.base,
-    paddingVertical: sp.sm,
+    paddingVertical: sp.md,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(249, 239, 220, 0.14)',
   },
-  secretBannerText: { ...text.micro, color: 'rgba(249, 239, 220, 0.78)', textAlign: 'center' },
+  secretBannerText: {
+    ...text.caption,
+    fontFamily: font.serif,
+    color: 'rgba(249, 239, 220, 0.82)',
+    textAlign: 'center',
+  },
   secretBannerFine: {
-    ...text.micro,
+    ...text.caption,
+    fontSize: 11,
+    lineHeight: 15,
     color: 'rgba(249, 239, 220, 0.45)',
     textAlign: 'center',
-    marginTop: 2,
+    marginTop: 3,
   },
   bubbleTheirsSecret: {
     backgroundColor: 'rgba(249, 239, 220, 0.13)',
     borderColor: 'rgba(249, 239, 220, 0.16)',
   },
-  countdown: { ...text.micro, fontWeight: '600', marginLeft: 2 },
+  countdown: { ...text.micro, textTransform: 'none', letterSpacing: 0.2, fontWeight: '600', marginLeft: 2 },
   systemRow: { alignItems: 'center', marginVertical: sp.md, paddingHorizontal: sp.base },
   systemText: {
-    ...text.micro,
+    ...text.caption,
+    fontSize: 12,
     color: 'rgba(249, 239, 220, 0.62)',
     textAlign: 'center',
     backgroundColor: 'rgba(249, 239, 220, 0.10)',
@@ -1699,28 +1730,29 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     overflow: 'hidden',
   },
-  actionCaption: { ...text.micro, color: colors.inkFaint, marginTop: 2 },
+  actionCaption: { ...text.caption, color: colors.inkFaint, marginTop: 2 },
+  // A small label above each field, so the box itself only ever holds four
+  // dots. The old version put "Type it again" INSIDE a title-sized input with
+  // 12px letter-spacing, which stretched a short instruction across the sheet.
+  codeLabel: { ...text.caption, color: colors.inkFaint, marginBottom: sp.xs },
   codeInput: {
     ...text.title,
     color: colors.ink,
     textAlign: 'center',
     letterSpacing: 12,
+    // Compensate for the trailing letter-spacing so four dots sit optically
+    // centred rather than pushed left.
+    paddingLeft: 12,
     paddingVertical: sp.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.hairline,
-    marginBottom: sp.md,
-    ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : null),
-  },
-  codePassword: {
-    ...text.body,
-    color: colors.ink,
-    paddingVertical: sp.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.hairline,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceRaised,
+    marginBottom: sp.base,
     ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : null),
   },
   codeError: { ...text.caption, color: colors.danger, marginTop: sp.md },
-  codeHelp: { ...text.micro, color: colors.inkFaint, marginTop: sp.md, textAlign: 'center' },
+  codeHelp: { ...text.caption, color: colors.inkFaint, marginTop: sp.md, textAlign: 'center' },
   // Chrome that normally sits on parchment and has to flip on the dark ground.
   composerSecret: { borderTopColor: 'rgba(249, 239, 220, 0.16)' },
   inputSecret: {
