@@ -20,6 +20,15 @@ export interface WhatsNewEntry {
 // Newest first. Add an entry here whenever something user-facing ships.
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: '2026-08-17-secret-chat',
+    title: 'Secret chat',
+    bullets: [
+      'Tap Secret in the top corner of your chat. Set a 4-digit code, and only you can open it.',
+      'Messages in there disappear on a timer, 24 hours by default, and you can change it whenever. Tap one and keep it if you want it to stay.',
+      'Either of you can remove anything in there, for both of you. Once it goes, it is gone for good.',
+    ],
+  },
+  {
     id: '2026-07-26-explore',
     title: 'A tidier home',
     bullets: [

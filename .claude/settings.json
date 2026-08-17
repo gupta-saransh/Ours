@@ -42,7 +42,8 @@
       "Bash(grep -E \"^/\\\\\\(tabs\\\\\\)|^/picture|Exported|error\")",
       "Bash(sed -i \"s/  Scale,\\\\n//\" \"app/\\(tabs\\)/explore.tsx\")",
       "Bash(python -c ' *)",
-      "Bash(python \"C:/Users/Srg/AppData/Local/Temp/claude/d--Coding-NewProjects-RelationshipHQ/84e45cef-b5ef-4a70-a358-6f2ae7399a95/scratchpad/nav.py\")"
+      "Bash(python \"C:/Users/Srg/AppData/Local/Temp/claude/d--Coding-NewProjects-RelationshipHQ/84e45cef-b5ef-4a70-a358-6f2ae7399a95/scratchpad/nav.py\")",
+      "Bash([ -s \"$f\" ])"
     ],
     "additionalDirectories": [
       "d:\\Coding\\NewProjects\\RelationshipHQ\\api"

@@ -125,6 +125,77 @@ export function recryptBlob(fromDek: Buffer, toDek: Buffer, blob: Buffer): Buffe
   return seal(toDek, unseal(fromDek, blob));
 }
 
+/* ---------------------------------------------------------------------------
+ * Per-message keys (secret chat).
+ *
+ * A third key layer for one purpose: making expiry irreversible. Master key
+ * wraps the couple DEK wraps a PER-MESSAGE key which seals that one message's
+ * body and media. Destroying the ~60 byte wrapped key (secret_message_keys)
+ * turns the message into noise permanently, which plain deletion cannot promise
+ * in a database that keeps MVCC history, replicas and managed backups.
+ *
+ * Note what does NOT change: the couple DEK is still server-held, so a LIVE
+ * secret message is readable by the server exactly like any other field. This
+ * layer is about making a SHREDDED message unrecoverable, not about hiding a
+ * live one from the operator. That second property needs end-to-end encryption
+ * (client-held keys), which this module is still the swap point for.
+ * ------------------------------------------------------------------------- */
+
+/** A fresh random key for exactly one message. Never reused, never derived. */
+export function freshMessageKey(): Buffer {
+  return randomBytes(KEY_LEN);
+}
+
+/**
+ * Wrap a message key under the couple's DEK for storage. Returns null when
+ * encryption is disabled, and callers MUST treat that as "secret chat is
+ * unavailable" rather than falling back to plaintext the way ordinary fields
+ * do: a secret message stored readable would defeat the entire feature, and it
+ * would do it silently.
+ */
+export async function wrapMessageKey(coupleId: string, messageKey: Buffer): Promise<Buffer | null> {
+  const dek = await coupleDek(coupleId);
+  if (!dek) return null;
+  return seal(dek, messageKey);
+}
+
+/** Unwrap a stored message key. Null when encryption is off or the blob fails authentication. */
+export async function unwrapMessageKey(coupleId: string, wrapped: Buffer | null | undefined): Promise<Buffer | null> {
+  if (!wrapped || wrapped.length === 0) return null;
+  const dek = await coupleDek(coupleId);
+  if (!dek) return null;
+  try {
+    return unseal(dek, wrapped);
+  } catch {
+    return null;
+  }
+}
+
+/** Seal one value under a message key. Same iv||ct||tag layout as every other field. */
+export function sealWithKey(messageKey: Buffer, plaintext: string | Buffer): Buffer {
+  return seal(messageKey, typeof plaintext === 'string' ? Buffer.from(plaintext, 'utf8') : plaintext);
+}
+
+/**
+ * Open a value sealed under a message key. Null when the key is gone (shredded)
+ * or the blob does not authenticate. A shredded message reaching this function
+ * is normal, not an error: it is exactly what expiry is supposed to produce.
+ */
+export function openWithKey(messageKey: Buffer, blob: Buffer | null | undefined): Buffer | null {
+  if (!blob || blob.length === 0) return null;
+  try {
+    return unseal(messageKey, blob);
+  } catch {
+    return null;
+  }
+}
+
+/** Convenience for text fields sealed under a message key. */
+export function openTextWithKey(messageKey: Buffer, blob: Buffer | null | undefined): string | null {
+  const out = openWithKey(messageKey, blob);
+  return out ? out.toString('utf8') : null;
+}
+
 // Same lookalike-free alphabet the invite codes use; 32 chars, so one digest
 // byte mod 32 maps uniformly.
 const FINGERPRINT_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';

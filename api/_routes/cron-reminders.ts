@@ -90,6 +90,45 @@ export default route(['POST', 'GET'], async (req, res) => {
   // rather than reporting a cheerful "sent: 0".
   const missingVapid = missingVapidVars();
 
+  // ---- Secret-chat shredder (v26) ----
+  // The backstop, not the main mechanism: secret-chat.ts shreds on every touch
+  // of the thread, which is what makes a 1-minute timer possible at all (no
+  // cron is that prompt, and GitHub Actions least of all). This exists for
+  // couples who stop opening the app, so nothing outlives its timer just
+  // because nobody came back.
+  //
+  // Keys before rows, always: a run that dies halfway leaves messages dead
+  // rather than alive. Sends nothing and touches no user, so it reports counts
+  // instead of the usual sent/skipped shape.
+  if (kind === 'shred') {
+    const expired = `SELECT id FROM messages
+       WHERE secret AND expires_at IS NOT NULL AND expires_at <= now()`;
+    const keys = await q<{ message_id: string }>(
+      `DELETE FROM secret_message_keys WHERE message_id IN (${expired}) RETURNING message_id`
+    );
+    const rows = await q<{ id: string }>(
+      `DELETE FROM messages
+       WHERE secret AND expires_at IS NOT NULL AND expires_at <= now() RETURNING id`
+    );
+    // Orphans: a key whose message vanished some other way (a mutual delete
+    // that failed after the row went). Harmless but pointless to keep, and a
+    // key with no ciphertext is exactly the thing we never want lying around.
+    const orphans = await q<{ message_id: string }>(
+      `DELETE FROM secret_message_keys
+       WHERE message_id NOT IN (SELECT id FROM messages WHERE secret) RETURNING message_id`
+    );
+    const report = {
+      kind,
+      keys_destroyed: keys.length,
+      messages_removed: rows.length,
+      orphan_keys_removed: orphans.length,
+      duration_ms: Date.now() - startedAt,
+    };
+    log('info', 'cron.summary', report);
+    res.status(200).json(report);
+    return;
+  }
+
   if (kind === 'daily') {
     // Every paired user, with the facts that decide whether they get a nudge, so
     // the report can explain each skip instead of just counting the survivors.

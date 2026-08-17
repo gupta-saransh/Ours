@@ -535,3 +535,92 @@ CREATE TABLE IF NOT EXISTS picture_night_guesses (
 );
 CREATE INDEX IF NOT EXISTS picture_night_board
   ON picture_night_guesses (couple_id, puzzle_date, round, created_at);
+
+-- ---------------------------------------------------------------------------
+-- v26: secret chat. A second, code-gated thread inside the same couple, whose
+-- messages disappear on a per-message timer.
+--
+-- WHY THE KEYS LIVE IN THEIR OWN TABLE (the whole design turns on this):
+-- "DELETE the row" does not erase anything in a distributed database. Cockroach
+-- writes a tombstone and keeps the previous MVCC version readable via AS OF
+-- SYSTEM TIME until garbage collection runs (hours, and not a setting we
+-- control on Cockroach Cloud), managed backups retain a copy for weeks, and the
+-- row exists on three replicas. So expiry here is NOT deletion, it is
+-- CRYPTO-SHREDDING: every secret message is sealed under its OWN random
+-- 256-bit key, that key is wrapped under the couple DEK and stored as a ~60
+-- byte row here, and expiry destroys the key. The message ciphertext then
+-- decodes to nothing for anybody, forever, including the operator.
+--
+-- Three things that buys over deleting the message row:
+--   1. Shredding a 12MB photo message costs one tiny key delete; the bulky
+--      ciphertext can be swept later at leisure without it being readable.
+--   2. It fails SAFE against our own future bugs. If some later query forgets
+--      `AND (expires_at IS NULL OR expires_at > now())`, plain deletion would
+--      have leaked a readable message; here it returns unreadable bytes.
+--   3. Key-first ordering: the sweeper kills keys before rows, so a partial
+--      failure leaves messages dead rather than alive.
+--
+-- The read filter still lives on messages.expires_at (no join on the hot path);
+-- this table is only the key custody + the shredder's work list.
+CREATE TABLE IF NOT EXISTS secret_message_keys (
+  message_id UUID PRIMARY KEY,
+  couple_id UUID NOT NULL,
+  wrapped_key BYTEA NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS secret_keys_by_couple ON secret_message_keys (couple_id);
+
+-- secret          this message belongs to the gated thread, never the normal one.
+-- ttl_seconds     the deal the message was SENT under. Changing the couple's
+--                 timer never rewrites existing messages (WhatsApp's rule, and
+--                 the one the feature was specified with): each message keeps
+--                 whatever window was set the moment it was sent.
+-- expires_at      materialised created_at + ttl_seconds, so the read filter and
+--                 the sweeper index are cheap. NULL = never expires, which means
+--                 either "kept" or "the timer was off when it was sent".
+-- kept_by         who pressed Keep (NULL = not kept). Either partner may keep or
+--                 un-keep; un-keeping restores created_at + ttl_seconds, which is
+--                 usually already in the past, so the message goes at once. That
+--                 asymmetry is deliberate: the destructive action always wins.
+-- system_text     a plaintext, contentless notice ("Anisha set messages to
+--                 disappear after 1 minute"). Never expires, carries no couple
+--                 content, so it needs no key and is safe to leave behind as the
+--                 audit trail of who changed the timer and when.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS secret BOOL NOT NULL DEFAULT false;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS ttl_seconds INT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS kept_by UUID;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS system_text STRING;
+-- Media for a secret message is BYTEA sealed under the per-message key, never
+-- the plaintext base64 STRING columns the normal thread uses (image_data,
+-- image_thumb, audio_data). A secret message must leave nothing readable behind
+-- once its key is gone, and those columns would.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_thumb_ct BYTEA;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_data_ct BYTEA;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS audio_data_ct BYTEA;
+CREATE INDEX IF NOT EXISTS messages_secret_thread ON messages (couple_id, secret, created_at DESC);
+CREATE INDEX IF NOT EXISTS messages_expiring ON messages (expires_at) WHERE expires_at IS NOT NULL;
+
+-- The 4-digit code is a LOCK ON THE DOOR, not the key to the safe: four digits
+-- is 10,000 combinations and would be brute-forced instantly if it derived any
+-- encryption. It is a server-checked gate with a lockout, exactly like a phone
+-- PIN, while the actual crypto stays with the per-message keys above. Two
+-- mechanisms for two different threats: the code stops someone holding your
+-- unlocked phone, the shredding stops the database remembering.
+--
+-- Per USER, not per couple, so each partner unlocks their own device
+-- independently. scrypt-hashed by the same hashPassword/verifyPassword the
+-- account password uses; deliberately NOT reversible, so the code can be reset
+-- (with the account password) but never revealed.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS secret_code_hash STRING;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS secret_code_failures INT NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS secret_code_locked_until TIMESTAMPTZ;
+-- A read cursor of its own. Reading the normal thread must not silently clear
+-- the secret thread's unread mark, so chat_seen_at cannot be reused here.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS secret_seen_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+-- The couple's CURRENT timer, applied to messages sent from now on. Shared (like
+-- theme_preset): either partner may change it, and the change is announced in
+-- the thread as a system_text notice so it is never silent. 86400 = 24 hours,
+-- the default the feature was specified with. 0 means the timer is off.
+ALTER TABLE couples ADD COLUMN IF NOT EXISTS secret_ttl_seconds INT NOT NULL DEFAULT 86400;

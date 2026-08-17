@@ -51,8 +51,13 @@ const SOURCES: ContentSource[] = [
   // Chat splits in two so VOICE NOTES get their own column everywhere (chart,
   // mix, per-couple makeup, per-person) without inflating anything: the two
   // filters are mutually exclusive, so a voice note is counted once, as voice.
-  { src: 'messages', table: 'messages', where: 'audio_data IS NULL', userCol: 'sender_id' },
-  { src: 'voice', table: 'messages', where: 'audio_data IS NOT NULL', userCol: 'sender_id' },
+  // `NOT secret` (v26) keeps the secret thread out of the operator's view
+  // entirely: not counted, not charted, not attributed to a person. Content is
+  // never read anywhere on this screen, but a row count is still a signal, and
+  // this is the one thread where even "they sent 40 things last night" is more
+  // than the dashboard has any business showing.
+  { src: 'messages', table: 'messages', where: 'audio_data IS NULL AND NOT secret', userCol: 'sender_id' },
+  { src: 'voice', table: 'messages', where: 'audio_data IS NOT NULL AND NOT secret', userCol: 'sender_id' },
   { src: 'memories', table: 'memories', userCol: 'author_id' },
   { src: 'notes', table: 'love_notes', userCol: 'author_id' },
   { src: 'todos', table: 'todos', userCol: 'author_id' },

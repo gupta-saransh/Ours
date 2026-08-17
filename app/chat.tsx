@@ -23,8 +23,36 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
-import { ChevronLeft, ImagePlus, ImageDown, Mic, Pause, Play, Plus, Reply, Send, Trash2, X } from 'lucide-react-native';
-import { api } from '@/lib/api';
+import {
+  ChevronLeft,
+  ImagePlus,
+  ImageDown,
+  Lock,
+  Mic,
+  Pause,
+  Pin,
+  PinOff,
+  Play,
+  Plus,
+  Reply,
+  Send,
+  Timer,
+  Trash2,
+  X,
+} from 'lucide-react-native';
+import { api, ApiError } from '@/lib/api';
+import {
+  codeStatus as fetchCodeStatus,
+  formatRemaining,
+  isUnlocked,
+  lock as lockSecret,
+  onLockChange,
+  remainingMs,
+  secretApi,
+  setCode as saveCode,
+  tickIntervalMs,
+  unlock as unlockSecret,
+} from '@/lib/secretChat';
 import { useAuth } from '@/lib/auth';
 import { useChatPresence, useCoupleEvent, usePartnerPresence } from '@/lib/realtime';
 import { useToast } from '@/lib/toast';
@@ -54,6 +82,18 @@ interface Message {
   reactions?: ReactionRow[];
   created_at: string;
   pending?: boolean;
+  // Secret thread only. `expires_at` null means kept (or the timer was off when
+  // it was sent); `system_text` marks a contentless timer notice, which renders
+  // as a centred chip rather than a bubble.
+  expires_at?: string | null;
+  ttl_seconds?: number | null;
+  kept_by?: string | null;
+  system_text?: string | null;
+}
+
+interface TtlOption {
+  seconds: number;
+  label: string;
 }
 
 /** How far a bubble must be dragged right before releasing it triggers a reply. */
@@ -164,7 +204,7 @@ export default function Chat() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [partnerSeen, setPartnerSeen] = useState<string | null>(null);
   const [addedIds, setAddedIds] = useState<Set<string>>(new Set());
-  const [viewer, setViewer] = useState<{ id: string; thumb: string | null } | null>(null);
+  const [viewer, setViewer] = useState<{ id: string; thumb: string | null; secret: boolean } | null>(null);
   // The message being quoted by the next send (long-press a bubble to set it).
   const [replyTo, setReplyTo] = useState<Message | null>(null);
   // Long-press opens this: React / Reply / Delete for one message.
@@ -174,6 +214,35 @@ export default function Chat() {
   // Tapping a quoted reply scrolls to the original and briefly highlights it.
   const listRef = useRef<FlatList<Message>>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+
+  /* ---- Secret thread -------------------------------------------------- */
+  // One screen, two threads. `secret` says which one is on show; every request
+  // below picks its endpoint and its credential from it, so there is exactly
+  // one composer, one list and one set of gestures to maintain rather than a
+  // near-copy of this file.
+  const [secret, setSecret] = useState(false);
+  const [unlocked, setUnlocked] = useState(isUnlocked());
+  const [askCode, setAskCode] = useState<null | 'unlock' | 'set'>(null);
+  const [ttl, setTtl] = useState<{ seconds: number; label: string; options: TtlOption[] } | null>(null);
+  const [showTimer, setShowTimer] = useState(false);
+  const [secretUnread, setSecretUnread] = useState(0);
+  // Re-render tick for the countdowns. Paced by how much time the most urgent
+  // message has left, so a thread of 7-day timers is not repainting every second.
+  const [, setNowTick] = useState(0);
+
+  // The grant expiring (or any 401) re-locks the thread from underneath us.
+  useEffect(() => onLockChange(setUnlocked), []);
+  useEffect(() => {
+    if (secret && !unlocked) setSecret(false);
+  }, [secret, unlocked]);
+
+  const secretShown = secret && unlocked;
+
+  const call = useCallback(
+    <T,>(path: string, opts?: { method?: string; body?: unknown }): Promise<T> =>
+      secretShown ? secretApi<T>(`/api/secret-chat${path}`, opts) : api<T>(`/api/messages${path}`, opts),
+    [secretShown]
+  );
 
   const jumpToMessage = useCallback(
     (id: string) => {
@@ -226,41 +295,118 @@ export default function Chat() {
   useEffect(() => () => clearTyping(), [clearTyping]);
 
   const markSeen = useCallback(() => {
-    api('/api/messages/seen', { method: 'POST' }).catch(() => {});
-  }, []);
+    call('/seen', { method: 'POST' }).catch(() => {});
+  }, [call]);
 
   const load = useCallback(async () => {
-    const data = await api<{ messages: Message[]; hasMore: boolean; partnerSeenAt: string | null }>('/api/messages');
+    const data = await call<{
+      messages: Message[];
+      hasMore: boolean;
+      partnerSeenAt: string | null;
+      ttlSeconds?: number;
+      ttlLabel?: string;
+      ttlOptions?: TtlOption[];
+    }>('');
     setMsgs(data.messages.slice().reverse());
     setHasMore(data.hasMore);
     setPartnerSeen(data.partnerSeenAt);
+    // The timer options come from the server so there is one source of truth
+    // for what durations exist, rather than a copy kept in sync by hand.
+    if (data.ttlOptions) {
+      setTtl({ seconds: data.ttlSeconds ?? 0, label: data.ttlLabel ?? '', options: data.ttlOptions });
+    }
     setLoaded(true);
     markSeen();
-  }, [markSeen]);
+  }, [call, markSeen]);
 
   useEffect(() => {
-    if (status === 'signedIn' && partner) load().catch(() => setLoaded(true));
+    if (status === 'signedIn' && partner) {
+      setLoaded(false);
+      setMsgs([]);
+      load().catch(() => setLoaded(true));
+    }
   }, [status, partner, load]);
+
+  // The unread mark on the Secret toggle. Its own cursor, so reading the normal
+  // thread never silently clears it.
+  const refreshSecretUnread = useCallback(() => {
+    if (!unlocked) return;
+    secretApi<{ unread: number }>('/api/secret-chat/unread')
+      // Number(): a count can arrive as a string from the int8 wire type (see
+      // unreadCount in the route), and `"3" + 1` would quietly become "31".
+      .then((d) => setSecretUnread(Number(d.unread) || 0))
+      .catch(() => {});
+  }, [unlocked]);
+  useEffect(() => {
+    if (secretShown) setSecretUnread(0);
+    else refreshSecretUnread();
+  }, [secretShown, refreshSecretUnread]);
+
+  // Countdown repaint, paced by the most urgent message on screen.
+  useEffect(() => {
+    if (!secretShown) return;
+    const soonest = msgs.reduce<number | null>((min, m) => {
+      const left = remainingMs(m.expires_at);
+      return left === null ? min : min === null ? left : Math.min(min, left);
+    }, null);
+    const every = tickIntervalMs(soonest);
+    if (every === null) return;
+    const handle = setInterval(() => {
+      setNowTick((n) => n + 1);
+      // Drop anything that has run out, without waiting for a round trip. The
+      // server refuses to serve it either way; this just keeps the screen
+      // honest the instant the timer hits zero.
+      setMsgs((prev) => prev.filter((m) => remainingMs(m.expires_at) !== 0));
+    }, every);
+    return () => clearInterval(handle);
+  }, [secretShown, msgs]);
 
   // Live delivery. Ignore our own echo (we add ours optimistically) and dedupe
   // by id defensively.
   useCoupleEvent('message.created', (m: Message) => {
     if (!m?.id || m.sender_id === user?.id) return;
+    if (secretShown) return; // not this thread
     setMsgs((prev) => (prev.some((x) => x.id === m.id) ? prev : [m, ...prev]));
     markSeen();
   });
+
+  // Secret events carry NO content (see api/_routes/secret-chat.ts): a partner
+  // who has not unlocked is still subscribed to this channel, so the body must
+  // not ride the wire. Unlocked and looking at it? Refetch. Otherwise just move
+  // the unread mark, which says nothing.
+  useCoupleEvent('secret.message.created', (d: { id?: string; sender_id?: string }) => {
+    if (!d?.id || d.sender_id === user?.id) return;
+    if (secretShown) load().catch(() => {});
+    else setSecretUnread((n) => n + 1);
+  });
+  useCoupleEvent('secret.message.deleted', (d: { id?: string }) => {
+    if (!d?.id || !secretShown) return;
+    setMsgs((prev) => prev.filter((m) => m.id !== d.id));
+    setActionsFor((cur) => (cur?.id === d.id ? null : cur));
+    setReplyTo((cur) => (cur?.id === d.id ? null : cur));
+  });
+  useCoupleEvent('secret.message.kept', (d: { id?: string }) => {
+    if (!d?.id || !secretShown) return;
+    load().catch(() => {});
+  });
+  useCoupleEvent('secret.ttl.changed', () => {
+    if (secretShown) load().catch(() => {});
+  });
+  useCoupleEvent('secret.chat.seen', (d: { by?: string; at?: string }) => {
+    if (secretShown && d?.by && d.by === partner?.id && d.at) setPartnerSeen(d.at);
+  });
   // The partner opened the thread: light up our "Seen" receipt.
   useCoupleEvent('chat.seen', (d: { by?: string; at?: string }) => {
-    if (d?.by && d.by === partner?.id && d.at) setPartnerSeen(d.at);
+    if (!secretShown && d?.by && d.by === partner?.id && d.at) setPartnerSeen(d.at);
   });
   // A reaction was set or cleared, by either of us (own echo just re-applies
   // the same state, which is harmless). id-only over the wire, settled here.
   useCoupleEvent('message.reacted', (d: { message_id?: string; user_id?: string; emoji?: string | null }) => {
-    if (!d?.message_id || !d.user_id) return;
+    if (!d?.message_id || !d.user_id || secretShown) return;
     setMsgs((prev) => prev.map((m) => (m.id === d.message_id ? applyReaction(m, d.user_id!, d.emoji ?? null) : m)));
   });
   useCoupleEvent('message.deleted', (d: { id?: string }) => {
-    if (!d?.id) return;
+    if (!d?.id || secretShown) return;
     setMsgs((prev) => prev.filter((m) => m.id !== d.id));
     setActionsFor((cur) => (cur?.id === d.id ? null : cur));
     setReplyTo((cur) => (cur?.id === d.id ? null : cur));
@@ -271,8 +417,8 @@ export default function Chat() {
     setLoadingMore(true);
     const oldest = msgs[msgs.length - 1].created_at;
     try {
-      const data = await api<{ messages: Message[]; hasMore: boolean }>(
-        `/api/messages?before=${encodeURIComponent(oldest)}`
+      const data = await call<{ messages: Message[]; hasMore: boolean }>(
+        `?before=${encodeURIComponent(oldest)}`
       );
       setMsgs((prev) => [...prev, ...data.messages.slice().reverse()]);
       setHasMore(data.hasMore);
@@ -307,11 +453,17 @@ export default function Chat() {
       audio_waveform: opts.audio?.waveform ?? null,
       reply_to_id: quoted?.id ?? null,
       created_at: new Date().toISOString(),
+      // Optimistically show the timer this message is about to get, so the
+      // countdown does not pop into existence a moment after it appears.
+      expires_at:
+        secretShown && ttl && ttl.seconds > 0
+          ? new Date(Date.now() + ttl.seconds * 1000).toISOString()
+          : null,
       pending: true,
     };
     setMsgs((prev) => [temp, ...prev]);
     try {
-      const { message } = await api<{ message: Message }>('/api/messages', {
+      const { message } = await call<{ message: Message }>('', {
         method: 'POST',
         body: {
           body: bodyText || undefined,
@@ -413,10 +565,66 @@ export default function Chat() {
     setActionsFor(null);
     setMsgs((prev) => prev.filter((m) => m.id !== message.id));
     try {
-      await api(`/api/messages/${message.id}`, { method: 'DELETE' });
+      await call(`/${message.id}`, { method: 'DELETE' });
     } catch {
       toast.show('Could not delete that. Try again.');
       load().catch(() => {});
+    }
+  };
+
+  /**
+   * Keep pauses a message's timer; un-keeping resumes it from where it was,
+   * which usually means it goes immediately (the server computes that, see
+   * unkeepExpiry). Either partner may do either: a secret both people are in is
+   * only as private as the less comfortable of the two.
+   */
+  const toggleKeep = async (message: Message) => {
+    setActionsFor(null);
+    const keeping = !message.kept_by;
+    try {
+      const res = await secretApi<{ kept_by: string | null; expires_at: string | null }>(
+        `/api/secret-chat/${message.id}`,
+        { method: 'POST', body: { action: keeping ? 'keep' : 'unkeep' } }
+      );
+      successHaptic();
+      setMsgs((prev) =>
+        prev
+          .map((m) => (m.id === message.id ? { ...m, kept_by: res.kept_by, expires_at: res.expires_at } : m))
+          .filter((m) => remainingMs(m.expires_at) !== 0)
+      );
+      toast.show(keeping ? 'Kept. This one will stay.' : 'No longer kept.');
+    } catch {
+      toast.show('Could not do that. Try again.');
+      load().catch(() => {});
+    }
+  };
+
+  const changeTimer = async (seconds: number) => {
+    setShowTimer(false);
+    try {
+      await secretApi('/api/secret-chat/settings', { method: 'POST', body: { ttlSeconds: seconds } });
+      successHaptic();
+      await load();
+    } catch {
+      toast.show('Could not change the timer. Try again.');
+    }
+  };
+
+  const openSecret = async () => {
+    tapHaptic();
+    if (unlocked) {
+      setSecret(true);
+      return;
+    }
+    try {
+      const s = await fetchCodeStatus();
+      if (s.lockedOut) {
+        toast.show(`Too many tries. Try again in ${s.waitMinutes} minutes.`);
+        return;
+      }
+      setAskCode(s.hasCode ? 'unlock' : 'set');
+    } catch {
+      toast.show('Could not open that right now.');
     }
   };
 
@@ -446,21 +654,58 @@ export default function Chat() {
     newestMine && partnerSeen && new Date(partnerSeen) >= new Date(newestMine.created_at) ? newestMine.id : null;
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={10} style={styles.back}>
-          <ChevronLeft size={24} color={colors.ink} strokeWidth={1.75} />
+    <SafeAreaView style={[styles.screen, secretShown && styles.screenSecret]} edges={['top', 'bottom']}>
+      <View style={[styles.header, secretShown && styles.headerSecret]}>
+        <Pressable
+          onPress={() => (secretShown ? setSecret(false) : router.back())}
+          hitSlop={10}
+          style={styles.back}
+        >
+          <ChevronLeft size={24} color={secretShown ? colors.onSealed : colors.ink} strokeWidth={1.75} />
         </Pressable>
         {partner ? (
           <View style={styles.headerWho}>
             <Avatar id={partner.avatar} name={partner.display_name} size={30} />
-            <Text style={text.subtitle}>{partner.display_name}</Text>
+            <Text style={[text.subtitle, secretShown && { color: colors.onSealed }]}>
+              {partner.display_name}
+            </Text>
           </View>
         ) : (
           <Text style={text.subtitle}>Chat</Text>
         )}
-        <View style={styles.back} />
+        {/* The circled corner: a labelled toggle rather than a hidden gesture.
+            Someone holding the phone can see a secret thread exists but cannot
+            open it, which is the trade we chose over plausible deniability. */}
+        {partner ? (
+          secretShown ? (
+            <Pressable onPress={() => setShowTimer(true)} hitSlop={10} style={styles.secretToggleOn}>
+              <Timer size={15} color={colors.onSealed} strokeWidth={1.75} />
+              <Text style={styles.secretToggleOnText}>{ttl?.label ?? ''}</Text>
+            </Pressable>
+          ) : (
+            <Pressable onPress={openSecret} hitSlop={10} style={styles.secretToggle}>
+              <Lock size={14} color={colors.surfaceSealed} strokeWidth={2} />
+              <Text style={styles.secretToggleText}>Secret</Text>
+              {secretUnread > 0 && <View style={styles.secretDot} />}
+            </Pressable>
+          )
+        ) : (
+          <View style={styles.back} />
+        )}
       </View>
+
+      {secretShown && (
+        <View style={styles.secretBanner}>
+          <Text style={styles.secretBannerText}>
+            {ttl && ttl.seconds > 0
+              ? `Messages here disappear after ${ttl.label.toLowerCase()}, for both of you.`
+              : 'The timer is off, so messages here stay until one of you removes them.'}
+          </Text>
+          <Text style={styles.secretBannerFine}>
+            Nobody can screenshot-proof a phone, so trust each other first.
+          </Text>
+        </View>
+      )}
 
       {!partner ? (
         <Empty line="Pair with your person to start chatting." />
@@ -487,11 +732,24 @@ export default function Chat() {
             ListEmptyComponent={
               loaded ? (
                 <View style={styles.emptyWrap}>
-                  <Text style={styles.emptyLine}>Say the first thing. A hello, a heart, a photo, anything.</Text>
+                  <Text style={[styles.emptyLine, secretShown && styles.emptyLineSecret]}>
+                    {secretShown
+                      ? 'Nothing here. Whatever you say next disappears on its own.'
+                      : 'Say the first thing. A hello, a heart, a photo, anything.'}
+                  </Text>
                 </View>
               ) : null
             }
             renderItem={({ item, index }) => {
+              // A timer notice is not anyone's message: centred chip, no bubble,
+              // no gestures. It is the record of who changed the timer and when.
+              if (item.system_text) {
+                return (
+                  <View style={styles.systemRow}>
+                    <Text style={styles.systemText}>{item.system_text}</Text>
+                  </View>
+                );
+              }
               const mine = item.sender_id === user?.id;
               const prev = msgs[index + 1]; // the OLDER neighbour (inverted list)
               const grouped = prev && prev.sender_id === item.sender_id;
@@ -503,7 +761,9 @@ export default function Chat() {
                 <View>
                   {showDay && (
                     <View style={styles.dayDivider}>
-                      <Text style={styles.dayDividerText}>{formatChatDay(item.created_at)}</Text>
+                      <Text style={[styles.dayDividerText, secretShown && styles.dayDividerTextSecret]}>
+                        {formatChatDay(item.created_at)}
+                      </Text>
                     </View>
                   )}
                   <SwipeToReply onReply={() => setReplyTo(item)} disabled={item.pending} mine={mine}>
@@ -516,11 +776,20 @@ export default function Chat() {
                       added={addedIds.has(item.id)}
                       quoted={item.reply_to_id ? msgs.find((x) => x.id === item.reply_to_id) ?? null : null}
                       quotedName={(sid) => (sid === user?.id ? 'You' : partner?.display_name ?? 'Them')}
-                      reactions={groupReactions(item.reactions ?? [], user?.id)}
+                      reactions={secretShown ? [] : groupReactions(item.reactions ?? [], user?.id)}
                       maxWidth={maxBubble}
                       imageSize={imageSize}
-                      onOpenImage={() => item.image_thumb && setViewer({ id: item.id, thumb: item.image_thumb })}
-                      onAddToTimeline={() => addToTimeline(item)}
+                      secret={secretShown}
+                      countdown={secretShown ? formatRemaining(remainingMs(item.expires_at)) : null}
+                      kept={secretShown && !!item.kept_by}
+                      onOpenImage={() =>
+                        item.image_thumb && setViewer({ id: item.id, thumb: item.image_thumb, secret: secretShown })
+                      }
+                      // "Add to timeline" copies a photo into permanent,
+                      // non-expiring storage, which is the one thing a
+                      // disappearing message must never offer. The server
+                      // refuses it too; this just never shows the button.
+                      onAddToTimeline={secretShown ? undefined : () => addToTimeline(item)}
                       onOpenActions={() => !item.pending && setActionsFor(item)}
                       onToggleReaction={(emoji) => toggleReaction(item, emoji)}
                       onJumpToQuote={item.reply_to_id ? () => jumpToMessage(item.reply_to_id!) : undefined}
@@ -531,7 +800,7 @@ export default function Chat() {
             }}
           />
           {replyTo && (
-            <View style={styles.replyBar}>
+            <View style={[styles.replyBar, secretShown && styles.replyBarSecret]}>
               <Reply size={15} color={colors.accent} strokeWidth={1.75} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.replyBarName}>
@@ -564,7 +833,7 @@ export default function Chat() {
               onSend={sendRecording}
             />
           ) : (
-            <View style={styles.composer}>
+            <View style={[styles.composer, secretShown && styles.composerSecret]}>
               <Pressable onPress={pickImage} hitSlop={8} style={styles.imageBtn}>
                 <ImagePlus size={22} color={colors.accent} strokeWidth={1.75} />
               </Pressable>
@@ -575,9 +844,9 @@ export default function Chat() {
                   if (t.trim()) notifyTyping();
                   else clearTyping();
                 }}
-                placeholder="Message"
-                placeholderTextColor={colors.inkFaint}
-                style={styles.input}
+                placeholder={secretShown ? 'Just between us' : 'Message'}
+                placeholderTextColor={secretShown ? 'rgba(249, 239, 220, 0.45)' : colors.inkFaint}
+                style={[styles.input, secretShown && styles.inputSecret]}
                 multiline
                 onSubmitEditing={() => sendMessage({ body: input })}
                 blurOnSubmit={false}
@@ -602,6 +871,8 @@ export default function Chat() {
         visible={!!actionsFor}
         message={actionsFor}
         mine={actionsFor?.sender_id === user?.id}
+        secret={secretShown}
+        onToggleKeep={() => actionsFor && toggleKeep(actionsFor)}
         onClose={() => setActionsFor(null)}
         onReply={() => {
           if (actionsFor) setReplyTo(actionsFor);
@@ -625,7 +896,172 @@ export default function Chat() {
           setReactFor(null);
         }}
       />
+      <CodeSheet
+        mode={askCode}
+        onClose={() => setAskCode(null)}
+        onDone={() => {
+          setAskCode(null);
+          setSecret(true);
+        }}
+      />
+      <TimerSheet
+        visible={showTimer}
+        current={ttl?.seconds ?? null}
+        options={ttl?.options ?? []}
+        onClose={() => setShowTimer(false)}
+        onPick={changeTimer}
+        onLock={() => {
+          setShowTimer(false);
+          setSecret(false);
+          lockSecret();
+        }}
+      />
     </SafeAreaView>
+  );
+}
+
+/**
+ * The lock screen, in both its shapes: entering a code you already have, and
+ * setting one for the first time.
+ *
+ * Setting one asks for the ACCOUNT password too, and that is not padding: a
+ * code set without it would let anyone holding an unlocked phone put their own
+ * lock on their partner's secret thread. The same form is the reset path in
+ * Settings, so there is one way to change this and it always proves the account.
+ */
+function CodeSheet({
+  mode,
+  onClose,
+  onDone,
+}: {
+  mode: null | 'unlock' | 'set';
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [code, setCode] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setCode('');
+    setConfirm('');
+    setPassword('');
+    setError(null);
+  }, [mode]);
+
+  const setting = mode === 'set';
+
+  const submit = async () => {
+    setError(null);
+    if (!/^\d{4}$/.test(code)) {
+      setError('Your code needs to be 4 digits.');
+      return;
+    }
+    if (setting && code !== confirm) {
+      setError('Those two codes are not the same.');
+      return;
+    }
+    setBusy(true);
+    try {
+      if (setting) await saveCode(password, code);
+      else await unlockSecret(code);
+      successHaptic();
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Something went wrong. Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Sheet visible={!!mode} onClose={onClose} title={setting ? 'Make a secret chat' : 'Secret chat'}>
+      <Text style={[text.body, { color: colors.inkMuted, marginBottom: sp.lg }]}>
+        {setting
+          ? 'Pick a 4-digit code. You will need it every time you open the secret chat, and only you know it. Your person sets their own.'
+          : 'Enter your 4-digit code.'}
+      </Text>
+      <TextInput
+        value={code}
+        onChangeText={(t) => setCode(t.replace(/\D/g, '').slice(0, 4))}
+        placeholder="••••"
+        placeholderTextColor={colors.inkFaint}
+        keyboardType="number-pad"
+        secureTextEntry
+        style={styles.codeInput}
+        autoFocus
+      />
+      {setting && (
+        <>
+          <TextInput
+            value={confirm}
+            onChangeText={(t) => setConfirm(t.replace(/\D/g, '').slice(0, 4))}
+            placeholder="Type it again"
+            placeholderTextColor={colors.inkFaint}
+            keyboardType="number-pad"
+            secureTextEntry
+            style={styles.codeInput}
+          />
+          <TextInput
+            value={password}
+            onChangeText={setPassword}
+            placeholder="Your account password"
+            placeholderTextColor={colors.inkFaint}
+            secureTextEntry
+            autoComplete="current-password"
+            style={styles.codePassword}
+          />
+        </>
+      )}
+      {error && <Text style={styles.codeError}>{error}</Text>}
+      <PrimaryButton
+        title={busy ? 'One moment…' : setting ? 'Create it' : 'Open'}
+        onPress={submit}
+        disabled={busy}
+        style={{ marginTop: sp.lg }}
+      />
+      {!setting && (
+        <Text style={styles.codeHelp}>
+          Forgotten it? You can set a new one in Settings, under Privacy, with your account password.
+        </Text>
+      )}
+    </Sheet>
+  );
+}
+
+/** The timer, plus the way out. Either partner may change it, and the change is announced in the thread. */
+function TimerSheet({
+  visible,
+  current,
+  options,
+  onClose,
+  onPick,
+  onLock,
+}: {
+  visible: boolean;
+  current: number | null;
+  options: TtlOption[];
+  onClose: () => void;
+  onPick: (seconds: number) => void;
+  onLock: () => void;
+}) {
+  return (
+    <Sheet visible={visible} onClose={onClose} title="Disappearing messages">
+      <Text style={[text.body, { color: colors.inkMuted, marginBottom: sp.lg }]}>
+        New messages get whatever you choose here. Anything already sent keeps the timer it was sent with.
+      </Text>
+      {options.map((o) => (
+        <Pressable key={o.seconds} style={styles.actionRow} onPress={() => onPick(o.seconds)}>
+          <Timer size={19} color={o.seconds === current ? colors.accent : colors.ink} strokeWidth={1.75} />
+          <Text style={[text.body, o.seconds === current && { color: colors.accent, fontWeight: '600' }]}>
+            {o.label}
+          </Text>
+        </Pressable>
+      ))}
+      <SecondaryButton title="Lock the secret chat" onPress={onLock} style={{ marginTop: sp.lg }} />
+    </Sheet>
   );
 }
 
@@ -685,19 +1121,24 @@ function MessageActionsSheet({
   visible,
   message,
   mine,
+  secret,
   onClose,
   onReply,
   onQuickReact,
   onOpenFullPicker,
+  onToggleKeep,
   onDelete,
 }: {
   visible: boolean;
   message: Message | null;
   mine: boolean;
+  /** In the secret thread: no reactions, a Keep toggle, and delete open to both. */
+  secret: boolean;
   onClose: () => void;
   onReply: () => void;
   onQuickReact: (emoji: string) => void;
   onOpenFullPicker: () => void;
+  onToggleKeep: () => void;
   onDelete: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -720,26 +1161,53 @@ function MessageActionsSheet({
         </View>
       ) : (
         <View>
-          <View style={styles.quickReactRow}>
-            {QUICK_REACTIONS.map((e) => (
-              <Pressable
-                key={e}
-                onPress={() => onQuickReact(e)}
-                hitSlop={4}
-                style={[styles.quickReactCell, e === myReaction && styles.quickReactCellActive]}
-              >
-                <Text style={styles.quickReactEmoji}>{e}</Text>
+          {/* No reactions in the secret thread: a reaction emoji is stored in
+              its own row, unsealed, and would outlive the message it was left
+              on. Encrypting it under that message's key is the honest fix, and
+              is worth doing before this comes back. */}
+          {!secret && (
+            <View style={styles.quickReactRow}>
+              {QUICK_REACTIONS.map((e) => (
+                <Pressable
+                  key={e}
+                  onPress={() => onQuickReact(e)}
+                  hitSlop={4}
+                  style={[styles.quickReactCell, e === myReaction && styles.quickReactCellActive]}
+                >
+                  <Text style={styles.quickReactEmoji}>{e}</Text>
+                </Pressable>
+              ))}
+              <Pressable onPress={onOpenFullPicker} hitSlop={4} style={styles.quickReactPlus}>
+                <Plus size={18} color={colors.ink} strokeWidth={1.75} />
               </Pressable>
-            ))}
-            <Pressable onPress={onOpenFullPicker} hitSlop={4} style={styles.quickReactPlus}>
-              <Plus size={18} color={colors.ink} strokeWidth={1.75} />
-            </Pressable>
-          </View>
-          <Pressable style={[styles.actionRow, !mine && { borderBottomWidth: 0 }]} onPress={onReply}>
+            </View>
+          )}
+          <Pressable style={styles.actionRow} onPress={onReply}>
             <Reply size={19} color={colors.ink} strokeWidth={1.75} />
             <Text style={text.body}>Reply</Text>
           </Pressable>
-          {mine && (
+          {secret && (
+            <Pressable style={styles.actionRow} onPress={onToggleKeep}>
+              {message?.kept_by ? (
+                <PinOff size={19} color={colors.ink} strokeWidth={1.75} />
+              ) : (
+                <Pin size={19} color={colors.ink} strokeWidth={1.75} />
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={text.body}>{message?.kept_by ? 'Stop keeping this' : 'Keep this message'}</Text>
+                <Text style={styles.actionCaption}>
+                  {message?.kept_by
+                    ? 'It goes back on its timer, which has probably already run out.'
+                    : 'It stays until one of you removes it.'}
+                </Text>
+              </View>
+            </Pressable>
+          )}
+          {/* Secret messages can be removed by EITHER of you. A secret two
+              people are in is only as private as the less comfortable of the
+              two, so consent to keep it has to be ongoing, not just the
+              sender's. Everywhere else the app's own-content rule still holds. */}
+          {(mine || secret) && (
             <Pressable style={[styles.actionRow, { borderBottomWidth: 0 }]} onPress={() => setConfirming(true)}>
               <Trash2 size={19} color={colors.danger} strokeWidth={1.75} />
               <Text style={[text.body, { color: colors.danger }]}>Delete</Text>
@@ -841,6 +1309,9 @@ function Bubble({
   reactions,
   maxWidth,
   imageSize,
+  secret,
+  countdown,
+  kept,
   onOpenImage,
   onAddToTimeline,
   onOpenActions,
@@ -862,8 +1333,14 @@ function Bubble({
   maxWidth: number;
   /** The image frame, sized from maxWidth so photos end where text does. */
   imageSize: { width: number; height: number };
+  /** In the secret thread: swaps the "theirs" bubble onto the darker ground. */
+  secret: boolean;
+  /** "23h" / "45s" / null when this one is kept or the timer was off. */
+  countdown: string | null;
+  kept: boolean;
   onOpenImage: () => void;
-  onAddToTimeline: () => void;
+  /** Absent in the secret thread: nothing there may be copied into permanent storage. */
+  onAddToTimeline?: () => void;
   /** A tap on the bubble opens the React / Reply / Delete sheet (the small ✦ mark is the hint). */
   onOpenActions: () => void;
   onToggleReaction: (emoji: string) => void;
@@ -873,6 +1350,9 @@ function Bubble({
   const hasImage = !!message.image_thumb;
   const hasAudio = !!message.has_audio;
   const voiceWidth = bubbleVoiceWidth(maxWidth);
+  // In the secret thread BOTH bubbles sit on a dark ground, so text that is
+  // normally ink-on-parchment has to flip for "theirs" as well as "mine".
+  const onDark = mine || secret;
   return (
     <View
       style={[
@@ -892,6 +1372,9 @@ function Bubble({
           style={[
             styles.bubble,
             mine ? styles.bubbleMine : styles.bubbleTheirs,
+            // On the secret thread's dark ground a parchment bubble would glare,
+            // so "theirs" moves to a raised tone of the same ground instead.
+            secret && !mine && styles.bubbleTheirsSecret,
             hasImage && styles.bubbleWithImage,
             noSelect,
           ]}
@@ -908,10 +1391,10 @@ function Bubble({
               disabled={!onJumpToQuote}
               style={[styles.quote, mine ? styles.quoteMine : styles.quoteTheirs, { width: bubbleQuoteWidth(maxWidth) }]}
             >
-              <Text style={[styles.quoteName, mine && { color: colors.onSealed }, noSelect]} numberOfLines={1}>
+              <Text style={[styles.quoteName, onDark && { color: colors.onSealed }, noSelect]} numberOfLines={1}>
                 {quoted ? quotedName(quoted.sender_id) : 'Earlier'}
               </Text>
-              <Text style={[styles.quoteBody, mine && { color: colors.onSealed, opacity: 0.75 }, noSelect]} numberOfLines={1}>
+              <Text style={[styles.quoteBody, onDark && { color: colors.onSealed, opacity: 0.75 }, noSelect]} numberOfLines={1}>
                 {quoted ? previewText(quoted) : 'An earlier message'}
               </Text>
             </Pressable>
@@ -929,7 +1412,8 @@ function Bubble({
           {hasAudio && (
             <VoiceBubble
               messageId={message.id}
-              mine={mine}
+              onDark={onDark}
+              secret={secret}
               pending={!!message.pending}
               waveform={message.audio_waveform ?? []}
               durationMs={message.audio_duration_ms ?? 0}
@@ -945,21 +1429,36 @@ function Bubble({
                 // the caption gets that width to wrap inside rather than widening it.
                 hasImage && { marginTop: sp.sm, width: imageSize.width },
                 hasAudio && { marginTop: sp.sm, width: voiceWidth },
-                mine && { color: colors.onSealed },
+                onDark && { color: colors.onSealed },
                 noSelect,
               ]}
-              linkColor={mine ? colors.onSealed : colors.accent}
+              linkColor={onDark ? colors.onSealed : colors.accent}
             />
           ) : null}
           <View style={styles.bubbleFooter}>
             {/* The hint that tapping this bubble opens the actions sheet, in
                 the app's own decorative mark rather than a floating UI icon. */}
-            <Text style={[styles.tapHint, mine ? { color: 'rgba(249, 239, 220, 0.55)' } : { color: colors.accent }]}>
+            <Text style={[styles.tapHint, onDark ? { color: 'rgba(249, 239, 220, 0.55)' } : { color: colors.accent }]}>
               ✦
             </Text>
-            <Text style={[styles.time, mine ? { color: colors.onSealed } : { color: colors.inkFaint }, noSelect]}>
+            <Text style={[styles.time, onDark ? { color: colors.onSealed } : { color: colors.inkFaint }, noSelect]}>
               {message.pending ? 'Sending…' : formatTime(message.created_at)}
             </Text>
+            {/* Secret thread only: how long this one has left, or a pin when it
+                has been kept out of the timer's way. */}
+            {kept ? (
+              <Pin size={11} color={onDark ? colors.onSealed : colors.accent} strokeWidth={2} />
+            ) : countdown ? (
+              <Text
+                style={[
+                  styles.countdown,
+                  onDark ? { color: 'rgba(249, 239, 220, 0.72)' } : { color: colors.accent },
+                  noSelect,
+                ]}
+              >
+                {countdown}
+              </Text>
+            ) : null}
           </View>
         </Pressable>
         {reactions.length > 0 && (
@@ -976,7 +1475,7 @@ function Bubble({
             ))}
           </View>
         )}
-        {hasImage && !message.pending && (
+        {hasImage && !message.pending && onAddToTimeline && (
           <Pressable onPress={onAddToTimeline} hitSlop={6} style={styles.addRow} disabled={added}>
             <ImageDown size={13} color={added ? colors.positive : colors.inkMuted} strokeWidth={1.75} />
             <Text style={[styles.addText, added && { color: colors.positive }]}>
@@ -999,14 +1498,17 @@ function Bubble({
  */
 function VoiceBubble({
   messageId,
-  mine,
+  onDark,
+  secret,
   pending,
   waveform,
   durationMs,
   width,
 }: {
   messageId: string;
-  mine: boolean;
+  /** True whenever this bubble sits on a dark ground (mine anywhere, or anything in the secret thread). */
+  onDark: boolean;
+  secret: boolean;
   pending: boolean;
   waveform: number[];
   durationMs: number;
@@ -1031,7 +1533,12 @@ function VoiceBubble({
     }
     setLoading(true);
     try {
-      const data = await api<{ audio_data: string | null }>(`/api/messages/${messageId}`);
+      // The full clip lives behind whichever thread it belongs to; the secret
+      // one needs the unlock grant, and its audio is sealed under the message's
+      // own key, so it cannot be served by the ordinary endpoint at all.
+      const data = secret
+        ? await secretApi<{ audio_data: string | null }>(`/api/secret-chat/${messageId}`)
+        : await api<{ audio_data: string | null }>(`/api/messages/${messageId}`);
       if (data.audio_data) setAudioUri(data.audio_data);
     } catch {
       // no toast here: the play button just stays tappable to retry
@@ -1049,18 +1556,19 @@ function VoiceBubble({
   // "unplayed" needs real contrast against the bubble fill too, not just a
   // 1px-border-strength tint (colors.hairline, tried first, was so faint at
   // this size it read as an almost-invisible dotted line, the reported bug).
-  const barColor = mine ? 'rgba(249, 239, 220, 0.95)' : colors.surfaceSealed;
-  const barColorFaint = mine ? 'rgba(249, 239, 220, 0.5)' : colors.inkFaint;
+  const barColor = onDark ? 'rgba(249, 239, 220, 0.95)' : colors.surfaceSealed;
+  const barColorFaint = onDark ? 'rgba(249, 239, 220, 0.5)' : colors.inkFaint;
+  const controlColor = onDark ? colors.onSealed : colors.accent;
 
   return (
     <View style={[styles.voiceRow, { width }]}>
-      <Pressable onPress={onToggle} hitSlop={8} style={[styles.voicePlayBtn, mine && styles.voicePlayBtnMine]}>
+      <Pressable onPress={onToggle} hitSlop={8} style={[styles.voicePlayBtn, onDark && styles.voicePlayBtnMine]}>
         {loading ? (
-          <ActivityIndicator size="small" color={mine ? colors.onSealed : colors.accent} />
+          <ActivityIndicator size="small" color={controlColor} />
         ) : status.playing ? (
-          <Pause size={15} color={mine ? colors.onSealed : colors.accent} strokeWidth={1.75} />
+          <Pause size={15} color={controlColor} strokeWidth={1.75} />
         ) : (
-          <Play size={15} color={mine ? colors.onSealed : colors.accent} strokeWidth={1.75} />
+          <Play size={15} color={controlColor} strokeWidth={1.75} />
         )}
       </Pressable>
       <View style={styles.voiceBars}>
@@ -1077,22 +1585,31 @@ function VoiceBubble({
           />
         ))}
       </View>
-      <Text style={[styles.voiceDuration, mine && { color: colors.onSealed }]}>{formatClipDuration(durationMs)}</Text>
+      <Text style={[styles.voiceDuration, onDark && { color: colors.onSealed }]}>{formatClipDuration(durationMs)}</Text>
     </View>
   );
 }
 
 /** Full-screen image viewer: fetches the full-resolution image for real messages. */
-function ImageViewer({ viewer, onClose }: { viewer: { id: string; thumb: string | null } | null; onClose: () => void }) {
+function ImageViewer({
+  viewer,
+  onClose,
+}: {
+  viewer: { id: string; thumb: string | null; secret: boolean } | null;
+  onClose: () => void;
+}) {
   const [full, setFull] = useState<string | null>(null);
 
   useEffect(() => {
     setFull(null);
     if (!viewer || viewer.id.startsWith('temp-')) return;
-    api<{ image_data: string | null }>(`/api/messages/${viewer.id}`)
-      .then((d) => setFull(d.image_data))
-      .catch(() => {});
-  }, [viewer?.id]);
+    // Same split as the voice clip: a secret photo is sealed under its own
+    // message key and only the gated route can open it.
+    const fetchFull = viewer.secret
+      ? secretApi<{ image_data: string | null }>(`/api/secret-chat/${viewer.id}`)
+      : api<{ image_data: string | null }>(`/api/messages/${viewer.id}`);
+    fetchFull.then((d) => setFull(d.image_data)).catch(() => {});
+  }, [viewer?.id, viewer?.secret]);
 
   if (!viewer) return null;
   const uri = full ?? viewer.thumb;
@@ -1117,6 +1634,107 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.surface,
   },
+  /* ---- Secret thread ------------------------------------------------------
+     No new palette: the secret thread borrows the app's existing SEALED
+     surface, the same oxblood the wax-seal cards and "mine" bubbles already
+     use. It reads as unmistakably a different room without inventing a colour,
+     which the design system does not allow anyway. */
+  screenSecret: { backgroundColor: colors.surfaceSealed },
+  headerSecret: { borderBottomColor: 'rgba(249, 239, 220, 0.18)' },
+  secretToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: sp.sm,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.surfaceRaised,
+  },
+  secretToggleText: { ...text.micro, color: colors.surfaceSealed, fontWeight: '600' },
+  secretDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.accent,
+  },
+  secretToggleOn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: sp.sm,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(249, 239, 220, 0.35)',
+  },
+  secretToggleOnText: { ...text.micro, color: colors.onSealed, fontWeight: '600' },
+  secretBanner: {
+    paddingHorizontal: sp.base,
+    paddingVertical: sp.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(249, 239, 220, 0.14)',
+  },
+  secretBannerText: { ...text.micro, color: 'rgba(249, 239, 220, 0.78)', textAlign: 'center' },
+  secretBannerFine: {
+    ...text.micro,
+    color: 'rgba(249, 239, 220, 0.45)',
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  bubbleTheirsSecret: {
+    backgroundColor: 'rgba(249, 239, 220, 0.13)',
+    borderColor: 'rgba(249, 239, 220, 0.16)',
+  },
+  countdown: { ...text.micro, fontWeight: '600', marginLeft: 2 },
+  systemRow: { alignItems: 'center', marginVertical: sp.md, paddingHorizontal: sp.base },
+  systemText: {
+    ...text.micro,
+    color: 'rgba(249, 239, 220, 0.62)',
+    textAlign: 'center',
+    backgroundColor: 'rgba(249, 239, 220, 0.10)',
+    paddingHorizontal: sp.md,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    overflow: 'hidden',
+  },
+  actionCaption: { ...text.micro, color: colors.inkFaint, marginTop: 2 },
+  codeInput: {
+    ...text.title,
+    color: colors.ink,
+    textAlign: 'center',
+    letterSpacing: 12,
+    paddingVertical: sp.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairline,
+    marginBottom: sp.md,
+    ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : null),
+  },
+  codePassword: {
+    ...text.body,
+    color: colors.ink,
+    paddingVertical: sp.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairline,
+    ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as any) : null),
+  },
+  codeError: { ...text.caption, color: colors.danger, marginTop: sp.md },
+  codeHelp: { ...text.micro, color: colors.inkFaint, marginTop: sp.md, textAlign: 'center' },
+  // Chrome that normally sits on parchment and has to flip on the dark ground.
+  composerSecret: { borderTopColor: 'rgba(249, 239, 220, 0.16)' },
+  inputSecret: {
+    backgroundColor: 'rgba(249, 239, 220, 0.12)',
+    borderColor: 'rgba(249, 239, 220, 0.20)',
+    color: colors.onSealed,
+  },
+  dayDividerTextSecret: {
+    color: 'rgba(249, 239, 220, 0.72)',
+    backgroundColor: 'rgba(249, 239, 220, 0.10)',
+    borderColor: 'rgba(249, 239, 220, 0.16)',
+  },
+  emptyLineSecret: { color: 'rgba(249, 239, 220, 0.72)' },
+  replyBarSecret: { borderTopColor: 'rgba(249, 239, 220, 0.16)' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

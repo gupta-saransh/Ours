@@ -21,7 +21,10 @@ export function apiUrl(path: string) {
 
 export async function api<T = any>(
   path: string,
-  opts: { method?: string; body?: unknown } = {}
+  // `headers` exists for the secret-chat unlock grant (X-Secret-Token), which is
+  // a separate, short-lived credential from the session Bearer and is
+  // deliberately never held in this module: see src/lib/secretChat.ts.
+  opts: { method?: string; body?: unknown; headers?: Record<string, string> } = {}
 ): Promise<T> {
   const method = opts.method ?? 'GET';
   const startedAt = Date.now();
@@ -32,6 +35,7 @@ export async function api<T = any>(
       headers: {
         'Content-Type': 'application/json',
         ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        ...(opts.headers ?? {}),
       },
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
     });

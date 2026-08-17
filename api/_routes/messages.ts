@@ -35,6 +35,25 @@ import { errorFields, log } from '../_lib/log';
  * a photo to the timeline is a memory, so that one does.
  */
 
+/**
+ * Every query here excludes the secret thread (v26). The filter is applied
+ * through this helper rather than inlined because a deploy that lands before
+ * `npm run migrate` has no `secret` column, and chat is the one feature that
+ * must not 500 in that window. Retrying without the filter is SAFE in exactly
+ * that case: with no column there are no secret messages to leak. Any error
+ * that is not "undefined column" is rethrown untouched.
+ */
+const UNDEFINED_COLUMN = '42703';
+
+async function withoutSecret<T>(build: (filter: string) => string, params: unknown[], run: (sql: string, p: unknown[]) => Promise<T>): Promise<T> {
+  try {
+    return await run(build('AND NOT secret'), params);
+  } catch (err) {
+    if ((err as { code?: string })?.code !== UNDEFINED_COLUMN) throw err;
+    return await run(build(''), params);
+  }
+}
+
 const PAGE = 40;
 const MAX_EMOJI_LEN = 16;
 /** ~2MB decoded at 64kbps mono for a 3-minute clip, generous headroom either side. */
@@ -72,12 +91,19 @@ interface ReactionRow {
 
 async function unreadCount(coupleId: string, userId: string): Promise<number> {
   const seen = await one<{ chat_seen_at: string }>('SELECT chat_seen_at FROM users WHERE id = $1', [userId]);
-  const row = await one<{ n: number }>(
-    `SELECT count(*)::int AS n FROM messages
-     WHERE couple_id = $1 AND sender_id != $2 AND created_at > $3`,
-    [coupleId, userId, seen?.chat_seen_at ?? new Date(0).toISOString()]
+  // ::INT4, not ::INT. CockroachDB's INT *is* INT8, which the pg driver returns
+  // as a STRING to preserve precision, so `count(*)::int` was yielding '3'
+  // rather than 3 (verified against the real database). It happened to work
+  // because the only consumer compares `> 0`, but any arithmetic on it would
+  // have concatenated instead of added. INT4 is the only cast that changes the
+  // wire type here; Number() covers a plain-Postgres deployment too.
+  const row = await withoutSecret<{ n: number | string } | undefined>(
+    (secretFilter) => `SELECT count(*)::INT4 AS n FROM messages
+     WHERE couple_id = $1 AND sender_id != $2 AND created_at > $3 ${secretFilter}`,
+    [coupleId, userId, seen?.chat_seen_at ?? new Date(0).toISOString()],
+    (sql, p) => one<{ n: number | string }>(sql, p)
   );
-  return row?.n ?? 0;
+  return Number(row?.n ?? 0) || 0;
 }
 
 async function partnerSeenAt(coupleId: string, userId: string): Promise<string | null> {
@@ -102,7 +128,11 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
       image_thumb: string | null;
       audio_data: string | null;
     }>(
-      'SELECT sender_id, image_data, image_thumb, audio_data FROM messages WHERE id = $1 AND couple_id = $2',
+      // `AND NOT secret` is what keeps every single-message operation (full
+      // image fetch, delete, react, and above all to-timeline, which copies a
+      // photo into permanent non-expiring storage) off the secret thread.
+      // Secret messages have their own route with its own unlock check.
+      'SELECT sender_id, image_data, image_thumb, audio_data FROM messages WHERE id = $1 AND couple_id = $2 AND NOT secret',
       [id, cid]
     );
     if (!msg) throw new HttpError(404, 'Message not found');
@@ -221,7 +251,12 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
     // renders the quote from its own copy of the thread.
     let replyToId: string | null = null;
     if (typeof req.body?.replyToId === 'string' && req.body.replyToId) {
-      const target = await one('SELECT id FROM messages WHERE id = $1 AND couple_id = $2', [req.body.replyToId, cid]);
+      // A normal message may only quote another normal one: without `NOT
+      // secret` a quote preview would carry secret content into this thread.
+      const target = await one('SELECT id FROM messages WHERE id = $1 AND couple_id = $2 AND NOT secret', [
+        req.body.replyToId,
+        cid,
+      ]);
       if (!target) throw new HttpError(404, 'That message is gone');
       replyToId = req.body.replyToId;
     }
@@ -291,15 +326,16 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
 
   // ---- List (ascending, oldest to newest, capped at PAGE; older via ?before=) ----
   const before = typeof req.query.before === 'string' && req.query.before ? req.query.before : null;
-  const rows = await q<Row>(
-    `SELECT id, sender_id, body, body_ct, image_thumb, (image_data IS NOT NULL) AS has_image,
+  const rows = await withoutSecret<Row[]>(
+    (secretFilter) => `SELECT id, sender_id, body, body_ct, image_thumb, (image_data IS NOT NULL) AS has_image,
             (audio_data IS NOT NULL) AS has_audio, audio_mime, audio_duration_ms, audio_waveform,
             reply_to_id, created_at::STRING AS created_at
      FROM messages
-     WHERE couple_id = $1 ${before ? 'AND created_at < $2' : ''}
+     WHERE couple_id = $1 ${secretFilter} ${before ? 'AND created_at < $2' : ''}
      ORDER BY created_at DESC
      LIMIT ${PAGE}`,
-    before ? [cid, before] : [cid]
+    before ? [cid, before] : [cid],
+    (sql, p) => q<Row>(sql, p)
   );
   const hasMore = rows.length === PAGE;
   const decoded = await Promise.all(

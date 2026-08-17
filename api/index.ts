@@ -45,6 +45,8 @@ import todos from './_routes/todos';
 import todoItem from './_routes/todo-item';
 import thumbKiss from './_routes/thumb-kiss';
 import pictureNight from './_routes/picture-night';
+import secretChat from './_routes/secret-chat';
+import secretCode from './_routes/secret-code';
 
 type Handler = (req: VercelRequest, res: VercelResponse) => Promise<void>;
 
@@ -108,6 +110,16 @@ const routes: Partial<Record<string, Handler>> = {
   'todos/:id': todoItem,
   'thumb-kiss': thumbKiss,
   'picture-night': pictureNight,
+  // Secret chat keeps everything to two path segments on purpose: the router
+  // below only resolves `a/b` and `a/:id`, so `secret/chat/:id` would never
+  // match. Hyphenated first segment, same shape as messages/messages/:id.
+  'secret-chat': secretChat,
+  'secret-chat/seen': secretChat,
+  'secret-chat/unread': secretChat,
+  'secret-chat/settings': secretChat,
+  'secret-chat/:id': secretChat,
+  'secret-code': secretCode,
+  'secret-code/unlock': secretCode,
 };
 
 function pathSegments(req: VercelRequest): string[] {

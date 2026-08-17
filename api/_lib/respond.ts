@@ -54,7 +54,10 @@ export function route(methods: string[], handler: Handler): Handler {
 
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', [...methods, 'OPTIONS'].join(', '));
-    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    // X-Secret-Token is the short-lived secret-chat unlock token (secret-session.ts).
+    // It rides its OWN header rather than Authorization, which already carries
+    // the 30-day session Bearer; the two are separate grants and must stay so.
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Secret-Token');
     res.setHeader('X-Request-Id', ctx.requestId);
 
     // Preflights carry no signal; answer and stay out of the log.

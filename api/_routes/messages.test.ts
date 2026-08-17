@@ -287,3 +287,65 @@ describe('GET /api/messages (list) — reactions attached', () => {
     expect(res.body.messages[0].reactions).toEqual([{ user_id: 'user-B', emoji: '👍' }]);
   });
 });
+
+/**
+ * The wall between the two threads (v26). The secret thread has its own route
+ * with its own unlock check; what matters here is that NOTHING in the ordinary
+ * one can reach a secret row, whatever else changes about it. A missed filter
+ * on any of these would put disappearing content into the permanent thread,
+ * which is the exact failure this feature cannot have.
+ */
+describe('secret messages never surface through /api/messages', () => {
+  beforeEach(() => {
+    h.calls.length = 0;
+    h.qResults = [];
+  });
+
+  it('excludes them from the list', async () => {
+    const res = makeRes();
+    await handler({ method: 'GET', url: '/api/messages', query: {}, headers: {}, body: {} } as any, res);
+    const list = h.calls.find((c) => c.text.includes('FROM messages') && c.text.includes('ORDER BY created_at DESC'));
+    expect(list!.text).toContain('AND NOT secret');
+  });
+
+  it('excludes them from the unread count', async () => {
+    const res = makeRes();
+    await handler({ method: 'GET', url: '/api/messages/unread', query: {}, headers: {}, body: {} } as any, res);
+    const count = h.calls.find((c) => c.text.includes('count(*)'));
+    expect(count!.text).toContain('AND NOT secret');
+  });
+
+  it('excludes them from every single-message operation, to-timeline above all', async () => {
+    const res = makeRes();
+    await handler(
+      { method: 'POST', url: '/api/messages/m1', query: { id: 'm1' }, headers: {}, body: { action: 'to-timeline' } } as any,
+      res
+    );
+    const lookup = h.calls.find((c) => c.text.startsWith('SELECT sender_id, image_data'));
+    expect(lookup!.text).toContain('AND NOT secret');
+  });
+
+  it('will not let a normal message quote a secret one', async () => {
+    const res = makeRes();
+    await handler(
+      { method: 'POST', url: '/api/messages', query: {}, headers: {}, body: { body: 'hi', replyToId: 'm-secret' } } as any,
+      res
+    );
+    const lookup = h.calls.find((c) => c.text.startsWith('SELECT id FROM messages WHERE id = $1'));
+    expect(lookup!.text).toContain('AND NOT secret');
+  });
+
+  it('falls back cleanly on a deploy that has not migrated yet', async () => {
+    // No `secret` column means no secret messages either, so retrying without
+    // the filter is safe. Chat must not 500 in that window.
+    const dbMock = await import('../_lib/db');
+    (dbMock.q as any).mockImplementationOnce(async () => {
+      const err: any = new Error('column "secret" does not exist');
+      err.code = '42703';
+      throw err;
+    });
+    const res = makeRes();
+    await handler({ method: 'GET', url: '/api/messages', query: {}, headers: {}, body: {} } as any, res);
+    expect(res.statusCode).toBe(200);
+  });
+});
