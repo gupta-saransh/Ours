@@ -297,7 +297,19 @@ export default function Chat() {
   useEffect(() => () => clearTyping(), [clearTyping]);
 
   const markSeen = useCallback(() => {
-    call('/seen', { method: 'POST' }).catch(() => {});
+    call<{ started?: { id: string; expires_at: string }[] }>('/seen', { method: 'POST' })
+      .then((d) => {
+        // Reading is what starts your partner's messages counting down, so the
+        // countdowns have to appear the moment you open the thread. Without
+        // this they stayed blank until the next reload and the whole feature
+        // looked like it was doing nothing.
+        if (!d?.started?.length) return;
+        const byId = new Map(d.started.map((s) => [s.id, s.expires_at]));
+        setMsgs((prev) =>
+          prev.map((m) => (byId.has(m.id) ? { ...m, expires_at: byId.get(m.id)! } : m))
+        );
+      })
+      .catch(() => {});
   }, [call]);
 
   const load = useCallback(async () => {
@@ -822,10 +834,13 @@ export default function Chat() {
             <View style={[styles.replyBar, secretShown && styles.replyBarSecret]}>
               <Reply size={15} color={colors.accent} strokeWidth={1.75} />
               <View style={{ flex: 1 }}>
-                <Text style={styles.replyBarName}>
+                <Text style={[styles.replyBarName, secretShown && styles.replyBarNameSecret]}>
                   Replying to {replyTo.sender_id === user?.id ? 'yourself' : partner?.display_name ?? 'them'}
                 </Text>
-                <Text style={styles.replyBarBody} numberOfLines={1}>
+                <Text
+                  style={[styles.replyBarBody, secretShown && styles.replyBarBodySecret]}
+                  numberOfLines={1}
+                >
                   {previewText(replyTo)}
                 </Text>
               </View>
@@ -836,7 +851,7 @@ export default function Chat() {
           )}
           {partnerActivity && (
             <View style={styles.activityBar}>
-              <Text style={styles.activityText}>
+              <Text style={[styles.activityText, secretShown && styles.activityTextSecret]}>
                 {partnerActivity === 'recording'
                   ? `${partner?.display_name ?? 'They'} is recording a voice note…`
                   : `${partner?.display_name ?? 'They'} is typing…`}
@@ -848,6 +863,7 @@ export default function Chat() {
               elapsedMs={voice.elapsedMs}
               level={voice.level}
               sending={sendingVoice}
+              secret={secretShown}
               onCancel={cancelRecording}
               onSend={sendRecording}
             />
@@ -864,7 +880,7 @@ export default function Chat() {
                   else clearTyping();
                 }}
                 placeholder={secretShown ? 'Go on, nobody else is looking' : 'Message'}
-                placeholderTextColor={secretShown ? 'rgba(249, 239, 220, 0.45)' : colors.inkFaint}
+                placeholderTextColor={secretShown ? colors.onSealedFaint : colors.inkFaint}
                 style={[styles.input, secretShown && styles.inputSecret]}
                 multiline
                 onSubmitEditing={() => sendMessage({ body: input })}
@@ -1091,12 +1107,15 @@ function RecordingBar({
   elapsedMs,
   level,
   sending,
+  secret,
   onCancel,
   onSend,
 }: {
   elapsedMs: number;
   level: number;
   sending: boolean;
+  /** On the secret thread's dark ground the timer and hint have to flip to cream. */
+  secret: boolean;
   onCancel: () => void;
   onSend: () => void;
 }) {
@@ -1106,14 +1125,18 @@ function RecordingBar({
   }, [level, scale]);
 
   return (
-    <View style={styles.composer}>
+    <View style={[styles.composer, secret && styles.composerSecret]}>
       <Pressable onPress={onCancel} hitSlop={8} disabled={sending} style={styles.imageBtn}>
         <Trash2 size={19} color={colors.danger} strokeWidth={1.75} />
       </Pressable>
       <View style={styles.recordingRow}>
         <Animated.View style={[styles.recordingDot, { transform: [{ scale }] }]} />
-        <Text style={styles.recordingTimer}>{formatClipDuration(elapsedMs)}</Text>
-        <Text style={styles.recordingHint}>Recording a voice note…</Text>
+        <Text style={[styles.recordingTimer, secret && styles.recordingTimerSecret]}>
+          {formatClipDuration(elapsedMs)}
+        </Text>
+        <Text style={[styles.recordingHint, secret && styles.recordingHintSecret]}>
+          Recording a voice note…
+        </Text>
       </View>
       <Pressable onPress={onSend} disabled={sending} hitSlop={8} style={[styles.sendBtn, sending && { opacity: 0.5 }]}>
         {sending ? <ActivityIndicator size="small" color={colors.onSealed} /> : <Send size={18} color={colors.onSealed} strokeWidth={2} />}
@@ -1388,6 +1411,7 @@ function Bubble({
             // On the secret thread's dark ground a parchment bubble would glare,
             // so "theirs" moves to a raised tone of the same ground instead.
             secret && !mine && styles.bubbleTheirsSecret,
+            secret && mine && styles.bubbleMineSecret,
             hasImage && styles.bubbleWithImage,
             noSelect,
           ]}
@@ -1451,7 +1475,7 @@ function Bubble({
           <View style={styles.bubbleFooter}>
             {/* The hint that tapping this bubble opens the actions sheet, in
                 the app's own decorative mark rather than a floating UI icon. */}
-            <Text style={[styles.tapHint, onDark ? { color: 'rgba(249, 239, 220, 0.55)' } : { color: colors.accent }]}>
+            <Text style={[styles.tapHint, onDark ? { color: colors.onSealedFaint } : { color: colors.accent }]}>
               ✦
             </Text>
             <Text style={[styles.time, onDark ? { color: colors.onSealed } : { color: colors.inkFaint }, noSelect]}>
@@ -1465,7 +1489,7 @@ function Bubble({
               <Text
                 style={[
                   styles.countdown,
-                  onDark ? { color: 'rgba(249, 239, 220, 0.72)' } : { color: colors.accent },
+                  onDark ? { color: colors.onSealedMuted } : { color: colors.accent },
                   noSelect,
                 ]}
               >
@@ -1496,7 +1520,7 @@ function Bubble({
             </Text>
           </Pressable>
         )}
-        {seen && <Text style={styles.seen}>Seen</Text>}
+        {seen && <Text style={[styles.seen, secret && styles.seenSecret]}>Seen</Text>}
       </View>
     </View>
   );
@@ -1569,8 +1593,8 @@ function VoiceBubble({
   // "unplayed" needs real contrast against the bubble fill too, not just a
   // 1px-border-strength tint (colors.hairline, tried first, was so faint at
   // this size it read as an almost-invisible dotted line, the reported bug).
-  const barColor = onDark ? 'rgba(249, 239, 220, 0.95)' : colors.surfaceSealed;
-  const barColorFaint = onDark ? 'rgba(249, 239, 220, 0.5)' : colors.inkFaint;
+  const barColor = onDark ? colors.onSealed : colors.surfaceSealed;
+  const barColorFaint = onDark ? colors.onSealedFaint : colors.inkFaint;
   const controlColor = onDark ? colors.onSealed : colors.accent;
 
   return (
@@ -1648,12 +1672,18 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   /* ---- Secret thread ------------------------------------------------------
-     No new palette: the secret thread borrows the app's existing SEALED
-     surface, the same oxblood the wax-seal cards and "mine" bubbles already
-     use. It reads as unmistakably a different room without inventing a colour,
-     which the design system does not allow anyway. */
-  screenSecret: { backgroundColor: colors.surfaceSealed },
-  headerSecret: { borderBottomColor: 'rgba(249, 239, 220, 0.18)' },
+     The ground is `sealedDeep`, a step DARKER than the seal colour, and that
+     is not decoration: the first version painted the screen in `surfaceSealed`,
+     which is exactly what a "mine" bubble is filled with, so every message you
+     sent turned invisible against the background. The ground has to sit below
+     both bubble fills for either of them to read as a bubble at all.
+
+     Every colour here comes from the palette seed (theme.ts), never a literal.
+     The first pass hardcoded the parchment cream as rgba(249, 239, 220, x),
+     which is simply the wrong cream on dusk/petal, and is what made the text
+     look mismatched and "unpredictable" depending on the theme. */
+  screenSecret: { backgroundColor: colors.sealedDeep },
+  headerSecret: { borderBottomColor: colors.sealedHairline },
   secretToggle: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1684,7 +1714,7 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: 'rgba(249, 239, 220, 0.35)',
+    borderColor: colors.sealedRaisedStrong,
   },
   secretToggleOnText: {
     ...text.micro,
@@ -1697,34 +1727,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: sp.base,
     paddingVertical: sp.md,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(249, 239, 220, 0.14)',
+    borderBottomColor: colors.sealedHairline,
   },
   secretBannerText: {
     ...text.caption,
     fontFamily: font.serif,
-    color: 'rgba(249, 239, 220, 0.82)',
+    color: colors.onSealed,
     textAlign: 'center',
   },
   secretBannerFine: {
     ...text.caption,
     fontSize: 11,
     lineHeight: 15,
-    color: 'rgba(249, 239, 220, 0.45)',
+    color: colors.onSealedFaint,
     textAlign: 'center',
     marginTop: 3,
   },
   bubbleTheirsSecret: {
-    backgroundColor: 'rgba(249, 239, 220, 0.13)',
-    borderColor: 'rgba(249, 239, 220, 0.16)',
+    backgroundColor: colors.sealedRaised,
+    borderColor: colors.sealedHairline,
   },
   countdown: { ...text.micro, textTransform: 'none', letterSpacing: 0.2, fontWeight: '600', marginLeft: 2 },
   systemRow: { alignItems: 'center', marginVertical: sp.md, paddingHorizontal: sp.base },
   systemText: {
     ...text.caption,
     fontSize: 12,
-    color: 'rgba(249, 239, 220, 0.62)',
+    color: colors.onSealedMuted,
     textAlign: 'center',
-    backgroundColor: 'rgba(249, 239, 220, 0.10)',
+    backgroundColor: colors.sealedRaised,
     paddingHorizontal: sp.md,
     paddingVertical: 5,
     borderRadius: radius.pill,
@@ -1754,19 +1784,19 @@ const styles = StyleSheet.create({
   codeError: { ...text.caption, color: colors.danger, marginTop: sp.md },
   codeHelp: { ...text.caption, color: colors.inkFaint, marginTop: sp.md, textAlign: 'center' },
   // Chrome that normally sits on parchment and has to flip on the dark ground.
-  composerSecret: { borderTopColor: 'rgba(249, 239, 220, 0.16)' },
+  composerSecret: { borderTopColor: colors.sealedHairline },
   inputSecret: {
-    backgroundColor: 'rgba(249, 239, 220, 0.12)',
-    borderColor: 'rgba(249, 239, 220, 0.20)',
+    backgroundColor: colors.sealedRaised,
+    borderColor: colors.sealedRaisedStrong,
     color: colors.onSealed,
   },
   dayDividerTextSecret: {
-    color: 'rgba(249, 239, 220, 0.72)',
-    backgroundColor: 'rgba(249, 239, 220, 0.10)',
-    borderColor: 'rgba(249, 239, 220, 0.16)',
+    color: colors.onSealedMuted,
+    backgroundColor: colors.sealedRaised,
+    borderColor: colors.sealedHairline,
   },
-  emptyLineSecret: { color: 'rgba(249, 239, 220, 0.72)' },
-  replyBarSecret: { borderTopColor: 'rgba(249, 239, 220, 0.16)' },
+  emptyLineSecret: { color: colors.onSealedMuted },
+  replyBarSecret: { borderTopColor: colors.sealedHairline },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1883,7 +1913,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.blushSoft,
   },
   voicePlayBtnMine: {
-    backgroundColor: 'rgba(249, 239, 220, 0.18)',
+    backgroundColor: colors.sealedRaisedStrong,
   },
   voiceBars: {
     flex: 1,
@@ -1922,7 +1952,7 @@ const styles = StyleSheet.create({
     marginHorizontal: sp.xs,
     opacity: 0.92,
   },
-  quoteMine: { borderLeftColor: 'rgba(249, 239, 220, 0.55)' },
+  quoteMine: { borderLeftColor: colors.onSealedFaint },
   quoteTheirs: { borderLeftColor: colors.accent },
   quoteName: {
     ...text.micro,
@@ -1955,6 +1985,15 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.ink,
   },
+  replyBarNameSecret: { color: colors.onSealed },
+  replyBarBodySecret: { color: colors.onSealedMuted },
+  activityTextSecret: { color: colors.onSealedMuted },
+  seenSecret: { color: colors.onSealedFaint },
+  recordingTimerSecret: { color: colors.onSealed },
+  recordingHintSecret: { color: colors.onSealedMuted },
+  // "Mine" needs an edge in here: the ground is only a shade below the bubble
+  // fill, so without one a long message reads as a block of colour.
+  bubbleMineSecret: { borderWidth: 1, borderColor: colors.sealedHairline },
   replyBarBody: {
     ...text.caption,
     color: colors.inkMuted,

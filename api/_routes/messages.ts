@@ -351,8 +351,13 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
   // ---- List (ascending, oldest to newest, capped at PAGE; older via ?before=) ----
   const before = typeof req.query.before === 'string' && req.query.before ? req.query.before : null;
   const rows = await withoutSecret<Row[]>(
+    // audio_duration_ms::INT4 for the same reason as every other cast in this
+    // file: CockroachDB INT is INT8, which the driver returns as a string, and
+    // formatClipDuration's Number.isFinite() guard then rejects it and renders
+    // every voice note as 0:00.
     (secretFilter) => `SELECT id, sender_id, body, body_ct, image_thumb, (image_data IS NOT NULL) AS has_image,
-            (audio_data IS NOT NULL) AS has_audio, audio_mime, audio_duration_ms, audio_waveform,
+            (audio_data IS NOT NULL) AS has_audio, audio_mime,
+            audio_duration_ms::INT4 AS audio_duration_ms, audio_waveform,
             reply_to_id, created_at::STRING AS created_at
      FROM messages
      WHERE couple_id = $1 ${secretFilter} ${before ? 'AND created_at < $2' : ''}

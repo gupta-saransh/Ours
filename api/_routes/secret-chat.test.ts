@@ -23,7 +23,7 @@ const h = vi.hoisted(() => ({
   pushes: [] as { userId: string; payload: any }[],
   active: false,
   encryption: true,
-  ttl: 86_400,
+  ttl: 86_400 as number | string,
   listRows: [] as any[],
   keyRows: [] as any[],
   single: undefined as any,
@@ -70,6 +70,9 @@ vi.mock('../_lib/db', () => ({
   one: vi.fn(async (text: string, params: unknown[] = []) => {
     h.calls.push({ text, params });
     if (text.includes('INSERT INTO secret_message_keys') && h.keyInsertFails) throw new Error('key store down');
+    // h.ttl is deliberately typed `number | string`: CockroachDB's INT is INT8,
+    // which the pg driver hands back as a STRING, and the route must survive
+    // that. See the "int8 arrives as a string" tests below.
     if (text.startsWith('SELECT secret_ttl_seconds')) return { secret_ttl_seconds: h.ttl };
     if (text.includes('FROM messages m')) return h.single;
     if (text.startsWith('INSERT INTO messages')) return { id: 'm-new', created_at: '2026-08-17T12:00:00.000Z' };
@@ -368,6 +371,57 @@ describe('keep and un-keep', () => {
       res
     );
     expect(res.body.expires_at).toBeNull();
+  });
+});
+
+/**
+ * The bug that made the whole feature look broken, and the reason these are
+ * worth keeping: CockroachDB's INT *is* INT8, and the pg driver returns int8 as
+ * a STRING to preserve precision. `isValidTtl` correctly demands a number, so
+ * an unguarded read of `secret_ttl_seconds` failed validation EVERY time and
+ * silently fell back to 24 hours. The setting saved fine and was thrown away on
+ * the way out, so choosing "1 minute" changed nothing anyone could see.
+ */
+describe('int8 arrives as a string, and must not silently reset the timer', () => {
+  it('honours a string timer instead of falling back to 24 hours', async () => {
+    h.ttl = '60'; // exactly what the driver hands back
+    const res = makeRes();
+    await handler(req(), res);
+    expect(res.body.ttlSeconds).toBe(60);
+    expect(res.body.ttlLabel).toBe('1 minute');
+  });
+
+  it('stamps the real timer onto a sent message, not the fallback', async () => {
+    h.ttl = '60';
+    const res = makeRes();
+    await handler(req({ method: 'POST', body: { body: 'hi' } }), res);
+    expect(res.body.message.ttl_seconds).toBe(60);
+    const insert = h.calls.find((c) => c.text.startsWith('INSERT INTO messages'))!;
+    expect(insert.params).toContain(60);
+    expect(insert.params).not.toContain('60');
+  });
+
+  it('honours a string "0" as the timer being OFF, not as a falsy fallback', async () => {
+    h.ttl = '0';
+    const res = makeRes();
+    await handler(req(), res);
+    expect(res.body.ttlSeconds).toBe(0);
+  });
+
+  it('still falls back for a genuinely unusable value', async () => {
+    h.ttl = 'nonsense';
+    const res = makeRes();
+    await handler(req(), res);
+    expect(res.body.ttlSeconds).toBe(86_400);
+  });
+
+  it('casts the columns it reads, so the fix holds at the source', async () => {
+    const res = makeRes();
+    await handler(req(), res);
+    const ttlRead = h.calls.find((c) => c.text.includes('secret_ttl_seconds'))!;
+    expect(ttlRead.text).toContain('::INT4');
+    const list = h.calls.find((c) => c.text.includes('ORDER BY created_at DESC'))!;
+    expect(list.text).toContain('ttl_seconds::INT4');
   });
 });
 

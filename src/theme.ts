@@ -47,6 +47,20 @@ function makeColors(p: PaletteSeed) {
     surfaceRaised: p.surfaceRaised,
     surfaceSealed: p.sealed,
     onSealed: `rgba(${p.onSealedRgb}, 0.92)`,
+
+    // "On the sealed ground": for a whole SCREEN painted in the seal colour
+    // (currently only the secret chat). A screen like that inverts the usual
+    // problem, because ink-on-parchment tokens are unreadable there and the
+    // sealed surface can no longer double as a bubble against itself. These are
+    // derived from the palette seed like everything else, so they follow every
+    // theme preset; hardcoding the parchment cream in a screen silently broke
+    // on dusk/petal, which is exactly what the no-hex-outside-theme rule is for.
+    sealedDeep: p.sealedPressed, // the ground itself, a step darker than a bubble on it
+    onSealedMuted: `rgba(${p.onSealedRgb}, 0.72)`,
+    onSealedFaint: `rgba(${p.onSealedRgb}, 0.45)`,
+    sealedRaised: `rgba(${p.onSealedRgb}, 0.13)`, // "theirs" bubble, chips
+    sealedRaisedStrong: `rgba(${p.onSealedRgb}, 0.20)`,
+    sealedHairline: `rgba(${p.onSealedRgb}, 0.18)`,
     ink: p.ink,
     inkMuted: inkA(0.68),
     inkFaint: inkA(0.40),

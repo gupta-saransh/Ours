@@ -138,12 +138,22 @@ async function shredExpired(coupleId: string): Promise<void> {
   );
 }
 
+/**
+ * The couple's current timer.
+ *
+ * ::INT4 IS LEAD-BEARING, NOT TIDINESS. CockroachDB's INT *is* INT8, which the
+ * pg driver returns as a STRING; `isValidTtl` (rightly) demands a number, so
+ * without the cast this silently failed EVERY read and fell back to 24 hours.
+ * The setting saved correctly and was then thrown away on the way out, so the
+ * header, the banner and every new message all claimed 24 hours no matter what
+ * anyone chose. Number() is the belt-and-braces for a plain-Postgres deploy.
+ */
 async function currentTtl(coupleId: string): Promise<number> {
-  const row = await one<{ secret_ttl_seconds: number }>(
-    'SELECT secret_ttl_seconds FROM couples WHERE id = $1',
+  const row = await one<{ secret_ttl_seconds: number | string }>(
+    'SELECT secret_ttl_seconds::INT4 AS secret_ttl_seconds FROM couples WHERE id = $1',
     [coupleId]
   );
-  const value = row?.secret_ttl_seconds;
+  const value = Number(row?.secret_ttl_seconds);
   return isValidTtl(value) ? value : DEFAULT_TTL_SECONDS;
 }
 
@@ -212,7 +222,7 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
       audio_data_ct: Buffer | null;
       wrapped_key: Buffer | null;
     }>(
-      `SELECT m.sender_id, m.created_at::STRING AS created_at, m.ttl_seconds,
+      `SELECT m.sender_id, m.created_at::STRING AS created_at, m.ttl_seconds::INT4 AS ttl_seconds,
               m.timer_started_at::STRING AS timer_started_at,
               m.image_data_ct, m.audio_data_ct, k.wrapped_key
        FROM messages m
@@ -297,7 +307,11 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
       // without needing to refetch.
       started: started.map((s) => ({ id: s.id, expires_at: s.expires_at })),
     });
-    res.status(200).json({ ok: true, started: started.length });
+    // The array, not a count: the reader's OWN screen needs these deadlines to
+    // switch its countdowns on without a second round trip. Reading is what
+    // starts them, so without this the messages you just opened look permanent
+    // until you next reload, which is precisely the feature looking broken.
+    res.status(200).json({ ok: true, started });
     return;
   }
 
@@ -476,8 +490,9 @@ export default route(['GET', 'POST', 'DELETE'], async (req, res) => {
   const rows = await q<Row>(
     `SELECT id, sender_id, body_ct, image_thumb_ct,
             (image_data_ct IS NOT NULL) AS has_image, (audio_data_ct IS NOT NULL) AS has_audio,
-            audio_mime, audio_duration_ms, audio_waveform, reply_to_id, system_text,
-            expires_at::STRING AS expires_at, ttl_seconds, kept_by,
+            audio_mime, audio_duration_ms::INT4 AS audio_duration_ms, audio_waveform,
+            reply_to_id, system_text,
+            expires_at::STRING AS expires_at, ttl_seconds::INT4 AS ttl_seconds, kept_by,
             timer_started_at::STRING AS timer_started_at, created_at::STRING AS created_at
      FROM messages
      WHERE couple_id = $1 AND secret AND (expires_at IS NULL OR expires_at > now())
