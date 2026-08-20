@@ -5,6 +5,7 @@ import { notify } from '../_lib/notify';
 import { encryptField, readField } from '../_lib/envelope';
 import { route, requireString, HttpError } from '../_lib/respond';
 import { computeStreak, type StreakState } from '../_lib/streak';
+import { rotationIndexes } from '../_lib/daily-rotation';
 
 /**
  * Daily prompt with mutual reveal. One question per day; answers stay private
@@ -111,17 +112,101 @@ export const PROMPT_POOL: string[] = [
   'What do you hope they know without you saying it?',
   'What are you grateful for about this exact chapter of you two?',
   'What is the next little thing you want to celebrate together?',
+
+  // Lighter, sillier, and quicker to answer. The pool above leans earnest, and
+  // a run of earnest questions starts to feel like homework; these are the ones
+  // you can answer in four words on a Tuesday and still enjoy.
+  'If we were a two-person band, what would we be called?',
+  'What is the most ridiculous thing we have ever argued about?',
+  'Which of us would last longer in a horror film, honestly?',
+  'What would our reality show be called?',
+  'If they were an animal for one day, which one?',
+  'What is their most chaotic habit?',
+  'What snack would you steal off their plate without asking?',
+  'If we swapped phones for a day, what would surprise you?',
+  'Which of us is more likely to cry at an advert?',
+  'What is a weirdly specific thing you know they love?',
+  'If we won a silly amount of money tomorrow, what is the first daft thing we buy?',
+  'Which fictional couple are we most like?',
+  'What is the strangest thing in our fridge right now?',
+  'What is a food they eat in a way that baffles you?',
+  'Which of us is the better liar?',
+  'What is the most useless fact you know about them?',
+  'If they had a catchphrase, what would it be?',
+  'What would be on the menu at our restaurant?',
+  'Which of us would get lost first without a map?',
+  'What is the pettiest thing you have ever been right about?',
+  'What is their signature dance move?',
+  'What is the worst film we ever watched together?',
+  'What would we name a boat?',
+  'What is their most convincing impression?',
+  'Which of us hogs the blanket, truthfully?',
+  'What is a small thing that makes them irrationally happy?',
+  'If they were a season, which one and why?',
+  'What is the strangest compliment you have ever given them?',
+  'What emoji is most them?',
+  'What would our team name be at a pub quiz?',
+  'What is the most niche thing they have strong opinions about?',
+  'What is a sound they make that you would recognise anywhere?',
+  'If we opened a shop, what would it sell?',
+  'What is the silliest reason you have ever missed them?',
+  'What is their order, without looking at the menu?',
+  'Which of us is worse at keeping a surprise?',
+  'What is the weirdest thing you find attractive about them?',
+  'What would they be famous for in another life?',
+  'What is a chore they secretly enjoy?',
+  'Which of us would last longer without a phone?',
+  'What is the most unnecessary thing we own?',
+  'What is a song they will always sing along to, badly?',
+  'Which of us apologises to furniture after bumping into it?',
+  'What is the last thing you googled because of them?',
+  'What is a hill they will die on?',
+  'If they were a biscuit, which one?',
+  'What is the most dramatic thing they do when they are ill?',
+  'What is a trend you both quietly refuse to follow?',
+  'What would we be genuinely terrible at as a team?',
+  'What is the best nonsense word we have invented?',
+  'Which of us gives better directions?',
+  'What is something they do that you have started doing too?',
+  'What is the smallest thing that has made you both laugh too hard?',
+  'If our week were a weather forecast, what would it say?',
+  'What is the most "us" thing that happened this week?',
+  'What would you put on a badge for them to wear today?',
+  'What is a rule we made up that nobody else would understand?',
+  'Which of us would win an argument with a sat nav?',
+  'What is the worst gift you nearly bought them?',
+  'What would our fridge magnet say?',
+  'Which of us is more likely to keep the receipt?',
+  'What is a film they quote far too often?',
+  'What is the oddest thing you two have ever eaten together?',
+  'Which of us is louder in the morning?',
+  'What is a talent of theirs that is completely useless?',
+  'What would you title this week, if it were an episode?',
+  'What is the last thing they said that made you laugh out loud?',
 ];
 
-function poolIndexFor(dateStr: string): number {
-  let h = 0;
-  for (let i = 0; i < dateStr.length; i++) h = (h * 31 + dateStr.charCodeAt(i)) >>> 0;
-  return h % PROMPT_POOL.length;
+/**
+ * WHY THIS IS A ROTATION AND NOT A HASH. The old version did
+ * `hash(date) % pool.length`, which is a draw WITH replacement: over a
+ * pool-length run it served about two thirds of the questions and repeated the
+ * rest, so people kept meeting questions they had already answered while other
+ * questions never came up at all. The rotation walks a fixed shuffled order, so
+ * every question appears exactly once before any appears twice.
+ *
+ * Changing this cannot disturb history: `daily_prompts` stores the text against
+ * its date on first read (ON CONFLICT DO NOTHING below), so every day that has
+ * already happened keeps the question it actually asked.
+ */
+const PROMPT_ROTATION_SALT = 'ours-daily-prompt-v1';
+
+export function promptIndexFor(dateStr: string): number {
+  const [idx] = rotationIndexes(dateStr, PROMPT_POOL.length, 1, PROMPT_ROTATION_SALT);
+  return idx ?? 0;
 }
 
 export async function todaysPrompt(): Promise<{ prompt_date: string; text: string }> {
   const today = new Date().toISOString().slice(0, 10);
-  const text = PROMPT_POOL[poolIndexFor(today)];
+  const text = PROMPT_POOL[promptIndexFor(today)];
   // Upsert so history stays stable even if the pool is reordered later.
   await one(
     `INSERT INTO daily_prompts (prompt_date, text) VALUES ($1, $2) ON CONFLICT (prompt_date) DO NOTHING`,

@@ -20,6 +20,15 @@ export interface WhatsNewEntry {
 // Newest first. Add an entry here whenever something user-facing ships.
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: '2026-08-20-fresh-questions',
+    title: 'Fresh questions',
+    bullets: [
+      'Your daily question and This or That were repeating themselves. They now work through every question before any comes back.',
+      'Loads of new ones too, and sillier: expect "If they were a biscuit, which one?" and "Toilet roll over or under".',
+      'That is 165 days of questions and about two months of either/ors before you see a single repeat.',
+    ],
+  },
+  {
     id: '2026-08-17-secret-chat',
     title: 'Secret chat',
     bullets: [

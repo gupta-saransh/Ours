@@ -4,6 +4,7 @@ import { publish } from '../_lib/ably';
 import { notify } from '../_lib/notify';
 import { roundStateFor, type AnswerRow } from '../_lib/game-rounds';
 import { route, HttpError } from '../_lib/respond';
+import { rotationIndexes } from '../_lib/daily-rotation';
 
 // The round rules now live in _lib/game-rounds.ts so the reminder cron can
 // share them. Re-exported here because this module was their original home.
@@ -79,28 +80,114 @@ export const GAME_POOL: GamePair[] = [
   { a: 'Quiet beach', b: 'Busy boardwalk' },
   { a: 'Learn together', b: 'Teach each other' },
   { a: 'Sleep in', b: 'Up with the sun' },
-];
 
-function poolIndexFor(dateStr: string): number {
-  let h = 0;
-  for (let i = 0; i < dateStr.length; i++) h = (h * 31 + dateStr.charCodeAt(i)) >>> 0;
-  return h % GAME_POOL.length;
-}
+  // The quirkier half. Same two-second rule, but these are the ones that start
+  // an argument you both enjoy, which is the point of the game.
+  { a: 'Pineapple on pizza', b: 'Absolutely not' },
+  { a: 'Toilet roll over', b: 'Toilet roll under' },
+  { a: 'Ketchup in the fridge', b: 'Ketchup in the cupboard' },
+  { a: 'Socks on', b: 'Socks off' },
+  { a: 'Talk during films', b: 'Silence during films' },
+  { a: 'Cold pizza', b: 'Reheated pizza' },
+  { a: 'Reply instantly', b: 'Reply in three days' },
+  { a: 'Voice note', b: 'Paragraph text' },
+  { a: 'Crunchy', b: 'Smooth' },
+  { a: 'Coriander, yes', b: 'Coriander, never' },
+  { a: 'Sweet popcorn', b: 'Salty popcorn' },
+  { a: 'Fizzy', b: 'Still' },
+  { a: 'Window open', b: 'Window shut' },
+  { a: 'Bed made', b: 'Bed unmade' },
+  { a: 'Shoes at the door', b: 'Shoes wherever' },
+  { a: 'Tidy as you go', b: 'Tidy at the end' },
+  { a: 'Snooze five times', b: 'Up on the first alarm' },
+  { a: 'Long shower', b: 'Quick shower' },
+  { a: 'Playlist', b: 'Shuffle' },
+  { a: 'Cash', b: 'Card' },
+  { a: 'Keep the box', b: 'Bin the box' },
+  { a: 'Early to the airport', b: 'Just in time' },
+  { a: 'Front seat', b: 'Back seat' },
+  { a: 'Take the stairs', b: 'Wait for the lift' },
+  { a: 'Aeroplane nap', b: 'Aeroplane film' },
+  { a: 'Read the ending first', b: 'Never spoil it' },
+  { a: 'Same order every time', b: 'Try something different' },
+  { a: 'Group photo', b: 'Candid photo' },
+  { a: 'Karaoke', b: 'Not a chance' },
+  { a: 'Sing in the shower', b: 'Sing in the car' },
+  { a: 'Talk it out now', b: 'Sleep on it' },
+  { a: 'Argue the point', b: 'Let it go' },
+  { a: 'Open the present early', b: 'Wait for the day' },
+  { a: 'Answer the phone', b: 'Let it ring' },
+  { a: 'Handwrite the list', b: 'Notes on the phone' },
+  { a: 'Big breakfast', b: 'Big dinner' },
+  { a: 'Sunday roast', b: 'Sunday brunch' },
+  { a: 'Hot sauce on everything', b: 'Hot sauce on nothing' },
+  { a: 'Milk first', b: 'Tea first' },
+  { a: 'Loud restaurant', b: 'Quiet cafe' },
+  { a: 'Sit at the front', b: 'Sit at the back' },
+  { a: 'Emoji every message', b: 'No emoji ever' },
+  { a: 'Wake up talking', b: 'Wake up silent' },
+  { a: 'Fold the laundry', b: 'Live from the basket' },
+  { a: 'Ironed', b: 'Creases are character' },
+  { a: 'Give the directions', b: 'Follow the directions' },
+  { a: 'Straight to the point', b: 'Set the scene first' },
+  { a: 'Buy the ticket early', b: 'Buy it last minute' },
+  { a: 'Split the bill', b: 'Take turns paying' },
+  { a: 'Salt', b: 'Pepper' },
+  { a: 'Say hi to the neighbour', b: 'Cross the road' },
+  { a: 'Loud sneeze', b: 'Tiny sneeze' },
+  { a: 'Aisle at the cinema', b: 'Middle of the row' },
+  { a: 'One big pillow', b: 'Three small pillows' },
+  { a: 'Subtitles on', b: 'Subtitles off' },
+  { a: 'Big spoon', b: 'Little spoon' },
+  { a: 'Pet names', b: 'Real names' },
+  { a: 'Win the argument', b: 'Keep the peace' },
+  { a: 'Plan the date', b: 'Be surprised' },
+  { a: 'Post about us', b: 'Keep us offline' },
+  { a: 'Matching outfits', b: 'Never matching' },
+  { a: 'Double text', b: 'Wait it out' },
+  { a: 'Say it first', b: 'Wait to hear it' },
+  { a: 'Share the dessert', b: 'Order two' },
+  { a: 'Leave the last bite', b: 'Finish the plate' },
+  { a: 'Dishes now', b: 'Dishes tomorrow' },
+  { a: 'Cook together', b: 'One cooks, one keeps company' },
+  { a: 'Ask for directions', b: 'Work it out' },
+  { a: 'Watch the trailer', b: 'Go in blind' },
+  { a: 'Finish the series tonight', b: 'One episode a week' },
+  { a: 'Packed a week early', b: 'Packed at midnight' },
+  { a: 'Hotel breakfast', b: 'Find a local place' },
+  { a: 'Fridge magnet souvenir', b: 'Photos only' },
+  { a: 'Surprise party', b: 'Please, no' },
+  { a: 'Birthday fuss', b: 'Birthday quiet' },
+  { a: 'Dance at the wedding', b: 'Hold the drinks' },
+  { a: 'Nap on the sofa', b: 'Nap properly in bed' },
+  { a: 'Kiss goodbye at the door', b: 'Shout from the kitchen' },
+  { a: 'Sunday planning', b: 'Sunday nothing' },
+  { a: 'Audio guide', b: 'Wander and guess' },
+  { a: 'Turn up early', b: 'Turn up late' },
+];
 
 function todayUTC(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
 /**
- * Both of the day's pairs. Round two is derived from a salted date so it is
- * deterministic like round one, and nudged along if the hash happens to land on
- * the same pair (playing "Coffee or Chai" twice in a day would be a bad joke).
+ * Both of the day's pairs.
+ *
+ * WHY THIS IS A ROTATION AND NOT A HASH. The old version picked with
+ * `hash(date) % pool.length` for round one and a salted hash for round two,
+ * which is a draw WITH replacement: over a pool-length run it served roughly
+ * two thirds of the pairs and repeated the rest, so couples kept meeting
+ * either/ors they had already played. `rotationIndexes` walks a fixed shuffled
+ * order instead, so every pair appears exactly once before any appears twice,
+ * across days AND across the two rounds of a day. The old "nudge round two if
+ * it collided with round one" hack is gone with it: consecutive positions in
+ * one sequence cannot collide, so there is nothing left to nudge.
  */
+const GAME_ROTATION_SALT = 'ours-this-or-that-v1';
+
 export function gamesForToday(): { game_date: string; rounds: [GamePair, GamePair] } {
   const game_date = todayUTC();
-  const first = poolIndexFor(game_date);
-  let second = poolIndexFor(`${game_date}#2`);
-  if (second === first) second = (first + 1) % GAME_POOL.length;
+  const [first, second] = rotationIndexes(game_date, GAME_POOL.length, 2, GAME_ROTATION_SALT);
   return { game_date, rounds: [GAME_POOL[first], GAME_POOL[second]] };
 }
 
